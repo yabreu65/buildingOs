@@ -134,6 +134,90 @@ describe('MinioService', () => {
     )).resolves.toBe(false);
   });
 
+  it('returns the exact provider version id from a buffer upload', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    internalClient.putObject.mockResolvedValue({
+      etag: 'etag-1',
+      versionId: 'version-1',
+    });
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await expect(
+      service.uploadBuffer('buildingos-staging', 'tenant-a/object.pdf', Buffer.from('%PDF-test'), 'application/pdf'),
+    ).resolves.toEqual({ etag: 'etag-1', versionId: 'version-1' });
+  });
+
+  it('preserves an absent provider version id instead of substituting the ETag', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    internalClient.putObject.mockResolvedValue({
+      etag: 'etag-without-version',
+      versionId: null,
+    });
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await expect(
+      service.uploadBuffer(
+        'buildingos-staging',
+        'tenant-a/object.pdf',
+        Buffer.from('%PDF-test'),
+        'application/pdf',
+      ),
+    ).resolves.toEqual({ etag: 'etag-without-version', versionId: null });
+  });
+
+  it('returns exact provider metadata from a conditional upload', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    internalClient.putObject.mockResolvedValue({
+      etag: 'conditional-etag',
+      versionId: 'conditional-version',
+    });
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await expect(
+      service.uploadBufferIfAbsentWithMetadata(
+        'buildingos-staging',
+        'tenant-a/object.pdf',
+        Buffer.from('%PDF-test'),
+        'application/pdf',
+      ),
+    ).resolves.toEqual({ etag: 'conditional-etag', versionId: 'conditional-version' });
+  });
+
+  it('returns null from the metadata variant when the provider rejects an existing object', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    internalClient.putObject.mockRejectedValue({ statusCode: 412 });
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await expect(
+      service.uploadBufferIfAbsentWithMetadata(
+        'buildingos-staging',
+        'tenant-a/object.pdf',
+        Buffer.from('%PDF-test'),
+        'application/pdf',
+      ),
+    ).resolves.toBeNull();
+  });
+
   it('uses the protocol default port for a public HTTP endpoint', async () => {
     const internalClient = createClientMock();
     const publicClient = createClientMock();
