@@ -1,30 +1,33 @@
 # Production Backup Legacy Inventory
 
 This inventory records repository references to the superseded paired-backup
-and privileged preflight designs. No referenced script, unit, workflow, test,
-or policy is removed by this change.
+and privileged preflight designs, plus current production-readiness controls.
+No referenced script, unit, workflow, test, or policy is removed by this
+change.
 
 ## Classification
 
 - `ACTIVE_PRODUCTION`: confirmed as the current production mechanism.
 - `REPOSITORY_ONLY_UNUSED`: present in the repository but not active in the
   audited production runtime.
-- `DEPLOY_DEPENDENCY`: used by deployment or preflight validation when that
-  flow is explicitly invoked.
+- `DEPLOY_DEPENDENCY`: used by deployment, preflight, or production-readiness
+  validation when that flow is explicitly invoked.
 - `TEST_DEPENDENCY`: used by repository tests or fixtures.
 - `HISTORICAL_CANDIDATE_FOR_LATER_REMOVAL`: documentation or design material
   retained until a separately approved cleanup.
 
 ## Reference Inventory
 
-The inventory contains 35 artifact entries.
+The inventory contains 37 artifact entries.
 
 | Path | References | Classification | Notes |
 | --- | --- | --- | --- |
 | `docs/runbooks/PRODUCTION_BACKUP_ACTIVATION.md` | Historical activation runbook, `pawtech-buildingos-backup.service`, `pawtech-buildingos-backup-verify.service`, `production-backup-preflight`, `backup-buildingos-production`, `backup-postgres-paired` | `HISTORICAL_CANDIDATE_FOR_LATER_REMOVAL` | Superseded by `PRODUCTION_BACKUP_STRATEGY.md`; retained for reference |
 | `docs/runbooks/MINIO_BACKUP_RECOVERY.md` | Historical activation reference, `backup-postgres-paired` | `HISTORICAL_CANDIDATE_FOR_LATER_REMOVAL` | Paired MinIO recovery documentation |
 | `.github/workflows/production-backup-preflight.yml` | `production-backup-preflight` | `DEPLOY_DEPENDENCY` | Manual preflight workflow; not a backup scheduler |
+| `.github/workflows/production-readonly-audit.yml` | `production-readonly-audit.sh` | `DEPLOY_DEPENDENCY` | Current production-readiness workflow; backup readiness still depends on the superseded paired receipt and must migrate in `OBJECT-BACKUP-01` |
 | `scripts/production-backup-preflight.sh` | `pawtech-buildingos-backup.service`, `pawtech-buildingos-backup-verify.service`, `production-backup-preflight`, `backup-buildingos-production`, `backup-postgres-paired` | `DEPLOY_DEPENDENCY` | Candidate/runtime and installed-control validation |
+| `scripts/production-readonly-audit.sh` | `paired-<backup_set_id>.json`, `minio_verified=true`, `production-readonly-audit.yml` | `DEPLOY_DEPENDENCY` | Current production-readiness audit; backup readiness remains on the superseded paired-receipt contract until `OBJECT-BACKUP-01` migrates it |
 | `scripts/lib/endpoint-identity.sh` | `production-backup-preflight`, MinIO/S3 runtime scripts, `endpoint-identity-parity.test.sh` | `DEPLOY_DEPENDENCY` | Shared endpoint canonicalization helper sourced by preflight; required by the explicitly invoked deployment validation flow |
 | `infra/production/launchers/buildingos-production-backup-preflight` | `production-backup-preflight` | `DEPLOY_DEPENDENCY` | Privileged launcher artifact |
 | `infra/production/sudoers/buildingos-production-backup-preflight` | `production-backup-preflight` | `DEPLOY_DEPENDENCY` | Narrow launcher policy artifact |

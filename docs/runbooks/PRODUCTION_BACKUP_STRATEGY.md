@@ -55,6 +55,52 @@ backup with these minimum properties:
 That implementation is intentionally deferred. This PR does not add a backup
 script or change storage configuration.
 
+## Recovery-Point Consistency Contract
+
+PostgreSQL and Object Storage backup jobs may remain independently scheduled
+and may retain independent failure domains. Independent scheduling does not
+mean that recovery points are independent or uncoordinated. Freshness of each
+job alone is insufficient evidence for a restorable production recovery point.
+
+No PostgreSQL dump and Object Storage backup combination may be advertised as
+restorable until reconciliation proves that every object referenced by the
+selected database recovery point is available in the selected object backup.
+The future `OBJECT-BACKUP-01` implementation must produce enough durable
+evidence to bind and select that database/object recovery point, including the
+result of this reconciliation. If any referenced object is missing,
+reconciliation fails closed and that recovery point must not be advertised as
+restorable.
+
+The validity contract is:
+
+```text
+POSTGRES_BACKUP_VALID
++ OBJECT_BACKUP_VALID
++ DB_OBJECT_RECONCILIATION_PASS
+= RECOVERY_POINT_VALID
+```
+
+This contract does not require reintroducing the superseded paired
+`CONTROL_UPDATE` or coordinator architecture. Scheduling and execution may
+remain separate while recovery-point selection is bound by explicit evidence.
+
+## Current Production Audit Transition
+
+The current `production-readonly-audit.sh` control and
+`production-readonly-audit.yml` workflow still validate the old paired
+readiness contract: a paired receipt must be present and must contain
+`minio_verified=true`. They are current production-readiness dependencies, but
+their backup-readiness check has not yet been migrated to the simplified
+Object Storage evidence and reconciliation contract.
+
+Accordingly, this PR intentionally does not claim full production backup
+readiness. Under the simplified architecture, backup readiness remains
+**FAIL-CLOSED / INCOMPLETE** until Object Storage backup is implemented and
+the audit can validate the recovery-point contract above. `OBJECT-BACKUP-01`
+must update the production-readonly-audit contract together with the new
+Object Storage evidence and reconciliation mechanism. No operator may bypass,
+suppress, or manually mark the current audit `PASS`.
+
 ## Scheduling and Automation
 
 - Local systemd may continue to own PostgreSQL backup scheduling.
@@ -62,7 +108,8 @@ script or change storage configuration.
 - GitHub remains a source-code recovery mechanism, not a production data-plane
   scheduler.
 - PostgreSQL and object-storage backup schedules should remain independent so a
-  database job cannot mask an object-storage failure.
+  database job cannot mask an object-storage failure; the recovery-point
+  consistency contract above still applies when selecting a restorable point.
 - Every production mutation requires separate explicit approval, including
   changes to systemd, sudoers, credentials, buckets, retention, or runtime
   services.
