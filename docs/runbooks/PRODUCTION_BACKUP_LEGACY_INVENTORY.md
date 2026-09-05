@@ -17,12 +17,15 @@ or policy is removed by this change.
 
 ## Reference Inventory
 
+The inventory contains 35 artifact entries.
+
 | Path | References | Classification | Notes |
 | --- | --- | --- | --- |
 | `docs/runbooks/PRODUCTION_BACKUP_ACTIVATION.md` | Historical activation runbook, `pawtech-buildingos-backup.service`, `pawtech-buildingos-backup-verify.service`, `production-backup-preflight`, `backup-buildingos-production`, `backup-postgres-paired` | `HISTORICAL_CANDIDATE_FOR_LATER_REMOVAL` | Superseded by `PRODUCTION_BACKUP_STRATEGY.md`; retained for reference |
 | `docs/runbooks/MINIO_BACKUP_RECOVERY.md` | Historical activation reference, `backup-postgres-paired` | `HISTORICAL_CANDIDATE_FOR_LATER_REMOVAL` | Paired MinIO recovery documentation |
 | `.github/workflows/production-backup-preflight.yml` | `production-backup-preflight` | `DEPLOY_DEPENDENCY` | Manual preflight workflow; not a backup scheduler |
 | `scripts/production-backup-preflight.sh` | `pawtech-buildingos-backup.service`, `pawtech-buildingos-backup-verify.service`, `production-backup-preflight`, `backup-buildingos-production`, `backup-postgres-paired` | `DEPLOY_DEPENDENCY` | Candidate/runtime and installed-control validation |
+| `scripts/lib/endpoint-identity.sh` | `production-backup-preflight`, MinIO/S3 runtime scripts, `endpoint-identity-parity.test.sh` | `DEPLOY_DEPENDENCY` | Shared endpoint canonicalization helper sourced by preflight; required by the explicitly invoked deployment validation flow |
 | `infra/production/launchers/buildingos-production-backup-preflight` | `production-backup-preflight` | `DEPLOY_DEPENDENCY` | Privileged launcher artifact |
 | `infra/production/sudoers/buildingos-production-backup-preflight` | `production-backup-preflight` | `DEPLOY_DEPENDENCY` | Narrow launcher policy artifact |
 | `infra/production/systemd/pawtech-buildingos-backup.service` | `backup-buildingos-production` | `REPOSITORY_ONLY_UNUSED` | New paired coordinator unit; absent from audited production |
@@ -30,6 +33,7 @@ or policy is removed by this change.
 | `infra/production/systemd/pawtech-buildingos-backup-verify.service` | `backup-buildingos-production` | `REPOSITORY_ONLY_UNUSED` | New paired verification unit; absent from audited production |
 | `infra/production/systemd/pawtech-buildingos-backup-verify.timer` | `pawtech-buildingos-backup-verify.service` | `REPOSITORY_ONLY_UNUSED` | New paired verification timer; absent from audited production |
 | `scripts/backup-buildingos-production.sh` | `backup-buildingos-production`, `backup-postgres-paired` | `REPOSITORY_ONLY_UNUSED` | Paired PostgreSQL/MinIO coordinator; not deployed as current scheduler |
+| `scripts/resolve-production-app-sha.sh` | `backup-buildingos-production`, `production-backup-preflight`, paired-backup tests | `REPOSITORY_ONLY_UNUSED` | Runtime dependency of the superseded paired coordinator; preflight checks its presence but current production does not invoke the coordinator |
 | `scripts/backup-postgres-paired.sh` | `backup-postgres-paired` | `REPOSITORY_ONLY_UNUSED` | Repository-managed paired PostgreSQL contract; legacy production script remains active |
 | `scripts/backup-minio.sh` | MinIO paired backup | `REPOSITORY_ONLY_UNUSED` | Superseded object-storage backup script |
 | `scripts/verify-minio-backup.sh` | MinIO paired verification, SSE gate | `REPOSITORY_ONLY_UNUSED` | Superseded object-storage verification script |
