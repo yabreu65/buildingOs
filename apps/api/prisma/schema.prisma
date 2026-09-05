@@ -1351,6 +1351,7 @@ model File {
   // MinIO metadata
   bucket       String // Bucket name in MinIO
   objectKey    String // Full path/key in MinIO (e.g., "tenant-a/documents/rules.pdf")
+  objectVersionId String? // Provider-issued immutable object version identity, when available
   originalName String // Original filename (for download)
   mimeType     String // MIME type (e.g., "application/pdf")
   size         Int // File size in bytes
@@ -1431,7 +1432,9 @@ model ImportJob {
   fileHash              String
   previewHash           String?
   originalObjectKey     String
+  originalObjectVersionId String?
   normalizedObjectKey   String?
+  normalizedObjectVersionId String?
   summary               Json?
   counts                Json?
   canConfirm            Boolean          @default(false)

@@ -17,6 +17,11 @@ export interface MinioObjectStat {
   metaData?: Record<string, string>;
 }
 
+export interface MinioUploadResult {
+  readonly etag: string;
+  readonly versionId: string | null;
+}
+
 /**
  * MinIO Service: Wrapper around Minio SDK for presigned URLs and object operations
  *
@@ -430,7 +435,7 @@ export class MinioService {
     objectKey: string,
     buffer: Buffer,
     contentType: string = 'application/octet-stream',
-  ): Promise<void> {
+  ): Promise<MinioUploadResult> {
     try {
       // Convert buffer to stream
       const stream = require('stream');
@@ -438,15 +443,19 @@ export class MinioService {
       readable._read = () => {};
       readable.push(buffer);
       readable.push(null);
-      
-      await this.minioClient.putObject(
-        bucketName, 
-        objectKey, 
-        readable, 
+
+      const result = await this.minioClient.putObject(
+        bucketName,
+        objectKey,
+        readable,
         buffer.length,
         { 'Content-Type': contentType }
       );
       this.logger.debug(`Uploaded buffer to ${bucketName}/${objectKey} (${buffer.length} bytes)`);
+      return {
+        etag: result.etag,
+        versionId: result.versionId,
+      };
     } catch (error: unknown) {
       this.logger.error(
         `Failed to upload buffer: ${this.getErrorMessage(error)}`,
@@ -468,6 +477,19 @@ export class MinioService {
     buffer: Buffer,
     contentType: string = 'application/octet-stream',
   ): Promise<boolean> {
+    return (await this.uploadBufferIfAbsentWithMetadata(bucketName, objectKey, buffer, contentType)) !== null;
+  }
+
+  /**
+   * Create an object only when the canonical key does not already exist and
+   * return the provider-issued identity for the object that was created.
+   */
+  async uploadBufferIfAbsentWithMetadata(
+    bucketName: string = this.bucket,
+    objectKey: string,
+    buffer: Buffer,
+    contentType: string = 'application/octet-stream',
+  ): Promise<MinioUploadResult | null> {
     try {
       const stream = require('stream');
       const readable = new stream.Readable();
@@ -475,7 +497,7 @@ export class MinioService {
       readable.push(buffer);
       readable.push(null);
 
-      await this.minioClient.putObject(
+      const result = await this.minioClient.putObject(
         bucketName,
         objectKey,
         readable,
@@ -486,11 +508,14 @@ export class MinioService {
         },
       );
       this.logger.debug(`Created buffer object ${bucketName}/${objectKey} (${buffer.length} bytes)`);
-      return true;
+      return {
+        etag: result.etag,
+        versionId: result.versionId,
+      };
     } catch (error: unknown) {
       if (this.isPreconditionFailedError(error)) {
         this.logger.debug(`Object already exists: ${bucketName}/${objectKey}`);
-        return false;
+        return null;
       }
       this.logger.error(
         `Failed to create buffer object: ${this.getErrorMessage(error)}`,
