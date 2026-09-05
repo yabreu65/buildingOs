@@ -48,20 +48,32 @@ Require at least one reviewer. Do not store production credentials as repository
 
 ## Versioned Compose
 
-`infra/docker/docker-compose.production.yml` reproduces the active topology:
+`infra/docker/docker-compose.production.yml` is application-only. It manages:
 
-- existing container names, networks, volume name, Traefik routers and restart policies;
-- API and Web on `pawtech_public` plus `pawtech_internal`;
-- existing MinIO route and volume, with its current images pinned by digest;
-- dedicated migration profile;
-- private-bucket initializer isolated behind the `storage-init` profile;
-- no PostgreSQL or Redis service recreation.
+- `buildingos-api`;
+- `buildingos-web`;
+- the dedicated `buildingos-migrate` runner behind the `migrate` profile.
+
+PostgreSQL, Redis, Traefik, and legacy local MinIO remain external to this
+versioned Compose and must not be recreated by application deployment. The
+Compose file uses the existing external networks but does not define a MinIO
+service, MinIO volume, MinIO route, or storage initializer profile.
+
+The current authoritative application document storage is the external
+Contabo Object Storage bucket configured through the protected API environment.
+See [`PRODUCTION_BACKUP_STRATEGY.md`](../runbooks/PRODUCTION_BACKUP_STRATEGY.md)
+for the authoritative backup and storage-recovery strategy. Local MinIO is
+legacy and non-authoritative; removing it or changing its policy or routing
+requires a separately approved infrastructure change.
 
 Real values remain in `/opt/pawtech/env/`. The versioned Compose contains no credential defaults.
 
 The legacy ignored file `infra/docker/.env` may remain in the production checkout only while the root `.dockerignore` excludes nested `.env` files. Any other ignored environment file or sensitive artifact blocks deployment.
 
-Before the first controlled promotion, run the `storage-init` profile under separate production approval. It preserves the existing bucket and explicitly removes the legacy anonymous-download policy with `mc anonymous set none`; verify private access before continuing.
+No storage-initialization profile exists in the current versioned production
+Compose. Object Storage readiness must be validated through the current
+approved read-only and pre-deploy controls. This does not authorize a storage
+mutation; storage policy or routing changes require separate approval.
 
 ## Audited Prisma baseline
 

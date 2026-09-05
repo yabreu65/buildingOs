@@ -1,24 +1,43 @@
-# MinIO Backup and Recovery
+# SUPERSEDED FOR CURRENT PRODUCTION USE: MinIO Backup and Recovery
+
+> **HISTORICAL/REFERENCE MATERIAL ONLY.** This document describes the old
+> paired MinIO backup design and is not the current production backup plan.
+> Do not activate its paired PostgreSQL/MinIO coordinator under the current
+> strategy. The authoritative plan is
+> [`PRODUCTION_BACKUP_STRATEGY.md`](PRODUCTION_BACKUP_STRATEGY.md).
+>
+> Any future Object Storage backup implementation will be introduced
+> separately. Every actual restore still requires a separately reviewed and
+> approved recovery procedure.
 
 ## Scope and current state
 
-This runbook is an executable, fail-closed recovery procedure. Production
-activation is controlled by `PRODUCTION_BACKUP_ACTIVATION.md`. It
-does not create production backups, change bucket policy, restart containers,
-or restore production data. Credentials are supplied outside Git through
+This historical runbook describes an executable, fail-closed recovery
+procedure for the superseded design. It does not create production backups,
+change bucket policy, restart containers, or restore production data.
+Credentials are supplied outside Git through
 protected environment injection, Docker secrets, or a mode-0600 server file.
 Never put credentials, signed URLs, or complete environment files in evidence.
 
-Production currently runs a pinned `minio/minio` image with the named Docker
-volume `buildingos_buildingos_miniodata`, bucket identity supplied by
-`S3_BUCKET`. The production initializer intends to disable anonymous access,
-but the 2026-08-28 inventory found anonymous `GetObject` and `ListBucket`
+The 2026-08-28 production audit recorded a pinned `minio/minio` image, the
+named Docker volume `buildingos_buildingos_miniodata`, and bucket identity
+supplied by `S3_BUCKET`. The production initializer then intended to disable
+anonymous access, but that audit found anonymous `GetObject` and `ListBucket`
 permissions still active. The application audit found no dependency on either
-permission; remove them only through the approved activation procedure. The
-repository contains no completed off-host MinIO backup or restore rehearsal.
-The public health endpoint responds, while an anonymous root request is
-denied. Exact object counts, bytes, versioning, object lock, encryption, and
-replication remain production audit values to collect with read-only `mc`.
+permission. The audit also recorded that the repository had no completed
+off-host MinIO backup or restore rehearsal, that the public health endpoint
+responded while an anonymous root request was denied, and that exact object
+counts, bytes, versioning, object lock, encryption, and replication remained
+values to collect with read-only `mc`.
+
+That paragraph is historical audit context, not a current production storage
+authority or an instruction to use the superseded activation procedure. The
+current authoritative production document store is the external Contabo
+Object Storage bucket `buildingos-production`, as defined in
+[`PRODUCTION_BACKUP_STRATEGY.md`](PRODUCTION_BACKUP_STRATEGY.md). Local MinIO
+is legacy and non-authoritative for production documents. Any current removal
+of local MinIO, anonymous-access policy change, routing change, or
+storage-policy change requires a separately reviewed and approved procedure.
 
 ## Database and object consistency
 
@@ -235,8 +254,8 @@ here.
 ## Production activation controls
 
 The repository-managed coordinator, schedulers, failure hooks, policy
-templates, and provider gate are installed only through the separately
-approved steps in `PRODUCTION_BACKUP_ACTIVATION.md`. No unencrypted production
-backup is allowed. A first paired backup is not successful until PostgreSQL,
-MinIO upload, and independent MinIO verification all pass for the same
-`BACKUP_SET_ID` and actual deployed `APP_SHA`.
+templates, and provider gate belong to the superseded paired design and must
+not be activated under the current strategy. Direct operators to
+`PRODUCTION_BACKUP_STRATEGY.md` for the current production plan. No actual
+restore may proceed without a separately reviewed and approved recovery
+procedure.

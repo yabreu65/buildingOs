@@ -1,4 +1,12 @@
-# Production Backup Activation
+# SUPERSEDED FOR NEW ACTIVATION: Production Backup Activation
+
+> **DO NOT EXECUTE AS THE CURRENT BACKUP PLAN.** This historical runbook is
+> retained temporarily for reference only. The authoritative plan is
+> [`PRODUCTION_BACKUP_STRATEGY.md`](PRODUCTION_BACKUP_STRATEGY.md).
+>
+> The large paired PostgreSQL/MinIO and privileged `CONTROL_UPDATE` design
+> described here is not planned for activation. Every future production
+> mutation still requires separate explicit approval.
 
 This runbook prepares and activates paired PostgreSQL and MinIO recovery for
 BuildingOS. Every command that changes production, Contabo, or systemd requires
