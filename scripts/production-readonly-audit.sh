@@ -978,6 +978,7 @@ validate_object_backup_receipt() {
   (( started_epoch <= completed_epoch && age >= 0 && age <= MAX_BACKUP_AGE_SECONDS ))
 }
 
+# Object copy evidence remains separate from the unimplemented recovery-point contract.
 report_object_backup_receipt() {
   local receipt="$1"
   local receipt_status='INCOMPLETE' copy_status='INCOMPLETE'

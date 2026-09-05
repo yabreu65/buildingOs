@@ -9,13 +9,16 @@ readonly OBJECT_BACKUP_SERVICE='pawtech-buildingos-object-backup.service'
 readonly OBJECT_BACKUP_TIMER='pawtech-buildingos-object-backup.timer'
 readonly OBJECT_BACKUP_EXEC='/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh'
 readonly DEFAULT_OBJECT_BACKUP_ENV_FILE='/etc/buildingos/object-backup.env'
+readonly DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG='/etc/buildingos/object-backup-rclone.conf'
 readonly OBJECT_BACKUP_RECEIPT='/var/lib/buildingos-object-backup/object-backup-receipt.json'
-readonly OBJECT_BACKUP_RCLONE_CONFIG='/etc/buildingos/object-backup-rclone.conf'
 readonly EXPECTED_TIMEOUT_USEC=21600000000
 
 failures=0
 POSTGRES_BACKUP_SERVICE_STATE='UNKNOWN'
 OBJECT_BACKUP_SERVICE_STATE='UNKNOWN'
+EXPECTED_APP_DIR="$DEFAULT_APP_DIR"
+OBJECT_BACKUP_ENV_FILE="$DEFAULT_OBJECT_BACKUP_ENV_FILE"
+OBJECT_BACKUP_RCLONE_CONFIG="$DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG"
 
 if ! declare -F endpoint_identity >/dev/null 2>&1; then
   helper_dir="${BASH_SOURCE[0]%/*}"
@@ -39,6 +42,10 @@ safe_output() {
 
 file_is_regular_non_symlink() {
   [[ -f "$1" && ! -L "$1" ]]
+}
+
+file_mode() {
+  stat -L -c '%a' -- "$1" 2>/dev/null || stat -L -f '%Lp' "$1"
 }
 
 env_value() {
@@ -76,15 +83,139 @@ unit_active_state() {
   systemctl_value "$unit" ActiveState || true
 }
 
+systemd_serialized_entry_matches() {
+  local entry="$1"
+  local expected_exec="$2"
+  local expected_argv="$3"
+  local parsed
+
+  parsed="$(printf '%s\n' "$entry" | awk -F ';' '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    {
+      path_count=0
+      argv_count=0
+      ignore_count=0
+      invalid=0
+      path=""
+      argv=""
+      for (i=1; i<=NF; i++) {
+        field=trim($i)
+        if (field == "") continue
+        if (field ~ /^path=/) {
+          path_count++
+          path=substr(field, 6)
+        } else if (field ~ /^argv\[\]=/) {
+          argv_count++
+          argv=substr(field, 8)
+        } else if (field ~ /^ignore_errors=/) {
+          ignore_count++
+          if (substr(field, 15) != "no") invalid=1
+        } else if (field ~ /^(start_time|stop_time|pid|code|status)=/) {
+          continue
+        } else {
+          invalid=1
+        }
+      }
+      if (path_count == 1 && argv_count == 1 && ignore_count == 1 && invalid == 0) {
+        printf "%s\034%s\n", path, argv
+      } else {
+        exit 1
+      }
+    }
+  ' )" || return 1
+  [[ "$parsed" == "$expected_exec"$'\034'"$expected_argv" ]]
+}
+
+systemd_command_list_matches() {
+  local raw="$1"
+  local expected_exec="$2"
+  local expected_argv="${3:-$expected_exec}"
+  local rest entry tail count=0 trimmed
+
+  trimmed="$raw"
+  trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
+  trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+  [[ -n "$trimmed" ]] || { [[ -z "$expected_exec" ]]; return; }
+  [[ "$trimmed" == *'{'* && "$trimmed" == *'}'* && "$trimmed" == *'path='* && "$trimmed" == *'argv[]='* ]] || return 1
+  rest="$trimmed"
+  while :; do
+    rest="${rest#"${rest%%[![:space:]]*}"}"
+    [[ "${rest:0:1}" == '{' ]] || return 1
+    rest="${rest:1}"
+    [[ "$rest" == *'}'* ]] || return 1
+    entry="${rest%%\}*}"
+    tail="${rest#*\}}"
+    systemd_serialized_entry_matches "$entry" "$expected_exec" "$expected_argv" || return 1
+    count=$((count + 1))
+    rest="$tail"
+    trimmed="$rest"
+    trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    [[ -z "$trimmed" ]] && break
+  done
+  [[ "$count" -eq 1 && -n "$expected_exec" ]]
+}
+
 systemd_exec_matches() {
   local actual="$1"
   local expected="$2"
-  [[ "$actual" == "$expected" || "$actual" == "{ path=$expected ; argv[]=$expected ; ignore_errors=no }" ]]
+  systemd_command_list_matches "$actual" "$expected" "$expected"
 }
 
 systemd_timeout_matches() {
   local actual="$1"
-  [[ "$actual" =~ ^[0-9]+$ && "$actual" == "$EXPECTED_TIMEOUT_USEC" ]]
+  local microseconds
+  [[ -n "$actual" && "$actual" != infinity && "$actual" != inf ]] || return 1
+  if [[ "$actual" =~ ^[0-9]+$ ]]; then
+    microseconds="$actual"
+  elif [[ "$actual" =~ ^([0-9]+)h$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 3600000000))
+  elif [[ "$actual" =~ ^([0-9]+)min$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 60000000))
+  elif [[ "$actual" =~ ^([0-9]+)s$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 1000000))
+  elif [[ "$actual" =~ ^([0-9]+)us$ ]]; then
+    microseconds="${BASH_REMATCH[1]}"
+  elif [[ "$actual" =~ ^([0-9]+)h[[:space:]]+([0-9]+)min[[:space:]]+([0-9]+)s$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 3600000000 + BASH_REMATCH[2] * 60000000 + BASH_REMATCH[3] * 1000000))
+  elif [[ "$actual" =~ ^([0-9]+)h[[:space:]]+([0-9]+)min[[:space:]]+([0-9]+)s[[:space:]]*$ ]]; then
+    microseconds=$((BASH_REMATCH[1] * 3600000000 + BASH_REMATCH[2] * 60000000 + BASH_REMATCH[3] * 1000000))
+  else
+    return 1
+  fi
+  [[ "$microseconds" == "$EXPECTED_TIMEOUT_USEC" ]]
+}
+
+inspect_runtime() {
+  local production_sha='UNKNOWN' api_revision='UNKNOWN' web_revision='UNKNOWN' checkout_status='DIRTY'
+  local api_image web_image status_output
+
+  if [[ -d "$EXPECTED_APP_DIR/.git" && ! -L "$EXPECTED_APP_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
+    production_sha="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
+    if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]] && status_output="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)"; then
+      [[ -z "$status_output" ]] && checkout_status='CLEAN'
+    fi
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    api_image="$(docker inspect --type container --format '{{.Image}}' buildingos-api 2>/dev/null || true)"
+    web_image="$(docker inspect --type container --format '{{.Image}}' buildingos-web 2>/dev/null || true)"
+    [[ "$api_image" =~ ^sha256:[0-9a-f]{64}$ ]] && api_revision="$(docker image inspect "$api_image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || printf 'UNKNOWN')"
+    [[ "$web_image" =~ ^sha256:[0-9a-f]{64}$ ]] && web_revision="$(docker image inspect "$web_image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || printf 'UNKNOWN')"
+  fi
+  printf 'PRODUCTION_RUNTIME_SHA=%s\n' "$(safe_output "$production_sha")"
+  printf 'API_REVISION=%s\n' "$(safe_output "$api_revision")"
+  printf 'WEB_REVISION=%s\n' "$(safe_output "$web_revision")"
+  printf 'PRODUCTION_CHECKOUT_STATUS=%s\n' "$checkout_status"
+  if [[ "$production_sha" == "$CANDIDATE_SHA" && "$api_revision" == "$CANDIDATE_SHA" && "$web_revision" == "$CANDIDATE_SHA" && "$checkout_status" == CLEAN ]]; then
+    printf 'RUNTIME_IDENTITY=CONSISTENT\n'
+  else
+    printf 'RUNTIME_IDENTITY=INCONSISTENT\n'
+    fail_check 'production runtime identity is not the expected clean, matching revision'
+  fi
 }
 
 inspect_service() {
@@ -125,7 +256,7 @@ inspect_service() {
   [[ "$group" == yoryi ]] || fail_check "$unit Group is not yoryi"
   [[ "$unit_type" == oneshot ]] || fail_check "$unit Type is not oneshot"
   [[ "$env_files" == "$expected_env" || "$env_files" == "-$expected_env" || "$env_files" == "$expected_env (ignore_errors=no)" || "$env_files" == "-$expected_env (ignore_errors=no)" ]] || fail_check "$unit EnvironmentFile is unexpected"
-  [[ "$workdir" == "$DEFAULT_APP_DIR" ]] || fail_check "$unit WorkingDirectory is unexpected"
+  [[ "$workdir" == "$EXPECTED_APP_DIR" ]] || fail_check "$unit WorkingDirectory is unexpected"
   systemd_exec_matches "$exec_start" "$expected_exec" || fail_check "$unit ExecStart is unexpected"
   systemd_timeout_matches "$timeout" || fail_check "$unit TimeoutStartSec is not 6h"
 
@@ -144,10 +275,14 @@ inspect_service() {
 inspect_current_service_state() {
   local label="$1"
   local unit="$2"
-  local load_state state exists='NO'
+  local expected_exec="$3"
+  local load_state state unit_type exec_start exists='NO' contract='NO' before
+  before=$failures
 
   load_state="$(systemctl_value "$unit" LoadState || true)"
   state="$(unit_active_state "$unit")"
+  unit_type="$(systemctl_value "$unit" Type || true)"
+  exec_start="$(systemctl_value "$unit" ExecStart || true)"
   [[ "$load_state" == loaded ]] && exists='YES' || fail_check "$unit is not loaded"
   case "$state" in
     inactive) ;;
@@ -155,8 +290,14 @@ inspect_current_service_state() {
     failed|unknown|'') fail_check "$unit active state is unavailable or failed" ;;
     *) fail_check "$unit active state is ambiguous" ;;
   esac
+  [[ "$unit_type" == oneshot ]] || fail_check "$unit Type is not oneshot"
+  systemd_exec_matches "$exec_start" "$expected_exec" || fail_check "$unit ExecStart is unexpected"
+  (( failures == before )) && contract='YES'
   printf '%s_EXISTS=%s\n' "$label" "$exists"
   printf '%s_STATE=%s\n' "$label" "$(safe_output "$state")"
+  printf '%s_TYPE=%s\n' "$label" "$(safe_output "$unit_type")"
+  printf '%s_EXECSTART_MATCH=%s\n' "$label" "$([[ "$contract" == YES ]] && printf YES || printf NO)"
+  printf '%s_CONTRACT=%s\n' "$label" "$contract"
   if [[ "$unit" == "$POSTGRES_BACKUP_SERVICE" ]]; then
     POSTGRES_BACKUP_SERVICE_STATE="$state"
   else
@@ -201,7 +342,7 @@ inspect_timer() {
 
 inspect_object_environment() {
   local source destination receipt rclone source_bucket destination_bucket
-  local env_ok='NO'
+  local env_ok='NO' config_mode before=$failures
   if ! file_is_regular_non_symlink "$OBJECT_BACKUP_ENV_FILE" || [[ ! -r "$OBJECT_BACKUP_ENV_FILE" ]]; then
     fail_check 'Object Storage environment is not a readable regular non-symlink file'
   else
@@ -213,13 +354,20 @@ inspect_object_environment() {
       [[ "$destination" =~ ^([A-Za-z0-9][A-Za-z0-9._-]*):([A-Za-z0-9][A-Za-z0-9._-]*)$ ]]; then
       source_bucket="${source#*:}"
       destination_bucket="${destination#*:}"
+      [[ "$source_bucket" == buildingos-production ]] || fail_check 'Object Storage source bucket is not authoritative'
       [[ "$source_bucket" != "$destination_bucket" ]] || fail_check 'Object Storage source and destination buckets must differ'
     else
       fail_check 'Object Storage source or destination is not a safe remote bucket root'
     fi
     [[ "$receipt" == "$OBJECT_BACKUP_RECEIPT" ]] || fail_check 'Object Storage receipt path is unexpected'
     [[ "$rclone" == "$OBJECT_BACKUP_RCLONE_CONFIG" ]] || fail_check 'Object Storage rclone config path is unexpected'
-    if (( failures == 0 )); then env_ok='YES'; fi
+    if file_is_regular_non_symlink "$rclone" && [[ -r "$rclone" ]]; then
+      config_mode="0$(file_mode "$rclone")"
+      (( (8#${config_mode#0} & 0022) == 0 )) || fail_check 'Object Storage rclone config is writable by group or world'
+    else
+      fail_check 'Object Storage rclone config is not a readable regular non-symlink file'
+    fi
+    if (( failures == before )); then env_ok='YES'; fi
   fi
   printf 'OBJECT_BACKUP_ENV=%s\n' "$env_ok"
 }
@@ -227,7 +375,8 @@ inspect_object_environment() {
 inspect_topology() {
   local before
   before=$failures
-  inspect_current_service_state POSTGRES_BACKUP_SERVICE "$POSTGRES_BACKUP_SERVICE"
+  before=$failures
+  inspect_current_service_state POSTGRES_BACKUP_SERVICE "$POSTGRES_BACKUP_SERVICE" '/opt/pawtech/backups/scripts/backup-postgres.sh'
   inspect_timer POSTGRES_BACKUP_TIMER "$POSTGRES_BACKUP_TIMER" "$POSTGRES_BACKUP_SERVICE"
   [[ "$failures" -eq "$before" ]] && printf 'POSTGRES_BACKUP_TOPOLOGY=PASS\n' || printf 'POSTGRES_BACKUP_TOPOLOGY=FAIL\n'
 
@@ -248,15 +397,20 @@ inspect_concurrency() {
 
 main() {
   local command_name missing_dependency=false
-  local required_commands=(awk bash date systemctl)
+  local required_commands=(awk bash date docker git stat systemctl)
+  local runtime_app_dir
 
   [[ $# -eq 1 ]] || { printf 'Usage: %s <candidate_sha>\n' "${0##*/}" >&2; return 64; }
   [[ "$1" =~ ^[0-9a-f]{40}$ ]] || { printf 'ERROR: candidate SHA is not exactly 40 lowercase hexadecimal characters\n' >&2; return 1; }
   readonly CANDIDATE_SHA="$1"
 
   OBJECT_BACKUP_ENV_FILE="$DEFAULT_OBJECT_BACKUP_ENV_FILE"
+  OBJECT_BACKUP_RCLONE_CONFIG="$DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG"
+  EXPECTED_APP_DIR="$DEFAULT_APP_DIR"
   if [[ "${BUILDINGOS_PREFLIGHT_TEST_MODE:-}" == LOCAL_ISOLATED_ONLY ]]; then
+    EXPECTED_APP_DIR="${PREFLIGHT_APP_DIR:?}"
     OBJECT_BACKUP_ENV_FILE="${PREFLIGHT_ENV_FILE:?}"
+    OBJECT_BACKUP_RCLONE_CONFIG="${PREFLIGHT_RCLONE_CONFIG_FILE:?}"
   fi
 
   for command_name in "${required_commands[@]}"; do
@@ -271,6 +425,7 @@ main() {
     printf 'DEPENDENCIES_READY=NO\nPOSTGRES_BACKUP_TOPOLOGY=FAIL\nOBJECT_BACKUP_TOPOLOGY=FAIL\nOBJECT_BACKUP_ENV=FAIL\nBACKUP_CONCURRENCY_SAFE=NO\n'
   else
     printf 'DEPENDENCIES_READY=YES\n'
+    inspect_runtime
     inspect_topology
     inspect_object_environment
     inspect_concurrency
