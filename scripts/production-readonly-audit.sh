@@ -11,7 +11,7 @@ readonly DATABASE_NAME='buildingos_db'
 readonly APP_DIR='/opt/pawtech/apps/buildingos/buildingos-app'
 readonly BACKUP_SCRIPT_PATH='/opt/pawtech/backups/scripts/backup-postgres.sh'
 readonly BACKUP_IDENTITY_MANIFEST_PATH="${APP_DIR}/infra/production/backup-postgres.identity.v1"
-readonly BACKUP_STATE_DIR='/var/lib/buildingos-backup'
+readonly OBJECT_BACKUP_RECEIPT='/var/lib/buildingos-object-backup/object-backup-receipt.json'
 readonly BACKUP_IDENTITY_VERSION='backup-postgres.identity.v1'
 readonly BACKUP_SCRIPT_SHA256='3cbf2bf191bd9a06e7bbf831848cfa2816cd80fca980593f84d3411cb3b14ff5'
 readonly BACKUP_SCRIPT_OWNER='yoryi'
@@ -941,70 +941,66 @@ format_epoch() {
   date -u -d "@$1" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -r "$1" '+%Y-%m-%dT%H:%M:%SZ'
 }
 
-report_backup_readiness() {
-  local state_file="$BACKUP_STATE_DIR/latest.env"
-  local backup_set_id app_sha completed_at completed_epoch now age paired_receipt
-  local mechanism_path='UNKNOWN' mechanism_digest='UNKNOWN' mechanism_owner='UNKNOWN' mechanism_group='UNKNOWN' mechanism_mode='UNKNOWN'
-  local mechanism_identity='UNKNOWN'
-  local dump_present='NOT_APPLICABLE'
-  local checksum_present='NOT_APPLICABLE'
-  local checksum_status='INCOMPLETE'
-  local restore_status='INCOMPLETE'
-  local backup_required='YES'
+validate_object_location() {
+  local location="$1"
+  [[ "$location" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
 
-  if [[ -f "$state_file" && ! -L "$state_file" && -r "$state_file" ]]; then
-    if backup_set_id="$(state_field "$state_file" BACKUP_SET_ID)" &&
-      app_sha="$(state_field "$state_file" APP_SHA)" &&
-      completed_at="$(state_field "$state_file" COMPLETED_AT)" &&
-      [[ "$backup_set_id" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]] &&
-      [[ "$app_sha" =~ ^[0-9a-f]{40}$ ]] &&
-      completed_epoch="$(parse_epoch "$completed_at")" &&
-      now="$(date -u +%s)" &&
-      age=$((now - completed_epoch)) &&
-      (( age >= 0 && age <= MAX_BACKUP_AGE_SECONDS )); then
-      paired_receipt="$BACKUP_STATE_DIR/paired-$backup_set_id.json"
-      if [[ -f "$paired_receipt" && ! -L "$paired_receipt" && -r "$paired_receipt" ]] &&
-        jq -e --arg backupSetId "$backup_set_id" --arg appSha "$app_sha" --arg completedAt "$completed_at" --arg runtimeAppSha "$RUNTIME_APP_SHA" '
-          .version == 1 and
-          .status == "PASS" and
-          .backup_set_id == $backupSetId and
-          .app_sha == $appSha and
-          .app_sha == $runtimeAppSha and
-          .completed_at == $completedAt and
-          .minio_verified == true and
-          (.postgres_receipt.version == 1) and
-          (.postgres_receipt.status == "PASS") and
-          (.postgres_receipt.backup_set_id == $backupSetId) and
-          (.postgres_receipt.app_sha == $appSha) and
-          (.postgres_receipt.encryption == "SSE-S3") and
-          (.postgres_receipt.postgres_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
-          (.postgres_receipt.dump_filename | type == "string" and test("^[A-Za-z0-9._-]+$")) and
-          (.postgres_receipt.remote_object_prefix == ("postgresql/" + $backupSetId))
-        ' "$paired_receipt" >/dev/null; then
-        checksum_status='VERIFIED_IN_PAIRED_BACKUP'
-        restore_status='VERIFIED_IN_PAIRED_BACKUP'
-        backup_required='NO'
-        printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=%s\n' "$completed_at"
-        printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=%s\n' "${paired_receipt##*/}"
-        printf 'BACKUP_AGE_SECONDS=%s\n' "$age"
-      else
-        AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
-        printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=UNKNOWN\n'
-        printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=UNKNOWN\n'
-        printf 'BACKUP_AGE_SECONDS=UNKNOWN\n'
-      fi
-    else
-      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
-      printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=UNKNOWN\n'
-      printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=UNKNOWN\n'
-      printf 'BACKUP_AGE_SECONDS=UNKNOWN\n'
-    fi
+validate_object_backup_receipt() {
+  local receipt="$1"
+  local source destination started_at completed_at started_epoch completed_epoch now age
+
+  [[ -f "$receipt" && ! -L "$receipt" && -r "$receipt" ]] || return 1
+  jq -e '
+    type == "object" and
+    .receipt_version == 1 and
+    .status == "PASS" and
+    .copy_status == "PASS" and
+    .verification_status == "PASS" and
+    .recovery_point_valid == "NOT_EVALUATED" and
+    (.source | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")) and
+    (.destination | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")) and
+    (.started_at_utc | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+    (.completed_at_utc | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+  ' "$receipt" >/dev/null 2>&1 || return 1
+
+  source="$(jq -er '.source' "$receipt")"
+  destination="$(jq -er '.destination' "$receipt")"
+  validate_object_location "$source" || return 1
+  validate_object_location "$destination" || return 1
+  [[ "${source#*:}" != "${destination#*:}" ]] || return 1
+  started_at="$(jq -er '.started_at_utc' "$receipt")"
+  completed_at="$(jq -er '.completed_at_utc' "$receipt")"
+  started_epoch="$(parse_epoch "$started_at")" || return 1
+  completed_epoch="$(parse_epoch "$completed_at")" || return 1
+  now="$(date -u +%s)"
+  age=$((now - completed_epoch))
+  (( started_epoch <= completed_epoch && age >= 0 && age <= MAX_BACKUP_AGE_SECONDS ))
+}
+
+report_object_backup_receipt() {
+  local receipt="$1"
+  local receipt_status='INCOMPLETE' copy_status='INCOMPLETE'
+  if validate_object_backup_receipt "$receipt"; then
+    receipt_status='PASS'
+    copy_status='PASS'
   else
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
-    printf 'LATEST_BUILDINGOS_DB_BACKUP_TIMESTAMP=UNKNOWN\n'
-    printf 'LATEST_BUILDINGOS_DB_BACKUP_FILE=UNKNOWN\n'
-    printf 'BACKUP_AGE_SECONDS=UNKNOWN\n'
   fi
+  printf 'OBJECT_BACKUP_RECEIPT=%s\n' "$receipt_status"
+  printf 'OBJECT_BACKUP_COPY=%s\n' "$copy_status"
+  printf 'DB_OBJECT_REFERENCE_RECONCILIATION=NOT_IMPLEMENTED\n'
+  printf 'DB_OBJECT_CONTENT_IDENTITY=NOT_IMPLEMENTED\n'
+  printf 'RECOVERY_POINT_VALID=NOT_EVALUATED\n'
+  printf 'BACKUP_READINESS=INCOMPLETE\n'
+  AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+}
+
+report_backup_readiness() {
+  local mechanism_path='UNKNOWN' mechanism_digest='UNKNOWN' mechanism_owner='UNKNOWN' mechanism_group='UNKNOWN' mechanism_mode='UNKNOWN'
+  local mechanism_identity='UNKNOWN' mechanism_status='INCOMPLETE'
+
+  report_object_backup_receipt "$OBJECT_BACKUP_RECEIPT"
   if validate_backup_mechanism "$BACKUP_IDENTITY_MANIFEST_PATH"; then
     mechanism_path="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" path)"
     mechanism_digest="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" sha256)"
@@ -1012,6 +1008,7 @@ report_backup_readiness() {
     mechanism_group="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" group)"
     mechanism_mode="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" mode)"
     mechanism_identity="path=${mechanism_path};sha256=${mechanism_digest};owner=${mechanism_owner};group=${mechanism_group};mode=${mechanism_mode}"
+    mechanism_status='PASS'
   else
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
   fi
@@ -1022,11 +1019,8 @@ report_backup_readiness() {
   printf 'BACKUP_MECHANISM_MODE=%s\n' "$mechanism_mode"
   printf 'BACKUP_MECHANISM_IDENTITY=%s\n' "$mechanism_identity"
   printf 'BACKUP_IDENTITY_MANIFEST=%s\n' "$BACKUP_IDENTITY_MANIFEST_PATH"
-  printf 'BACKUP_DUMP_PRESENT=%s\n' "$dump_present"
-  printf 'BACKUP_CHECKSUM_PRESENT=%s\n' "$checksum_present"
-  printf 'BACKUP_CHECKSUM_VERIFICATION=%s\n' "$checksum_status"
-  printf 'BACKUP_PG_RESTORE_LIST=%s\n' "$restore_status"
-  printf 'PREDEPLOY_BACKUP_REQUIRED=%s\n' "$backup_required"
+  printf 'POSTGRES_BACKUP_MECHANISM=%s\n' "$mechanism_status"
+  printf 'POSTGRES_BACKUP_EVIDENCE=INCOMPLETE\n'
 }
 
 report_minio_posture() {
