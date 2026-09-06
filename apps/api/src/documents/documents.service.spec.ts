@@ -84,6 +84,7 @@ describe('DocumentsService', () => {
     presignDownload: jest.fn(),
     objectExists: jest.fn(),
     statObject: jest.fn(),
+    isNotFoundError: jest.fn(),
     getObjectStream: jest.fn(),
   };
   const notifications = {
@@ -134,6 +135,7 @@ describe('DocumentsService', () => {
     validators.canAccessDocument.mockReturnValue(true);
     validators.validateResidentDocumentAccess.mockResolvedValue(undefined);
     residentAccess.shouldEnforce.mockReturnValue(false);
+    minio.isNotFoundError.mockReturnValue(false);
     prisma.file.findFirst.mockResolvedValue(null);
     prisma.payment.findMany.mockResolvedValue([]);
     prisma.unitOccupant.findMany.mockResolvedValue([]);
@@ -1137,6 +1139,7 @@ describe('DocumentsService', () => {
 
   it('rejects a version identity belonging to another object key', async () => {
     minio.objectExists.mockResolvedValue(true);
+    minio.isNotFoundError.mockReturnValue(true);
     minio.statObject.mockRejectedValue(new Error('NoSuchVersion'));
 
     await expect(service.createDocument('tenant-1', 'membership-1', {
@@ -1154,6 +1157,88 @@ describe('DocumentsService', () => {
       uploadFile.objectVersionId,
     );
     expect(prisma.file.create).not.toHaveBeenCalled();
+  });
+
+  it('maps confirmed missing exact versions to a client error', async () => {
+    const missingVersion = Object.assign(new Error('NoSuchVersion'), {
+      code: 'NoSuchVersion',
+      statusCode: 404,
+    });
+    minio.objectExists.mockResolvedValue(true);
+    minio.isNotFoundError.mockReturnValue(true);
+    minio.statObject.mockRejectedValue(missingVersion);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('maps a confirmed missing current version to a client error', async () => {
+    const missingCurrentVersion = Object.assign(new Error('NotFound'), {
+      code: 'NotFound',
+      statusCode: 404,
+    });
+    minio.objectExists.mockResolvedValue(true);
+    minio.isNotFoundError.mockReturnValue(true);
+    minio.statObject
+      .mockResolvedValueOnce({ size: 1024, versionId: 'version-1' } as never)
+      .mockRejectedValueOnce(missingCurrentVersion);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['timeout', new Error('ETIMEDOUT')],
+    ['provider 5xx', Object.assign(new Error('ServiceUnavailable'), { statusCode: 503 })],
+    ['access denied', Object.assign(new Error('AccessDenied'), { code: 'AccessDenied', statusCode: 403 })],
+  ])('propagates %s during exact version stat', async (_label, storageError) => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.isNotFoundError.mockReturnValue(false);
+    minio.statObject.mockRejectedValue(storageError);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBe(storageError);
+  });
+
+  it.each([
+    ['timeout', new Error('ETIMEDOUT')],
+    ['provider 5xx', Object.assign(new Error('InternalError'), { statusCode: 500 })],
+    ['access denied', Object.assign(new Error('InvalidAccessKeyId'), { code: 'InvalidAccessKeyId', statusCode: 403 })],
+  ])('propagates %s during current version stat', async (_label, storageError) => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.isNotFoundError.mockReturnValue(false);
+    minio.statObject
+      .mockResolvedValueOnce({ size: 1024, versionId: 'version-1' } as never)
+      .mockRejectedValueOnce(storageError);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBe(storageError);
   });
 
   it('cleans up the uploaded object if the document row cannot be persisted', async () => {

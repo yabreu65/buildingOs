@@ -124,6 +124,10 @@ async function ensureResidentDocumentFixture(
   });
 
   expect(uploadResponse.ok()).toBe(true);
+  const objectVersionId = uploadResponse.headers()['x-amz-version-id']?.trim();
+  if (!objectVersionId) {
+    throw new Error('Resident document upload did not return x-amz-version-id');
+  }
 
   const createResponse = await page.request.post(`${API_ORIGIN}/tenants/${tenantId}/documents`, {
     headers: {
@@ -137,6 +141,7 @@ async function ensureResidentDocumentFixture(
       file: {
         bucket: presign.bucket,
         objectKey: presign.objectKey,
+        objectVersionId,
         originalName: fixtureName,
         mimeType: fixtureMimeType,
         size: fixtureBytes.length,

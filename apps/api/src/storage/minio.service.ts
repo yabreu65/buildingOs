@@ -52,11 +52,18 @@ export class MinioService {
     return this.getErrorLike(error)?.stack;
   }
 
-  private isNotFoundError(error: unknown): boolean {
+  /**
+   * Identify storage errors that conclusively mean the requested object/version is absent.
+   */
+  isNotFoundError(error: unknown): boolean {
     const errorLike = this.getErrorLike(error);
     return errorLike?.code === 'NotFound'
+      || errorLike?.code === 'NoSuchKey'
+      || errorLike?.code === 'NoSuchVersion'
       || errorLike?.statusCode === 404
-      || errorLike?.message?.includes('NotFound') === true;
+      || errorLike?.message?.includes('NotFound') === true
+      || errorLike?.message?.includes('NoSuchKey') === true
+      || errorLike?.message?.includes('NoSuchVersion') === true;
   }
 
   private isPreconditionFailedError(error: unknown): boolean {

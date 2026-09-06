@@ -410,6 +410,8 @@ async function createPaymentProof() {
   });
   await upload.arrayBuffer();
   assert(upload.ok, "payment proof upload failed");
+  const objectVersionId = upload.headers.get("x-amz-version-id")?.trim();
+  assert(objectVersionId, "payment proof upload did not return x-amz-version-id");
   const document = await request("POST", `/tenants/${tenantId}/documents`, {
     title: `${marker}:payment-proof`,
     category: "RECEIPT",
@@ -418,6 +420,7 @@ async function createPaymentProof() {
     unitId,
     file: {
       objectKey: presign.objectKey,
+      objectVersionId,
       originalName,
       mimeType: "application/pdf",
       size: proof.length,

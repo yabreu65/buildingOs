@@ -47,6 +47,17 @@ jobs:
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$DEPLOY_SHA" FETCH_HEAD
 
+      - name: Require versioned object storage readiness
+        shell: bash
+        env:
+          STAGING_OBJECT_VERSION_ID_READY: ${{ vars.STAGING_OBJECT_VERSION_ID_READY || '' }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "${STAGING_OBJECT_VERSION_ID_READY,,}" != "true" ]]; then
+            echo "STAGING_OBJECT_VERSION_ID_READY must be explicitly set to true only after staging bucket versioning and x-amz-version-id CORS exposure are independently verified" >&2
+            exit 1
+          fi
+
       - name: Deploy over SSH
         shell: bash
         env:

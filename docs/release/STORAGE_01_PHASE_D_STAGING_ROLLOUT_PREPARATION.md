@@ -124,6 +124,12 @@ was functionally accepted, while the provider returned
 not permit credentials, and does not weaken BuildingOS API CORS. It must be
 recorded as a Contabo-specific semantic deviation only.
 
+The staging deployment workflow fails closed unless the GitHub environment
+variable `STAGING_OBJECT_VERSION_ID_READY` is explicitly set to `true`. That
+variable may only be enabled after independently verifying staging bucket
+versioning and CORS exposure of `x-amz-version-id`; this code change does not
+set the variable or mutate provider configuration.
+
 ### Manual input required
 
 - exact Contabo endpoint host;

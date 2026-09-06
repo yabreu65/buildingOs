@@ -105,6 +105,16 @@ describe('MinioService', () => {
     );
   });
 
+  it('classifies only confirmed missing object or version errors as not found', () => {
+    const service = new MinioService(createConfig());
+
+    expect(service.isNotFoundError({ code: 'NoSuchVersion' })).toBe(true);
+    expect(service.isNotFoundError({ statusCode: 404 })).toBe(true);
+    expect(service.isNotFoundError({ code: 'AccessDenied', statusCode: 403 })).toBe(false);
+    expect(service.isNotFoundError({ statusCode: 500 })).toBe(false);
+    expect(service.isNotFoundError(new Error('ETIMEDOUT'))).toBe(false);
+  });
+
   it('binds a presigned download URL to an exact object version when requested', async () => {
     const internalClient = createClientMock();
     const publicClient = createClientMock();

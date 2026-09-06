@@ -273,10 +273,13 @@ export class DocumentsService {
         uploadFile.objectKey,
         objectVersionId,
       );
-    } catch {
-      throw new BadRequestException(
-        'The uploaded file version does not belong to the uploaded object',
-      );
+    } catch (error: unknown) {
+      if (this.minio.isNotFoundError(error)) {
+        throw new BadRequestException(
+          'The uploaded file version does not belong to the uploaded object',
+        );
+      }
+      throw error;
     }
 
     if (uploadedObject.versionId !== objectVersionId) {
@@ -300,10 +303,13 @@ export class DocumentsService {
     let currentObject: MinioObjectStat;
     try {
       currentObject = await this.minio.statObject(bucket, uploadFile.objectKey);
-    } catch {
-      throw new BadRequestException(
-        'The uploaded file is no longer the current version of the object',
-      );
+    } catch (error: unknown) {
+      if (this.minio.isNotFoundError(error)) {
+        throw new BadRequestException(
+          'The uploaded file is no longer the current version of the object',
+        );
+      }
+      throw error;
     }
 
     if (currentObject.versionId !== objectVersionId) {
