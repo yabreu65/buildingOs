@@ -361,7 +361,7 @@ export class DocumentsService {
     }
 
     if (!document) {
-      await this.deleteUploadedObject(uploadFile.objectKey);
+      await this.deleteUploadedObject(uploadFile.objectKey, objectVersionId);
       throw new BadRequestException('Failed to persist document metadata');
     }
 

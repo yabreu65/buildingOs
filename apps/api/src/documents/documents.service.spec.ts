@@ -1180,6 +1180,29 @@ describe('DocumentsService', () => {
     );
   });
 
+  it('cleans up the exact version when document persistence returns no document', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject
+      .mockResolvedValueOnce({ size: 1024, versionId: 'version-1' } as never)
+      .mockResolvedValueOnce({ size: 1024, versionId: 'version-1' } as never);
+    prisma.$transaction.mockResolvedValueOnce(null);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(minio.deleteObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      uploadFile.objectKey,
+      uploadFile.objectVersionId,
+    );
+  });
+
   it('accepts a 100 MiB general document using the real storage size', async () => {
     minio.objectExists.mockResolvedValue(true);
     minio.statObject.mockResolvedValue({ size: GENERAL_DOCUMENT_MAX_BYTES, versionId: 'version-1' } as never);
