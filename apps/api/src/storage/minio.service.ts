@@ -424,9 +424,12 @@ export class MinioService {
   async getObjectStream(
     bucketName: string = this.bucket,
     objectKey: string,
+    versionId?: string,
   ): Promise<Readable> {
     try {
-      return await this.minioClient.getObject(bucketName, objectKey);
+      return versionId
+        ? await this.minioClient.getObject(bucketName, objectKey, { versionId })
+        : await this.minioClient.getObject(bucketName, objectKey);
     } catch (error: unknown) {
       this.logger.error(
         `Failed to open object stream: ${this.getErrorMessage(error)}`,

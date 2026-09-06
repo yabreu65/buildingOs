@@ -398,7 +398,13 @@ describe('DocumentsService', () => {
           passwordHash: 'secret-detail-hash',
         },
       },
-      file: { bucket: 'tenant-legacy-bucket', objectKey: 'receipt.pdf', originalName: 'receipt.pdf', mimeType: 'application/pdf' },
+      file: {
+        bucket: 'tenant-legacy-bucket',
+        objectKey: 'receipt.pdf',
+        originalName: 'receipt.pdf',
+        mimeType: 'application/pdf',
+        objectVersionId: 'version-1',
+      },
     } as never);
 
     const result = await service.getDocument('tenant-1', 'document-1', 'resident-1', ['RESIDENT'], false);
@@ -424,6 +430,7 @@ describe('DocumentsService', () => {
       email: 'resident@example.com',
       name: 'Resident One',
     });
+    expect(result.file).not.toHaveProperty('objectVersionId');
     expectNoPasswordHashDeep(result);
   });
 
@@ -1098,6 +1105,40 @@ describe('DocumentsService', () => {
     });
   });
 
+  it('binds a presigned download URL to the persisted file version', async () => {
+    prisma.document.findFirst.mockResolvedValueOnce({
+      id: 'document-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      createdByMembership: { userId: 'admin-1' },
+      file: {
+        bucket: 'tenant-versioned-bucket',
+        objectKey: 'receipt.pdf',
+        objectVersionId: 'version-1',
+      },
+    } as never);
+    minio.presignDownload.mockResolvedValue('https://download.example/receipt.pdf');
+
+    await service.getDownloadUrl(
+      'tenant-1',
+      'document-1',
+      'resident-1',
+      ['RESIDENT'],
+      false,
+    );
+
+    expect(minio.presignDownload).toHaveBeenCalledWith(
+      'tenant-versioned-bucket',
+      'receipt.pdf',
+      86400,
+      'version-1',
+    );
+  });
+
   it('streams a protected document download using the persisted bucket and sanitized filename', async () => {
     minio.objectExists.mockResolvedValue(true);
     minio.statObject.mockResolvedValue({ size: 2048 } as never);
@@ -1119,6 +1160,52 @@ describe('DocumentsService', () => {
     expect(result.fileName).toBe('receipt.pdf');
     expect(result.disposition).toBe('inline');
     expect(result.stream.readable).toBe(true);
+  });
+
+  it('stats and streams the same persisted file version for document content', async () => {
+    prisma.document.findFirst.mockResolvedValueOnce({
+      id: 'document-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      visibility: 'RESIDENTS',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      createdByMembership: { userId: 'admin-1' },
+      file: {
+        bucket: 'tenant-versioned-bucket',
+        objectKey: 'receipt.pdf',
+        originalName: 'receipt.pdf',
+        mimeType: 'application/pdf',
+        objectVersionId: 'version-1',
+      },
+    } as never);
+    minio.statObject.mockResolvedValue({ size: 2048, versionId: 'version-1' } as never);
+    minio.getObjectStream.mockResolvedValue(Readable.from(['pdf-bytes']) as never);
+
+    const result = await service.getDocumentContent(
+      'tenant-1',
+      'document-1',
+      'resident-1',
+      ['RESIDENT'],
+      false,
+    );
+
+    expect(minio.objectExists).not.toHaveBeenCalled();
+    expect(minio.statObject).toHaveBeenCalledWith(
+      'tenant-versioned-bucket',
+      'receipt.pdf',
+      'version-1',
+    );
+    expect(minio.getObjectStream).toHaveBeenCalledWith(
+      'tenant-versioned-bucket',
+      'receipt.pdf',
+      'version-1',
+    );
+    expect(minio.statObject.mock.calls[0][2]).toBe(
+      minio.getObjectStream.mock.calls[0][2],
+    );
+    expect(result.contentLength).toBe(2048);
   });
 
   it('rejects downloads when the file no longer exists in MinIO', async () => {

@@ -43,6 +43,19 @@ type DocumentNotificationTarget = Prisma.DocumentGetPayload<{
   };
 }>;
 
+type AccessibleDocument = Prisma.DocumentGetPayload<{
+  include: {
+    file: true;
+    createdByMembership: {
+      include: {
+        user: {
+          select: typeof publicUserSelect;
+        };
+      };
+    };
+  };
+}>;
+
 type DocumentWithPublicMembershipUser = {
   createdByMembership?: {
     user?: {
@@ -466,6 +479,24 @@ export class DocumentsService {
     userRoles: string[],
     isSuperAdmin: boolean,
   ): Promise<DocumentWithFileResponseDto> {
+    const document = await this.loadAccessibleDocument(
+      tenantId,
+      documentId,
+      userId,
+      userRoles,
+      isSuperAdmin,
+    );
+
+    return this.sanitizeDocumentResponse(document);
+  }
+
+  private async loadAccessibleDocument(
+    tenantId: string,
+    documentId: string,
+    userId: string,
+    userRoles: string[],
+    isSuperAdmin: boolean,
+  ): Promise<AccessibleDocument> {
     const document = await this.prisma.document.findFirst({
       where: { id: documentId, tenantId },
       include: {
@@ -514,7 +545,7 @@ export class DocumentsService {
       );
     }
 
-    return this.sanitizeDocumentResponse(document);
+    return document;
   }
 
   /**
@@ -720,7 +751,7 @@ export class DocumentsService {
     isSuperAdmin: boolean,
   ): Promise<DownloadUrlResponseDto> {
     // First, validate document is accessible
-    const document = await this.getDocument(
+    const document = await this.loadAccessibleDocument(
       tenantId,
       documentId,
       userId,
@@ -734,11 +765,18 @@ export class DocumentsService {
 
     // Generate presigned URL from MinIO (24 hours expiration)
     const expirySeconds = 24 * 60 * 60;
-    const url = await this.minio.presignDownload(
-      document.file.bucket,
-      document.file.objectKey,
-      expirySeconds,
-    );
+    const url = document.file.objectVersionId
+      ? await this.minio.presignDownload(
+          document.file.bucket,
+          document.file.objectKey,
+          expirySeconds,
+          document.file.objectVersionId,
+        )
+      : await this.minio.presignDownload(
+          document.file.bucket,
+          document.file.objectKey,
+          expirySeconds,
+        );
 
     return {
       url,
@@ -758,7 +796,7 @@ export class DocumentsService {
     userRoles: string[],
     isSuperAdmin: boolean,
   ): Promise<DocumentContentResponse> {
-    const document = await this.getDocument(
+    const document = await this.loadAccessibleDocument(
       tenantId,
       documentId,
       userId,
@@ -772,17 +810,21 @@ export class DocumentsService {
 
     const bucket = document.file.bucket;
     const objectKey = document.file.objectKey;
-    const exists = await this.minio.objectExists(bucket, objectKey);
-    if (!exists) {
+    const versionId = document.file.objectVersionId ?? undefined;
+    if (!versionId && !(await this.minio.objectExists(bucket, objectKey))) {
       throw new NotFoundException('Document file not found');
     }
 
-    const uploadedObject = await this.minio.statObject(bucket, objectKey);
+    const uploadedObject = versionId
+      ? await this.minio.statObject(bucket, objectKey, versionId)
+      : await this.minio.statObject(bucket, objectKey);
     if (uploadedObject.size <= 0) {
       throw new NotFoundException('Document file not found');
     }
 
-    const stream = await this.minio.getObjectStream(bucket, objectKey);
+    const stream = versionId
+      ? await this.minio.getObjectStream(bucket, objectKey, versionId)
+      : await this.minio.getObjectStream(bucket, objectKey);
     const contentType = document.file.mimeType || 'application/octet-stream';
 
     return {
@@ -1235,15 +1277,27 @@ export class DocumentsService {
   private sanitizeDocumentResponse(
     document: DocumentWithPublicMembershipUser & Record<string, unknown>,
   ): DocumentWithFileResponseDto {
-    if (!document.createdByMembership) {
-      return document as unknown as DocumentWithFileResponseDto;
+    const file = document.file;
+    const sanitizedDocument = {
+      ...document,
+      ...(file && typeof file === 'object'
+        ? {
+            file: Object.fromEntries(
+              Object.entries(file).filter(([key]) => key !== 'objectVersionId'),
+            ),
+          }
+        : {}),
+    };
+
+    if (!sanitizedDocument.createdByMembership) {
+      return sanitizedDocument as unknown as DocumentWithFileResponseDto;
     }
 
     return {
-      ...document,
+      ...sanitizedDocument,
       createdByMembership: {
-        ...document.createdByMembership,
-        user: toPublicUser(document.createdByMembership.user) ?? undefined,
+        ...sanitizedDocument.createdByMembership,
+        user: toPublicUser(sanitizedDocument.createdByMembership.user) ?? undefined,
       },
     } as unknown as DocumentWithFileResponseDto;
   }
