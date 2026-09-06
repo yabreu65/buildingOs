@@ -15,6 +15,7 @@ export interface MinioObjectStat {
   etag?: string;
   lastModified?: Date;
   metaData?: Record<string, string>;
+  versionId?: string | null;
 }
 
 export interface MinioUploadResult {
@@ -215,9 +216,13 @@ export class MinioService {
   async statObject(
     bucketName: string = this.bucket,
     objectKey: string,
+    versionId?: string,
   ): Promise<MinioObjectStat> {
     try {
-      return await this.minioClient.statObject(bucketName, objectKey) as MinioObjectStat;
+      const stat = versionId
+        ? await this.minioClient.statObject(bucketName, objectKey, { versionId })
+        : await this.minioClient.statObject(bucketName, objectKey);
+      return stat as MinioObjectStat;
     } catch (error: unknown) {
       this.logger.error(
         `Failed to stat object: ${this.getErrorMessage(error)}`,
@@ -370,9 +375,12 @@ export class MinioService {
   async getObjectBuffer(
     bucketName: string = this.bucket,
     objectKey: string,
+    versionId?: string,
   ): Promise<Buffer> {
     try {
-      const stream = await this.minioClient.getObject(bucketName, objectKey);
+      const stream = versionId
+        ? await this.minioClient.getObject(bucketName, objectKey, { versionId })
+        : await this.minioClient.getObject(bucketName, objectKey);
       const chunks: Buffer[] = [];
 
       return await new Promise<Buffer>((resolve, reject) => {

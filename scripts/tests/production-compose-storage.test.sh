@@ -3,11 +3,13 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly COMPOSE_FILE="$ROOT_DIR/infra/docker/docker-compose.production.yml"
+readonly RELEASE_STAGING_COMPOSE_FILE="$ROOT_DIR/infra/docker/docker-compose.release-staging.yml"
 readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-production-compose.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 readonly API_ENV_FILE="$TEST_ROOT/api.env"
 readonly WEB_ENV_FILE="$TEST_ROOT/web.env"
+readonly RELEASE_STAGING_ENV_FILE="$TEST_ROOT/release-staging.env"
 printf '%s\n' 'APP_ENV=production' > "$API_ENV_FILE"
 printf '%s\n' 'APP_ENV=production' > "$WEB_ENV_FILE"
 
@@ -48,3 +50,35 @@ run_config_case() {
 run_config_case 'MINIO runtime env renders without MinIO service ownership' http://buildingos-minio:9000
 run_config_case 'EXTERNAL S3 runtime env renders without MinIO-specific variables' https://usc1.contabostorage.com
 printf 'PASS: production Compose storage topology and controlled env rendering\n'
+
+printf '%s\n' \
+  'POSTGRES_USER=buildingos' \
+  'POSTGRES_PASSWORD=local-password' \
+  'POSTGRES_DB=buildingos_release_staging_test' \
+  'MINIO_ROOT_USER=local-root' \
+  'MINIO_ROOT_PASSWORD=local-password' \
+  'S3_BUCKET=buildingos-release-staging-test' \
+  'NODE_ENV=production' \
+  'REDIS_URL=redis://redis:6379' \
+  'WEB_ORIGIN=https://web.example.invalid' \
+  'APP_BASE_URL=https://web.example.invalid' \
+  'S3_REGION=us-east-1' \
+  'S3_PUBLIC_BASE_URL=https://files.example.invalid' \
+  'JWT_SECRET=local-jwt-secret' \
+  'JWT_EXPIRES_IN=24h' \
+  'MAIL_PROVIDER=none' \
+  'MAIL_FROM=BuildingOS <no-reply@example.invalid>' \
+  'PAYMENT_PROVIDER=none' \
+  'AI_PROVIDER=none' \
+  'FEATURE_PORTAL_RESIDENT=true' \
+  'FEATURE_PAYMENTS_MVP=true' \
+  'LOG_LEVEL=info' \
+  'API_URL=https://api.example.invalid' > "$RELEASE_STAGING_ENV_FILE"
+
+release_staging_rendered="$(docker compose \
+  --project-name buildingos-release-staging-compose-test \
+  --env-file "$RELEASE_STAGING_ENV_FILE" \
+  --file "$RELEASE_STAGING_COMPOSE_FILE" config)"
+[[ "$release_staging_rendered" == *'mc alias set myminio http://minio:9000 local-root local-password && mc mb --ignore-existing myminio/buildingos-release-staging-test && mc version enable myminio/buildingos-release-staging-test'* ]]
+[[ "$release_staging_rendered" != *'exit 0'* ]]
+printf 'PASS: release-staging bucket bootstrap is idempotent and fail-closed with versioning enabled\n'

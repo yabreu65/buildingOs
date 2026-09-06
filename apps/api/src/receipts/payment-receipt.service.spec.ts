@@ -449,15 +449,25 @@ describe('PaymentReceiptService', () => {
       expect(pdfInfo.status).toBe(0);
       expect(pdfInfo.stdout).toContain('Pages:');
     }
-     expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
-       data: expect.objectContaining({
-         bucket: DEFAULT_BUCKET,
-         objectVersionId: 'receipt-version-1',
-         originalName: expect.stringMatching(/\.pdf$/),
-         mimeType: 'application/pdf',
-         size: uploadedBuffer.length,
-       }),
+    expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        bucket: DEFAULT_BUCKET,
+        objectVersionId: 'receipt-version-1',
+        originalName: expect.stringMatching(/\.pdf$/),
+        mimeType: 'application/pdf',
+        size: uploadedBuffer.length,
+      }),
     }));
+    expect(minio.statObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      expect.stringContaining('/receipts/R-'),
+      'receipt-version-1',
+    );
+    expect(minio.getObjectBuffer).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      expect.stringContaining('/receipts/R-'),
+      'receipt-version-1',
+    );
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
     expect(transactionQueryRawMock).toHaveBeenCalledTimes(5);
      expect(prisma.payment.updateMany).toHaveBeenCalledWith(
@@ -1206,6 +1216,38 @@ describe('PaymentReceiptService', () => {
     expect(defaultPaymentState.receiptGeneratedAt).toEqual(lastModified);
   });
 
+  it('persists a version returned by legacy orphan validation only after reading that exact version', async () => {
+    Object.assign(defaultPaymentState, {
+      receiptStatus: ReceiptStatus.FAILED,
+      receiptNumber: 'R-COMPLE-2026-000001',
+    });
+    const legacyPdf = Buffer.from('%PDF-versioned-legacy-orphan');
+    const lastModified = new Date('2026-08-30T12:00:00.000Z');
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({
+      size: legacyPdf.length,
+      versionId: 'legacy-version-1',
+      etag: 'legacy-etag',
+      lastModified,
+      metaData: { 'content-type': 'application/pdf' },
+    });
+    minio.getObjectBuffer.mockImplementation(async (_bucket, _key, versionId) => {
+      expect(versionId).toBe('legacy-version-1');
+      return legacyPdf;
+    });
+
+    await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+
+    expect(minio.getObjectBuffer).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      canonicalReceiptKey(),
+      'legacy-version-1',
+    );
+    expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ objectVersionId: 'legacy-version-1' }),
+    }));
+  });
+
   it("atomically takes over an expired orphan recovery claim", async () => {
     const expiredLease = new Date("2026-08-30T23:59:59.000Z");
     const lastModified = new Date("2026-08-30T12:00:00.000Z");
@@ -1807,6 +1849,16 @@ describe('PaymentReceiptService', () => {
       },
     });
     expect(prisma.file.updateMany.mock.calls[0][0].data.objectVersionId).toBeUndefined();
+    expect(minio.statObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      canonicalReceiptKey(),
+      'receipt-version-existing',
+    );
+    expect(minio.getObjectBuffer).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      canonicalReceiptKey(),
+      'receipt-version-existing',
+    );
   });
 
   it('persists the exact VersionId when reconciling an existing File after creating its missing object', async () => {
@@ -1975,16 +2027,28 @@ describe('PaymentReceiptService', () => {
       building: { name: "Complejo Horizonte" },
     } as never;
     let storedObject: Buffer | null = null;
+    let storedVersionId: string | null = null;
     prisma.payment.findUnique.mockImplementation(async () => paymentState);
     prisma.payment.update.mockImplementation(async ({ data }) => {
       paymentState = { ...paymentState, ...data } as never;
       return paymentState;
     });
     minio.objectExists.mockImplementation(async () => storedObject !== null);
-    minio.statObject.mockImplementation(async () => ({ size: storedObject?.length ?? 0 }));
-    minio.getObjectBuffer.mockImplementation(async () => storedObject!);
+    minio.statObject.mockImplementation(async () => ({
+      size: storedObject?.length ?? 0,
+      versionId: storedVersionId,
+    }));
+    minio.getObjectBuffer.mockImplementation(async (_bucket, _key, versionId) => {
+      expect(versionId).toBe(storedVersionId);
+      return storedObject!;
+    });
     minio.uploadBuffer.mockImplementation(async (_bucket, _key, content) => {
       storedObject = content;
+    });
+    minio.uploadBufferIfAbsentWithMetadata.mockImplementationOnce(async (...args: unknown[]) => {
+      await minio.uploadBuffer(...args);
+      storedVersionId = 'receipt-version-1';
+      return { etag: 'receipt-etag', versionId: storedVersionId };
     });
     prisma.document.create.mockRejectedValueOnce(
       new Error("database unavailable"),
@@ -2024,6 +2088,11 @@ describe('PaymentReceiptService', () => {
     expect(storedObject?.includes(Buffer.from("MUTATED"))).toBe(false);
     expect(paymentState.receiptStatus).toBe(ReceiptStatus.READY);
     expect(prisma.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+    expect(minio.getObjectBuffer).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      expect.stringContaining('/receipts/R-'),
+      'receipt-version-1',
+    );
   });
 
   it('renews a live receipt lease using the database timestamp', async () => {
@@ -2226,6 +2295,72 @@ describe('PaymentReceiptService', () => {
     );
     expect(prisma.payment.updateMany).not.toHaveBeenCalled();
     expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
+
+  it('validates an existing object through the VersionId returned by stat', async () => {
+    const pdf = Buffer.from('%PDF-existing-version');
+    const ensureStorage = Reflect.get(service, 'ensureReceiptStorageObject') as (
+      bucket: string,
+      fileKey: string,
+      content: Buffer,
+      expectedVersionId?: string | null,
+    ) => Promise<{ versionId?: string }>;
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: pdf.length, versionId: 'version-a' });
+    minio.getObjectBuffer.mockImplementation(async (_bucket, _key, versionId) => {
+      expect(versionId).toBe('version-a');
+      return pdf;
+    });
+
+    await expect(
+      ensureStorage.call(service, DEFAULT_BUCKET, 'tenant-1/existing.pdf', pdf),
+    ).resolves.toEqual(expect.objectContaining({ versionId: 'version-a' }));
+    expect(minio.getObjectBuffer).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      'tenant-1/existing.pdf',
+      'version-a',
+    );
+  });
+
+  it('preserves legacy nullable identity when stat has no VersionId', async () => {
+    const pdf = Buffer.from('%PDF-legacy-unversioned');
+    const ensureStorage = Reflect.get(service, 'ensureReceiptStorageObject') as (
+      bucket: string,
+      fileKey: string,
+      content: Buffer,
+    ) => Promise<{ versionId?: string }>;
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: pdf.length, versionId: null });
+    minio.getObjectBuffer.mockResolvedValue(pdf);
+
+    await expect(
+      ensureStorage.call(service, DEFAULT_BUCKET, 'tenant-1/legacy.pdf', pdf),
+    ).resolves.toEqual(expect.objectContaining({ versionId: undefined }));
+    expect(minio.getObjectBuffer).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      'tenant-1/legacy.pdf',
+    );
+  });
+
+  it('fails closed when the exact validated version content does not match', async () => {
+    const expectedPdf = Buffer.from('%PDF-expected-version');
+    const wrongPdf = Buffer.from('%PDF-wrong-version!');
+    const ensureStorage = Reflect.get(service, 'ensureReceiptStorageObject') as (
+      bucket: string,
+      fileKey: string,
+      content: Buffer,
+    ) => Promise<unknown>;
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: expectedPdf.length, versionId: 'version-a' });
+    minio.getObjectBuffer.mockImplementation(async (_bucket, _key, versionId) => {
+      expect(versionId).toBe('version-a');
+      return wrongPdf;
+    });
+
+    await expect(
+      ensureStorage.call(service, DEFAULT_BUCKET, 'tenant-1/mismatch.pdf', expectedPdf),
+    ).rejects.toThrow('content mismatch');
+    expect(prisma.file.create).not.toHaveBeenCalled();
   });
 
   it('fails closed when a conditional canonical object-create race returns no identity', async () => {

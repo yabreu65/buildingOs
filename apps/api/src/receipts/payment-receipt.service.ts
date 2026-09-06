@@ -147,6 +147,7 @@ interface ReceiptFileArtifact {
   readonly size: number;
   readonly mimeType: string;
   readonly checksum: string | null;
+  readonly objectVersionId?: string | null;
 }
 
 interface ReceiptStorageMetadata {
@@ -342,6 +343,7 @@ export class PaymentReceiptService {
           preparedReceipt.bucket,
           preparedReceipt.fileKey,
           pdfContent,
+          preparedReceipt.existingFile?.objectVersionId,
         );
         heartbeat.assertOwned();
         finalizedReceipt = await this.finalizeReceipt(
@@ -1066,6 +1068,9 @@ export class PaymentReceiptService {
           mimeType: RECEIPT_MIME_TYPE,
           size: storageMetadata.size,
           checksum: storageMetadata.checksum,
+          ...(storageMetadata.versionId
+            ? { objectVersionId: storageMetadata.versionId }
+            : {}),
         },
       });
       const document = await tx.document.create({
@@ -1227,6 +1232,7 @@ export class PaymentReceiptService {
           currentPayment.tenantId,
           existingDocument.file.id,
           storageMetadata,
+          existingDocument.file.objectVersionId,
         );
       } else {
         if (storageMetadata.createdByCurrentProcess && !storageMetadata.versionId) {
@@ -1916,14 +1922,16 @@ export class PaymentReceiptService {
     if (!(await this.minio.objectExists(file.bucket, file.objectKey))) {
       return false;
     }
-    const stat = await this.minio.statObject(file.bucket, file.objectKey);
+    const stat = file.objectVersionId
+      ? await this.minio.statObject(file.bucket, file.objectKey, file.objectVersionId)
+      : await this.minio.statObject(file.bucket, file.objectKey);
     if (!this.isValidReceiptObjectStat(stat, file.size)) {
       return false;
     }
-    const content = await this.minio.getObjectBuffer(
-      file.bucket,
-      file.objectKey,
-    );
+    const versionId = stat.versionId ?? file.objectVersionId ?? undefined;
+    const content = versionId
+      ? await this.minio.getObjectBuffer(file.bucket, file.objectKey, versionId)
+      : await this.minio.getObjectBuffer(file.bucket, file.objectKey);
     return (
       this.isPdfContent(content) &&
       content.length === stat.size &&
@@ -1941,6 +1949,7 @@ export class PaymentReceiptService {
       );
     }
     const beforeRead = await this.minio.statObject(bucket, fileKey);
+    const versionId = beforeRead.versionId ?? undefined;
     const beforeReadContentType =
       beforeRead.metaData?.["content-type"] ??
       beforeRead.metaData?.["Content-Type"];
@@ -1953,7 +1962,9 @@ export class PaymentReceiptService {
         `Legacy receipt storage object metadata is invalid for ${bucket}/${fileKey}`,
       );
     }
-    const content = await this.minio.getObjectBuffer(bucket, fileKey);
+    const content = versionId
+      ? await this.minio.getObjectBuffer(bucket, fileKey, versionId)
+      : await this.minio.getObjectBuffer(bucket, fileKey);
     if (
       !this.isPdfContent(content) ||
       content.length !== beforeRead.size ||
@@ -1963,7 +1974,9 @@ export class PaymentReceiptService {
         `Legacy receipt storage object content is invalid for ${bucket}/${fileKey}`,
       );
     }
-    const afterRead = await this.minio.statObject(bucket, fileKey);
+    const afterRead = versionId
+      ? await this.minio.statObject(bucket, fileKey, versionId)
+      : await this.minio.statObject(bucket, fileKey);
     const afterReadContentType =
       afterRead.metaData?.["content-type"] ??
       afterRead.metaData?.["Content-Type"];
@@ -1974,6 +1987,7 @@ export class PaymentReceiptService {
       beforeRead.size !== afterRead.size ||
       beforeRead.lastModified.getTime() !== afterRead.lastModified.getTime() ||
       beforeRead.etag !== afterRead.etag
+      || (versionId && afterRead.versionId && afterRead.versionId !== versionId)
     ) {
       throw new ReceiptConsistencyError(
         `Legacy receipt storage object changed during recovery for ${bucket}/${fileKey}`,
@@ -1987,6 +2001,7 @@ export class PaymentReceiptService {
       size: content.length,
       checksum: this.sha256(content),
       etag: afterRead.etag,
+      versionId: afterRead.versionId ?? versionId,
       createdByCurrentProcess: false,
       lastModified: afterRead.lastModified,
     };
@@ -1996,6 +2011,7 @@ export class PaymentReceiptService {
     bucket: string,
     fileKey: string,
     pdfContent: Buffer,
+    expectedVersionId?: string | null,
   ): Promise<ReceiptStorageMetadata> {
     if (!this.isPdfContent(pdfContent) || pdfContent.length > MAX_RECEIPT_OBJECT_BYTES) {
       throw new Error(`Generated receipt PDF exceeds the supported storage contract`);
@@ -2025,13 +2041,20 @@ export class PaymentReceiptService {
       versionId = uploadResult.versionId;
       createdByCurrentProcess = true;
     }
-    const stat = await this.minio.statObject(bucket, fileKey);
+    const stat = versionId
+      ? await this.minio.statObject(bucket, fileKey, versionId)
+      : expectedVersionId
+        ? await this.minio.statObject(bucket, fileKey, expectedVersionId)
+        : await this.minio.statObject(bucket, fileKey);
     if (!this.isValidReceiptObjectStat(stat, pdfContent.length)) {
       throw new ReceiptConsistencyError(
         `Receipt storage object metadata mismatch for ${bucket}/${fileKey}`,
       );
     }
-    const storedContent = await this.minio.getObjectBuffer(bucket, fileKey);
+    const validatedVersionId = stat.versionId ?? versionId ?? expectedVersionId ?? undefined;
+    const storedContent = validatedVersionId
+      ? await this.minio.getObjectBuffer(bucket, fileKey, validatedVersionId)
+      : await this.minio.getObjectBuffer(bucket, fileKey);
     if (
       !this.isPdfContent(storedContent) ||
       storedContent.length !== stat.size ||
@@ -2047,7 +2070,7 @@ export class PaymentReceiptService {
       mimeType: RECEIPT_MIME_TYPE,
       size: storedContent.length,
       checksum: this.sha256(storedContent),
-      versionId,
+      versionId: validatedVersionId,
       createdByCurrentProcess,
     };
 
@@ -2075,6 +2098,7 @@ export class PaymentReceiptService {
     tenantId: string,
     fileId: string,
     metadata: ReceiptStorageMetadata,
+    existingVersionId?: string | null,
   ): Promise<void> {
     const result = await tx.file.updateMany({
       where: { id: fileId, tenantId },
@@ -2084,7 +2108,7 @@ export class PaymentReceiptService {
         mimeType: metadata.mimeType,
         size: metadata.size,
         checksum: metadata.checksum,
-        ...(metadata.createdByCurrentProcess && metadata.versionId
+        ...(metadata.versionId && (metadata.createdByCurrentProcess || !existingVersionId)
           ? { objectVersionId: metadata.versionId }
           : {}),
       },
