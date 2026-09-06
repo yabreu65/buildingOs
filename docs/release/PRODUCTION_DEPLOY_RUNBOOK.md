@@ -125,9 +125,10 @@ For incident recovery, use the separately gated candidate-restore, swap, and rev
 The deploy sequence is fail-closed:
 
 1. The workflow validates the manifest and local migration files before opening SSH.
-2. After the exact target checkout, deployment revalidates local files from that target.
-3. Immediately before `prisma migrate deploy`, the database must match the verified 97-row production pre-state and contain only the exact target migrations pending.
-4. Immediately after migration, the database must contain exactly the 99 expected active, finished rows; all 18 new database checksums must match the manifest.
+2. Before opening SSH, the runner materializes `DEPLOY_SHA` and the trusted control checkout validates that target tree with `scripts/verify-production-target-contract.sh`; this rejects pre-99 target trees without relying on the target tree's own verifier.
+3. After the exact target checkout, deployment revalidates local files from that target.
+4. Immediately before `prisma migrate deploy`, the database must match the verified 97-row production pre-state and contain only the exact target migrations pending.
+5. Immediately after migration, the database must contain exactly the 99 expected active, finished rows; all 18 new database checksums must match the manifest.
 
 If a previous attempt completed migration and stopped afterward, the strict 97-row pre-check reports the exact count mismatch and deployment may enter its retry path. A durable `IN_PROGRESS` predecessor checkpoint is written before migration; if the host is lost before a failure record can be written, retry recovery uses that checkpoint or the last successful 97-migration deployment record to bind the predecessor images. If a newer failed or interrupted target is replaced by an approved target, the recovery signal and storage provider from that record are preserved while the preceding successful 98- or 99-migration record supplies the known-good predecessor images. The retry path accepts only a fully validated 99-row target state, skips migration application, and still requires post-verification, rollback compatibility, receipt generation, application recreation, and health checks. Partial, failed, extra, or checksum-mismatched states remain rejected.
 

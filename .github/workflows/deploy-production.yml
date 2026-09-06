@@ -72,6 +72,21 @@ jobs:
           bash scripts/verify-production-migration-manifest.sh verify-files
           test -f infra/docker/docker-compose.production.yml
 
+      - name: Validate target migration contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          target_tree_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/buildingos-production-target.XXXXXX")"
+          target_tree="$target_tree_root/target"
+          cleanup() {
+            git worktree remove --force "$target_tree" >/dev/null 2>&1 || true
+            rm -rf "$target_tree_root"
+          }
+          trap cleanup EXIT
+          git worktree add --detach --quiet "$target_tree" "$DEPLOY_SHA"
+          [[ "$(git -C "$target_tree" rev-parse HEAD)" == "$DEPLOY_SHA" ]]
+          bash scripts/verify-production-target-contract.sh "$target_tree"
+
       - name: Run trusted production deployment
         shell: bash
         run: |
