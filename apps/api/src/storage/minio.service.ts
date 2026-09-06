@@ -52,11 +52,18 @@ export class MinioService {
     return this.getErrorLike(error)?.stack;
   }
 
-  private isNotFoundError(error: unknown): boolean {
+  /**
+   * Identify storage errors that conclusively mean the requested object/version is absent.
+   */
+  isNotFoundError(error: unknown): boolean {
     const errorLike = this.getErrorLike(error);
     return errorLike?.code === 'NotFound'
+      || errorLike?.code === 'NoSuchKey'
+      || errorLike?.code === 'NoSuchVersion'
       || errorLike?.statusCode === 404
-      || errorLike?.message?.includes('NotFound') === true;
+      || errorLike?.message?.includes('NotFound') === true
+      || errorLike?.message?.includes('NoSuchKey') === true
+      || errorLike?.message?.includes('NoSuchVersion') === true;
   }
 
   private isPreconditionFailedError(error: unknown): boolean {
@@ -246,6 +253,7 @@ export class MinioService {
    *
    * @param bucketName - Bucket name (or undefined to use default)
    * @param objectKey - Object path in bucket
+   * @param versionId - Optional exact object version to delete
    *
    * @example
    * await minioService.deleteObject(minioService.getDefaultBucket(), 'tenant-123/docs/file.pdf');
@@ -253,9 +261,14 @@ export class MinioService {
   async deleteObject(
     bucketName: string = this.bucket,
     objectKey: string,
+    versionId?: string,
   ): Promise<void> {
     try {
-      await this.minioClient.removeObject(bucketName, objectKey);
+      if (versionId) {
+        await this.minioClient.removeObject(bucketName, objectKey, { versionId });
+      } else {
+        await this.minioClient.removeObject(bucketName, objectKey);
+      }
       this.logger.debug(`Deleted object: ${bucketName}/${objectKey}`);
     } catch (error: unknown) {
       this.logger.error(

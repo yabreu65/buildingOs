@@ -92,6 +92,7 @@ jobs:
             --network host \
             -e MINIO_ROOT_USER="$S3_ACCESS_KEY" \
             -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
+            -e MINIO_API_CORS_ALLOW_ORIGIN="http://localhost:3000" \
             minio/minio:latest \
             server /data --address :9000 --console-address :9001
 
@@ -114,7 +115,19 @@ jobs:
             -e S3_SECRET_KEY="$S3_SECRET_KEY" \
             -e S3_BUCKET="$S3_BUCKET" \
             minio/mc:latest \
-            -lc 'mc alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" && mc mb --ignore-existing "local/$S3_BUCKET"'
+            -lc 'mc alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" && mc mb --ignore-existing "local/$S3_BUCKET" && mc version enable "local/$S3_BUCKET" && version_info="$(mc version info --json "local/$S3_BUCKET")" && printf "%s\\n" "$version_info" && case "$version_info" in *"Enabled"*) echo "MinIO versioning is enabled" ;; *) echo "MinIO versioning is not enabled" >&2; exit 1 ;; esac'
+
+          cors_response="$(curl -sS -D - -o /dev/null \
+            -H "Origin: http://localhost:3000" \
+            "http://127.0.0.1:9000/$S3_BUCKET/")"
+          printf '%s\n' "$cors_response"
+          printf '%s\n' "$cors_response" | grep -Eiq '^access-control-allow-origin:[[:space:]]*http://localhost:3000[[:space:]]*$'
+          expose_headers="$(printf '%s\n' "$cors_response" | awk 'tolower($0) ~ /^access-control-expose-headers[[:space:]]*:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+          if ! printf '%s\n' "$expose_headers" | tr ',' '\n' | awk '{ gsub(/\r/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); token = tolower($0); if (token == "*" || token == "x-amz-version-id") found = 1 } END { exit(found ? 0 : 1) }'; then
+            echo "MinIO CORS does not expose x-amz-version-id or a standalone wildcard token" >&2
+            exit 1
+          fi
+          echo "MinIO global CORS exposes x-amz-version-id to http://localhost:3000"
 
       - name: Setup environment
         run: |

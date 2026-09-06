@@ -10,6 +10,7 @@ jest.mock('minio', () => ({
 interface ClientMock {
   readonly statObject: jest.Mock;
   readonly getObject: jest.Mock;
+  readonly removeObject: jest.Mock;
   readonly putObject: jest.Mock;
   readonly presignedPutObject: jest.Mock;
   readonly presignedGetObject: jest.Mock;
@@ -21,6 +22,7 @@ function createClientMock(): ClientMock {
   return {
     statObject: jest.fn(),
     getObject: jest.fn(),
+    removeObject: jest.fn(),
     putObject: jest.fn(),
     presignedPutObject: jest.fn(),
     presignedGetObject: jest.fn(),
@@ -103,6 +105,16 @@ describe('MinioService', () => {
     );
   });
 
+  it('classifies only confirmed missing object or version errors as not found', () => {
+    const service = new MinioService(createConfig());
+
+    expect(service.isNotFoundError({ code: 'NoSuchVersion' })).toBe(true);
+    expect(service.isNotFoundError({ statusCode: 404 })).toBe(true);
+    expect(service.isNotFoundError({ code: 'AccessDenied', statusCode: 403 })).toBe(false);
+    expect(service.isNotFoundError({ statusCode: 500 })).toBe(false);
+    expect(service.isNotFoundError(new Error('ETIMEDOUT'))).toBe(false);
+  });
+
   it('binds a presigned download URL to an exact object version when requested', async () => {
     const internalClient = createClientMock();
     const publicClient = createClientMock();
@@ -154,6 +166,24 @@ describe('MinioService', () => {
       { versionId: 'version-1' },
     );
     expect(internalClient.getObject).toHaveBeenCalledWith(
+      'buildingos-staging',
+      'tenant-a/proof.pdf',
+      { versionId: 'version-1' },
+    );
+  });
+
+  it('deletes an exact object version when requested', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await service.deleteObject('buildingos-staging', 'tenant-a/proof.pdf', 'version-1');
+
+    expect(internalClient.removeObject).toHaveBeenCalledWith(
       'buildingos-staging',
       'tenant-a/proof.pdf',
       { versionId: 'version-1' },

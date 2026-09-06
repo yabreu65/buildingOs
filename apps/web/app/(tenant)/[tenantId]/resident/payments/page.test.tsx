@@ -254,7 +254,7 @@ describe('ResidentPaymentsPage', () => {
       objectKey: 'tenant-1/documents/proof.pdf',
       expiresAt: '2026-07-24T00:00:00.000Z',
     });
-    mockedUploadFileToMinio.mockResolvedValue(undefined);
+    mockedUploadFileToMinio.mockResolvedValue({ versionId: 'version-1' });
     mockedCreateDocument.mockResolvedValue({
       id: 'document-1',
       tenantId: 'tenant-1',
@@ -878,6 +878,12 @@ describe('ResidentPaymentsPage', () => {
     });
 
     await waitFor(() => expect(mockedCreateDocument).toHaveBeenCalled());
+    expect(mockedCreateDocument).toHaveBeenCalledWith(
+      'tenant-1',
+      expect.objectContaining({
+        file: expect.objectContaining({ objectVersionId: 'version-1' }),
+      }),
+    );
 
     mockedUseResidentContext.mockReturnValue({
       data: {

@@ -12,7 +12,7 @@ import { isAllowedMediaType } from '@buildingos/contracts';
 import { posix as pathPosix } from 'node:path';
 import type { Readable } from 'node:stream';
 import { PrismaService } from '../prisma/prisma.service';
-import { MinioService } from '../storage/minio.service';
+import { MinioService, MinioObjectStat } from '../storage/minio.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
 import { DocumentsValidators } from './documents.validators';
@@ -202,6 +202,13 @@ export class DocumentsService {
     dto: CreateDocumentDto,
   ): Promise<DocumentWithFileResponseDto> {
     const uploadFile = dto.file;
+    const objectVersionId = uploadFile.objectVersionId?.trim();
+
+    if (!objectVersionId) {
+      throw new BadRequestException(
+        'The uploaded file is missing its exact storage version identity',
+      );
+    }
 
     // Validate scope constraint
     this.validators.validateDocumentScope(dto.buildingId, dto.unitId);
@@ -245,7 +252,7 @@ export class DocumentsService {
     try {
       this.validateMimeType(uploadFile.mimeType);
     } catch (error) {
-      await this.deleteUploadedObject(uploadFile.objectKey);
+      await this.deleteUploadedObject(uploadFile.objectKey, objectVersionId);
       throw error;
     }
 
@@ -259,16 +266,55 @@ export class DocumentsService {
       );
     }
 
-    const uploadedObject = await this.minio.statObject(bucket, uploadFile.objectKey);
+    let uploadedObject: MinioObjectStat;
+    try {
+      uploadedObject = await this.minio.statObject(
+        bucket,
+        uploadFile.objectKey,
+        objectVersionId,
+      );
+    } catch (error: unknown) {
+      if (this.minio.isNotFoundError(error)) {
+        throw new BadRequestException(
+          'The uploaded file version does not belong to the uploaded object',
+        );
+      }
+      throw error;
+    }
+
+    if (uploadedObject.versionId !== objectVersionId) {
+      throw new BadRequestException(
+        'The storage provider did not confirm the exact uploaded file version',
+      );
+    }
+
     if (uploadedObject.size <= 0) {
-      await this.deleteUploadedObject(uploadFile.objectKey);
+      await this.deleteUploadedObject(uploadFile.objectKey, objectVersionId);
       throw new BadRequestException('El archivo no puede estar vacío');
     }
 
     if (uploadedObject.size > this.maxUploadBytesFor(uploadPurpose)) {
-      await this.deleteUploadedObject(uploadFile.objectKey);
+      await this.deleteUploadedObject(uploadFile.objectKey, objectVersionId);
       throw new PayloadTooLargeException(
         `El archivo supera el máximo de ${this.maxUploadMegabytesFor(uploadPurpose)} MB`,
+      );
+    }
+
+    let currentObject: MinioObjectStat;
+    try {
+      currentObject = await this.minio.statObject(bucket, uploadFile.objectKey);
+    } catch (error: unknown) {
+      if (this.minio.isNotFoundError(error)) {
+        throw new BadRequestException(
+          'The uploaded file is no longer the current version of the object',
+        );
+      }
+      throw error;
+    }
+
+    if (currentObject.versionId !== objectVersionId) {
+      throw new BadRequestException(
+        'The uploaded file is no longer the current version of the object',
       );
     }
 
@@ -281,6 +327,7 @@ export class DocumentsService {
             tenantId,
             bucket,
             objectKey: uploadFile.objectKey,
+            objectVersionId,
             originalName: this.sanitizeFileName(uploadFile.originalName),
             mimeType: uploadFile.mimeType,
             size: uploadedObject.size,
@@ -314,13 +361,13 @@ export class DocumentsService {
       });
     } catch (error) {
       if (!(await this.shouldPreserveUploadedObject(tenantId, bucket, uploadFile.objectKey, error))) {
-        await this.deleteUploadedObject(uploadFile.objectKey);
+        await this.deleteUploadedObject(uploadFile.objectKey, objectVersionId);
       }
       throw error;
     }
 
     if (!document) {
-      await this.deleteUploadedObject(uploadFile.objectKey);
+      await this.deleteUploadedObject(uploadFile.objectKey, objectVersionId);
       throw new BadRequestException('Failed to persist document metadata');
     }
 
@@ -916,9 +963,9 @@ export class DocumentsService {
     return this.maxUploadBytesFor(purpose) / 1024 / 1024;
   }
 
-  private async deleteUploadedObject(objectKey: string): Promise<void> {
+  private async deleteUploadedObject(objectKey: string, objectVersionId?: string): Promise<void> {
     try {
-      await this.minio.deleteObject(this.minio.getDefaultBucket(), objectKey);
+      await this.minio.deleteObject(this.minio.getDefaultBucket(), objectKey, objectVersionId);
     } catch (error) {
       this.logger.warn(`Unable to clean up rejected upload ${objectKey}: ${error instanceof Error ? error.message : String(error)}`);
     }
