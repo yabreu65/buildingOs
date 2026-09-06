@@ -107,6 +107,7 @@ describe('DocumentsService', () => {
   const uploadFile = {
     bucket: DEFAULT_BUCKET,
     objectKey: 'tenant-tenant-1/documents/proof.pdf',
+    objectVersionId: 'version-1',
     originalName: 'proof.pdf',
     mimeType: 'application/pdf',
     size: 1024,
@@ -233,7 +234,7 @@ describe('DocumentsService', () => {
   it('preserves double dots inside generated filenames and accepts the generated key', async () => {
     minio.presignUpload.mockResolvedValue('https://upload.example/expensas.pdf');
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
     prisma.file.create.mockResolvedValueOnce({ id: 'file-1' } as never);
     prisma.document.create.mockResolvedValueOnce({
       id: 'document-1',
@@ -257,6 +258,7 @@ describe('DocumentsService', () => {
       file: {
         bucket: DEFAULT_BUCKET,
         objectKey: 'tenant-tenant-1/documents/generated-expensas..julio.pdf',
+        objectVersionId: 'version-1',
         originalName: 'expensas..julio.pdf',
         mimeType: 'application/pdf',
         size: 1024,
@@ -271,7 +273,7 @@ describe('DocumentsService', () => {
 
   it('sanitizes createdByMembership.user in createDocument responses', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
     prisma.file.create.mockResolvedValueOnce({ id: 'file-create' } as never);
     prisma.document.create.mockResolvedValueOnce({
       id: 'document-create',
@@ -544,7 +546,7 @@ describe('DocumentsService', () => {
 
   it('does not notify anyone for payment proofs', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
     prisma.file.create.mockResolvedValueOnce({ id: 'file-proof' } as never);
     prisma.document.create.mockResolvedValueOnce({
       id: 'document-proof',
@@ -635,7 +637,7 @@ describe('DocumentsService', () => {
 
   it('excludes the uploading resident from general resident document notifications', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
     prisma.file.create.mockResolvedValueOnce({ id: 'file-doc' } as never);
     prisma.document.create.mockResolvedValueOnce({
       id: 'document-general',
@@ -678,7 +680,7 @@ describe('DocumentsService', () => {
 
   it('rejects empty uploads before creating the document record', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 0 } as never);
+    minio.statObject.mockResolvedValue({ size: 0, versionId: 'version-1' } as never);
 
     await expect(service.createDocument('tenant-1', 'membership-1', {
       title: 'Receipt',
@@ -689,7 +691,11 @@ describe('DocumentsService', () => {
       unitId: 'unit-1',
     })).rejects.toBeInstanceOf(BadRequestException);
 
-    expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, uploadFile.objectKey);
+    expect(minio.deleteObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      uploadFile.objectKey,
+      uploadFile.objectVersionId,
+    );
     expect(prisma.file.create).not.toHaveBeenCalled();
     expect(prisma.document.create).not.toHaveBeenCalled();
   });
@@ -753,7 +759,7 @@ describe('DocumentsService', () => {
 
   it('preserves the uploaded object when a concurrent create already persisted the file row', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
     prisma.file.create.mockRejectedValueOnce(createPrismaKnownRequestError('P2002'));
     prisma.file.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'file-1' } as never);
 
@@ -789,7 +795,7 @@ describe('DocumentsService', () => {
     let documentCreateCount = 0;
 
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
     prisma.file.findFirst.mockImplementation(async () => {
       fileLookupCount += 1;
       return fileLookupCount <= 2 ? null as never : winnerFile as never;
@@ -847,7 +853,11 @@ describe('DocumentsService', () => {
       },
       select: { id: true },
     });
-    expect(minio.statObject).toHaveBeenCalledWith(DEFAULT_BUCKET, paymentProof.objectKey);
+    expect(minio.statObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      paymentProof.objectKey,
+      'version-1',
+    );
     expect(minio.deleteObject).not.toHaveBeenCalled();
 
     releaseWinnerDocument();
@@ -861,7 +871,7 @@ describe('DocumentsService', () => {
     };
 
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
     prisma.file.create.mockRejectedValueOnce(createPrismaKnownRequestError('P2002'));
     prisma.file.findFirst.mockResolvedValue(null);
 
@@ -882,7 +892,11 @@ describe('DocumentsService', () => {
       },
       select: { id: true },
     });
-    expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, paymentProof.objectKey);
+    expect(minio.deleteObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      paymentProof.objectKey,
+      paymentProof.objectVersionId,
+    );
   });
 
   it('rejects payment-proof keys from another tenant before storage or cleanup', async () => {
@@ -920,7 +934,7 @@ describe('DocumentsService', () => {
 
   it('rejects uploaded files that exceed the backend limit using the real storage size', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: GENERAL_DOCUMENT_MAX_BYTES + 1 } as never);
+    minio.statObject.mockResolvedValue({ size: GENERAL_DOCUMENT_MAX_BYTES + 1, versionId: 'version-1' } as never);
 
     await expect(service.createDocument('tenant-1', 'membership-1', {
       title: 'Receipt',
@@ -931,14 +945,18 @@ describe('DocumentsService', () => {
       unitId: 'unit-1',
     })).rejects.toBeInstanceOf(PayloadTooLargeException);
 
-    expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, uploadFile.objectKey);
+    expect(minio.deleteObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      uploadFile.objectKey,
+      uploadFile.objectVersionId,
+    );
     expect(prisma.file.create).not.toHaveBeenCalled();
     expect(prisma.document.create).not.toHaveBeenCalled();
   });
 
   it('persists uploaded files using the configured bucket', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
     prisma.file.create.mockResolvedValueOnce({ id: 'file-1' } as never);
     prisma.document.create.mockResolvedValueOnce({
       id: 'document-1',
@@ -962,7 +980,11 @@ describe('DocumentsService', () => {
     });
 
     expect(minio.objectExists).toHaveBeenCalledWith(DEFAULT_BUCKET, uploadFile.objectKey);
-    expect(minio.statObject).toHaveBeenCalledWith(DEFAULT_BUCKET, uploadFile.objectKey);
+    expect(minio.statObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      uploadFile.objectKey,
+      uploadFile.objectVersionId,
+    );
     expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         bucket: DEFAULT_BUCKET,
@@ -972,9 +994,171 @@ describe('DocumentsService', () => {
     expect(result.file.bucket).toBe(DEFAULT_BUCKET);
   });
 
+  it('persists the exact provider version returned for the uploaded object', async () => {
+    const currentUploadFile = { ...uploadFile, objectVersionId: 'version-2' };
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject
+      .mockResolvedValueOnce({ size: 1024, versionId: 'version-2' } as never)
+      .mockResolvedValueOnce({ size: 1024, versionId: 'version-2' } as never);
+    prisma.file.create.mockResolvedValueOnce({ id: 'file-1' } as never);
+    prisma.document.create.mockResolvedValueOnce({
+      id: 'document-1',
+      tenantId: 'tenant-1',
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: { bucket: DEFAULT_BUCKET, objectKey: uploadFile.objectKey, objectVersionId: 'version-2' },
+    } as never);
+
+    await service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: currentUploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    });
+
+    expect(minio.statObject).toHaveBeenNthCalledWith(
+      1,
+      DEFAULT_BUCKET,
+      currentUploadFile.objectKey,
+      currentUploadFile.objectVersionId,
+    );
+    expect(minio.statObject).toHaveBeenNthCalledWith(
+      2,
+      DEFAULT_BUCKET,
+      currentUploadFile.objectKey,
+    );
+    expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ objectVersionId: 'version-2' }),
+    }));
+  });
+
+  it('rejects a valid historical version when the same key has a newer current version', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject
+      .mockResolvedValueOnce({ size: 1024, versionId: 'version-1' } as never)
+      .mockResolvedValueOnce({ size: 1024, versionId: 'version-2' } as never);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(minio.statObject).toHaveBeenNthCalledWith(
+      1,
+      DEFAULT_BUCKET,
+      uploadFile.objectKey,
+      uploadFile.objectVersionId,
+    );
+    expect(minio.statObject).toHaveBeenNthCalledWith(
+      2,
+      DEFAULT_BUCKET,
+      uploadFile.objectKey,
+    );
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+    expect(prisma.file.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the current object version is missing', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject
+      .mockResolvedValueOnce({ size: 1024, versionId: 'version-1' } as never)
+      .mockResolvedValueOnce({ size: 1024, versionId: null } as never);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when a new upload omits the provider version identity', async () => {
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: { ...uploadFile, objectVersionId: undefined } as never,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(minio.objectExists).not.toHaveBeenCalled();
+    expect(minio.statObject).not.toHaveBeenCalled();
+    expect(prisma.file.create).not.toHaveBeenCalled();
+  });
+
+  it('does not substitute an ETag when the provider omits the version identity', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({
+      size: 1024,
+      etag: 'etag-only',
+      versionId: null,
+    } as never);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.file.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a tampered version identity', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'actual-version' } as never);
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: { ...uploadFile, objectVersionId: 'tampered-version' },
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.file.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a version identity belonging to another object key', async () => {
+    minio.objectExists.mockResolvedValue(true);
+    minio.statObject.mockRejectedValue(new Error('NoSuchVersion'));
+
+    await expect(service.createDocument('tenant-1', 'membership-1', {
+      title: 'Receipt',
+      category: 'RECEIPT',
+      visibility: 'TENANT_ADMINS',
+      file: uploadFile,
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+    })).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(minio.statObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      uploadFile.objectKey,
+      uploadFile.objectVersionId,
+    );
+    expect(prisma.file.create).not.toHaveBeenCalled();
+  });
+
   it('cleans up the uploaded object if the document row cannot be persisted', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
     prisma.file.create.mockResolvedValueOnce({ id: 'file-1' } as never);
     prisma.document.create.mockRejectedValueOnce(new Error('DB down'));
 
@@ -989,12 +1173,16 @@ describe('DocumentsService', () => {
 
     expect(prisma.file.create).toHaveBeenCalled();
     expect(prisma.document.create).toHaveBeenCalled();
-    expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, uploadFile.objectKey);
+    expect(minio.deleteObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      uploadFile.objectKey,
+      uploadFile.objectVersionId,
+    );
   });
 
   it('accepts a 100 MiB general document using the real storage size', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: GENERAL_DOCUMENT_MAX_BYTES } as never);
+    minio.statObject.mockResolvedValue({ size: GENERAL_DOCUMENT_MAX_BYTES, versionId: 'version-1' } as never);
     prisma.file.create.mockResolvedValueOnce({ id: 'file-1' } as never);
     prisma.document.create.mockResolvedValueOnce({
       id: 'document-1',
@@ -1021,7 +1209,7 @@ describe('DocumentsService', () => {
     [PAYMENT_PROOF_MAX_BYTES + 1, false],
   ])('enforces the 10 MiB real-storage limit for payment proofs (%i bytes)', async (size, allowed) => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size } as never);
+    minio.statObject.mockResolvedValue({ size, versionId: 'version-1' } as never);
     const paymentProof = {
       ...uploadFile,
       objectKey: 'tenant-tenant-1/payment-proofs/proof.pdf',
@@ -1058,12 +1246,16 @@ describe('DocumentsService', () => {
       buildingId: 'building-1',
       unitId: 'unit-1',
     })).rejects.toThrow('10 MB');
-    expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, paymentProof.objectKey);
+    expect(minio.deleteObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      paymentProof.objectKey,
+      paymentProof.objectVersionId,
+    );
   });
 
   it('rejects unsafe MIME types and cleans up the uploaded object', async () => {
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: 1024 } as never);
+    minio.statObject.mockResolvedValue({ size: 1024, versionId: 'version-1' } as never);
 
     await expect(service.createDocument('tenant-1', 'membership-1', {
       title: 'Receipt',
@@ -1074,7 +1266,11 @@ describe('DocumentsService', () => {
       unitId: 'unit-1',
     })).rejects.toThrow('File type not allowed');
 
-    expect(minio.deleteObject).toHaveBeenCalledWith(DEFAULT_BUCKET, uploadFile.objectKey);
+    expect(minio.deleteObject).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      uploadFile.objectKey,
+      uploadFile.objectVersionId,
+    );
     expect(prisma.file.create).not.toHaveBeenCalled();
     expect(prisma.document.create).not.toHaveBeenCalled();
   });

@@ -246,6 +246,7 @@ export class MinioService {
    *
    * @param bucketName - Bucket name (or undefined to use default)
    * @param objectKey - Object path in bucket
+   * @param versionId - Optional exact object version to delete
    *
    * @example
    * await minioService.deleteObject(minioService.getDefaultBucket(), 'tenant-123/docs/file.pdf');
@@ -253,9 +254,14 @@ export class MinioService {
   async deleteObject(
     bucketName: string = this.bucket,
     objectKey: string,
+    versionId?: string,
   ): Promise<void> {
     try {
-      await this.minioClient.removeObject(bucketName, objectKey);
+      if (versionId) {
+        await this.minioClient.removeObject(bucketName, objectKey, { versionId });
+      } else {
+        await this.minioClient.removeObject(bucketName, objectKey);
+      }
       this.logger.debug(`Deleted object: ${bucketName}/${objectKey}`);
     } catch (error: unknown) {
       this.logger.error(

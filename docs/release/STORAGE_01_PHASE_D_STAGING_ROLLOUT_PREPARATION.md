@@ -94,6 +94,7 @@ specification only; the bucket must not be created as part of this preparation.
 | Object keys | Preserve all 46 active-bucket keys exactly |
 | CORS methods | `PUT` required; `GET` and `HEAD` allowed for compatible read/stat flows |
 | CORS request headers | `Content-Type` required by the browser upload XHR |
+| CORS exposed response headers | `x-amz-version-id` required so the browser can bind the exact uploaded version |
 | CORS credentials | Not required for direct presigned object requests |
 | Tenant isolation | API authorizes before presigning; bucket remains private; keys remain tenant-scoped |
 
@@ -105,9 +106,11 @@ used to broaden access policy.
 
 Versioning, lifecycle, and encryption controls:
 
-- Recommend enabling object versioning before cutover if supported by the
-  Contabo target, because it improves recovery from accidental replacement.
-  The current staging MinIO bucket reported no enabled versioning status.
+- Object versioning is required before cutover because the browser upload flow
+  persists the exact provider VersionId returned by the successful `PUT`.
+  Confirm that the Contabo target has versioning enabled and exposes
+  `x-amz-version-id` through CORS. The current staging MinIO bucket reported no
+  enabled versioning status.
 - Configure no lifecycle expiration for active application objects or the six
   preserved orphans. Any later noncurrent-version retention rule requires a
   separate review.

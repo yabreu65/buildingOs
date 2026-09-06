@@ -106,7 +106,11 @@ export function DocumentUploadModal({
       toast('URL de carga generada', 'success');
 
       // Step 2: Upload to MinIO
-      await uploadFileToMinio(presignResponse.url, selectedFile, setProgress);
+      const uploadResult = await uploadFileToMinio(
+        presignResponse.url,
+        selectedFile,
+        setProgress,
+      );
 
       toast('Archivo subido', 'success');
       setStep('create');
@@ -119,6 +123,7 @@ export function DocumentUploadModal({
         file: {
           bucket: presignResponse.bucket,
           objectKey: presignResponse.objectKey,
+          objectVersionId: uploadResult.versionId,
           originalName: selectedFile.name,
           mimeType: selectedFile.type,
           size: selectedFile.size,

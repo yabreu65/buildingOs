@@ -2,6 +2,7 @@ import { apiClient, apiClientWithResponse } from '@/shared/lib/http/client';
 import {
   downloadDocumentContent,
   downloadProtectedDocumentContent,
+  uploadFileToMinio,
   type DocumentCategory,
 } from './documents.api';
 
@@ -85,5 +86,79 @@ describe('documents api', () => {
     const result = await downloadDocumentContent('tenant-1', 'document-3');
 
     expect(result).toBe(blob);
+  });
+
+  it('returns the exact object version exposed by the storage PUT response', async () => {
+    let loadHandler: (() => void) | undefined;
+    const xhr = {
+      upload: { addEventListener: jest.fn() },
+      addEventListener: jest.fn((event: string, handler: () => void) => {
+        if (event === 'load') loadHandler = handler;
+      }),
+      open: jest.fn(),
+      setRequestHeader: jest.fn(),
+      send: jest.fn(),
+      status: 200,
+      statusText: 'OK',
+      getResponseHeader: jest.fn().mockReturnValue('version-1'),
+    };
+    const originalXMLHttpRequest = globalThis.XMLHttpRequest;
+    Object.defineProperty(globalThis, 'XMLHttpRequest', {
+      configurable: true,
+      value: jest.fn(() => xhr),
+    });
+
+    try {
+      const upload = uploadFileToMinio(
+        'https://storage.example/upload',
+        new File(['pdf'], 'receipt.pdf', { type: 'application/pdf' }),
+      );
+      loadHandler?.();
+
+      await expect(upload).resolves.toEqual({ versionId: 'version-1' });
+      expect(xhr.open).toHaveBeenCalledWith('PUT', 'https://storage.example/upload', true);
+      expect(xhr.getResponseHeader).toHaveBeenCalledWith('x-amz-version-id');
+    } finally {
+      Object.defineProperty(globalThis, 'XMLHttpRequest', {
+        configurable: true,
+        value: originalXMLHttpRequest,
+      });
+    }
+  });
+
+  it('rejects a successful PUT when storage does not expose an object version', async () => {
+    let loadHandler: (() => void) | undefined;
+    const xhr = {
+      upload: { addEventListener: jest.fn() },
+      addEventListener: jest.fn((event: string, handler: () => void) => {
+        if (event === 'load') loadHandler = handler;
+      }),
+      open: jest.fn(),
+      setRequestHeader: jest.fn(),
+      send: jest.fn(),
+      status: 200,
+      statusText: 'OK',
+      getResponseHeader: jest.fn().mockReturnValue(null),
+    };
+    const originalXMLHttpRequest = globalThis.XMLHttpRequest;
+    Object.defineProperty(globalThis, 'XMLHttpRequest', {
+      configurable: true,
+      value: jest.fn(() => xhr),
+    });
+
+    try {
+      const upload = uploadFileToMinio(
+        'https://storage.example/upload',
+        new File(['pdf'], 'receipt.pdf', { type: 'application/pdf' }),
+      );
+      loadHandler?.();
+
+      await expect(upload).rejects.toThrow('exact object version');
+    } finally {
+      Object.defineProperty(globalThis, 'XMLHttpRequest', {
+        configurable: true,
+        value: originalXMLHttpRequest,
+      });
+    }
   });
 });

@@ -111,6 +111,7 @@ export interface CreateDocumentInput {
   file: {
     bucket: string;
     objectKey: string;
+    objectVersionId: string;
     originalName: string;
     mimeType: string;
     size: number;
@@ -234,7 +235,7 @@ export async function uploadFileToMinio(
   presignedUrl: string,
   file: File,
   onProgress?: (progress: number) => void,
-): Promise<void> {
+): Promise<{ versionId: string }> {
   const xhr = new XMLHttpRequest();
 
   return new Promise((resolve, reject) => {
@@ -247,7 +248,12 @@ export async function uploadFileToMinio(
 
     xhr.addEventListener('load', () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
+        const versionId = xhr.getResponseHeader('x-amz-version-id')?.trim();
+        if (!versionId) {
+          reject(new Error('Upload failed: storage did not return an exact object version'));
+          return;
+        }
+        resolve({ versionId });
       } else {
         reject(new Error(`Upload failed: ${xhr.statusText}`));
       }

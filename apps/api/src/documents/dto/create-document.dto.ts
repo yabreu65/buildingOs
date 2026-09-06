@@ -15,6 +15,10 @@ export class DocumentUploadFileDto {
   objectKey!: string;
 
   @IsString()
+  @Length(1, 1024)
+  objectVersionId!: string;
+
+  @IsString()
   @Length(1, 255)
   originalName!: string;
 
