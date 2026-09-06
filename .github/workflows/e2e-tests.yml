@@ -92,6 +92,7 @@ jobs:
             --network host \
             -e MINIO_ROOT_USER="$S3_ACCESS_KEY" \
             -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
+            -e MINIO_API_CORS_ALLOW_ORIGIN="http://localhost:3000" \
             minio/minio:latest \
             server /data --address :9000 --console-address :9001
 
@@ -116,31 +117,13 @@ jobs:
             minio/mc:latest \
             -lc 'mc alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" && mc mb --ignore-existing "local/$S3_BUCKET" && mc version enable "local/$S3_BUCKET" && version_info="$(mc version info --json "local/$S3_BUCKET")" && printf "%s\\n" "$version_info" && case "$version_info" in *"Enabled"*) echo "MinIO versioning is enabled" ;; *) echo "MinIO versioning is not enabled" >&2; exit 1 ;; esac'
 
-          cors_file="$RUNNER_TEMP/minio-e2e-cors.xml"
-          cat > "$cors_file" <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <CORSConfiguration>
-            <CORSRule>
-              <AllowedOrigin>http://localhost:3000</AllowedOrigin>
-              <AllowedMethod>PUT</AllowedMethod>
-              <AllowedMethod>GET</AllowedMethod>
-              <AllowedMethod>HEAD</AllowedMethod>
-              <AllowedHeader>Content-Type</AllowedHeader>
-              <ExposeHeader>x-amz-version-id</ExposeHeader>
-              <MaxAgeSeconds>3600</MaxAgeSeconds>
-            </CORSRule>
-          </CORSConfiguration>
-          EOF
-
-          docker run --rm \
-            --network host \
-            --entrypoint /bin/sh \
-            -e S3_ACCESS_KEY="$S3_ACCESS_KEY" \
-            -e S3_SECRET_KEY="$S3_SECRET_KEY" \
-            -e S3_BUCKET="$S3_BUCKET" \
-            -v "$cors_file:/tmp/minio-e2e-cors.xml:ro" \
-            minio/mc:latest \
-            -lc 'mc alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" && mc cors set "local/$S3_BUCKET" /tmp/minio-e2e-cors.xml && cors_info="$(mc cors get "local/$S3_BUCKET")" && printf "%s\\n" "$cors_info" && printf "%s\\n" "$cors_info" | grep -Fq "<ExposeHeader>x-amz-version-id</ExposeHeader>" && echo "MinIO CORS exposes x-amz-version-id"'
+          cors_response="$(curl -sS -D - -o /dev/null \
+            -H "Origin: http://localhost:3000" \
+            "http://127.0.0.1:9000/$S3_BUCKET/")"
+          printf '%s\n' "$cors_response"
+          printf '%s\n' "$cors_response" | grep -Eiq '^access-control-allow-origin:[[:space:]]*http://localhost:3000[[:space:]]*$'
+          printf '%s\n' "$cors_response" | grep -Eiq '^access-control-expose-headers:.*x-amz-version-id'
+          echo "MinIO global CORS exposes x-amz-version-id to http://localhost:3000"
 
       - name: Setup environment
         run: |
