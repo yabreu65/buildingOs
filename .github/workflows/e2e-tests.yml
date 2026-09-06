@@ -122,7 +122,11 @@ jobs:
             "http://127.0.0.1:9000/$S3_BUCKET/")"
           printf '%s\n' "$cors_response"
           printf '%s\n' "$cors_response" | grep -Eiq '^access-control-allow-origin:[[:space:]]*http://localhost:3000[[:space:]]*$'
-          printf '%s\n' "$cors_response" | grep -Eiq '^access-control-expose-headers:.*x-amz-version-id'
+          expose_headers="$(printf '%s\n' "$cors_response" | awk 'tolower($0) ~ /^access-control-expose-headers[[:space:]]*:/ { sub(/^[^:]*:[[:space:]]*/, ""); print }')"
+          if ! printf '%s\n' "$expose_headers" | tr ',' '\n' | awk '{ gsub(/\r/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); token = tolower($0); if (token == "*" || token == "x-amz-version-id") found = 1 } END { exit(found ? 0 : 1) }'; then
+            echo "MinIO CORS does not expose x-amz-version-id or a standalone wildcard token" >&2
+            exit 1
+          fi
           echo "MinIO global CORS exposes x-amz-version-id to http://localhost:3000"
 
       - name: Setup environment
