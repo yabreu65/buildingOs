@@ -1,6 +1,7 @@
 import { ConfigService } from '../config/config.service';
 import { MinioService } from './minio.service';
 import * as Minio from 'minio';
+import { Readable } from 'node:stream';
 
 jest.mock('minio', () => ({
   Client: jest.fn(),
@@ -8,6 +9,7 @@ jest.mock('minio', () => ({
 
 interface ClientMock {
   readonly statObject: jest.Mock;
+  readonly getObject: jest.Mock;
   readonly putObject: jest.Mock;
   readonly presignedPutObject: jest.Mock;
   readonly presignedGetObject: jest.Mock;
@@ -18,6 +20,7 @@ const minioClientConstructor = Minio.Client as unknown as jest.Mock;
 function createClientMock(): ClientMock {
   return {
     statObject: jest.fn(),
+    getObject: jest.fn(),
     putObject: jest.fn(),
     presignedPutObject: jest.fn(),
     presignedGetObject: jest.fn(),
@@ -97,6 +100,106 @@ describe('MinioService', () => {
       'buildingos-staging',
       'tenant-a/proof.pdf',
       3600,
+    );
+  });
+
+  it('binds a presigned download URL to an exact object version when requested', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    publicClient.presignedGetObject.mockResolvedValue('https://download.example/proof.pdf');
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await service.presignDownload(
+      'buildingos-staging',
+      'tenant-a/proof.pdf',
+      3600,
+      'version-1',
+    );
+
+    expect(publicClient.presignedGetObject).toHaveBeenCalledWith(
+      'buildingos-staging',
+      'tenant-a/proof.pdf',
+      3600,
+      { versionId: 'version-1' },
+    );
+  });
+
+  it('passes an exact version id to stat and buffer reads when requested', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    const content = Buffer.from('%PDF-versioned');
+    internalClient.statObject.mockResolvedValue({
+      size: content.length,
+      versionId: 'version-1',
+    });
+    internalClient.getObject.mockResolvedValue(Readable.from([content]));
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await expect(service.statObject('buildingos-staging', 'tenant-a/proof.pdf', 'version-1'))
+      .resolves.toEqual({ size: content.length, versionId: 'version-1' });
+    await expect(service.getObjectBuffer('buildingos-staging', 'tenant-a/proof.pdf', 'version-1'))
+      .resolves.toEqual(content);
+
+    expect(internalClient.statObject).toHaveBeenCalledWith(
+      'buildingos-staging',
+      'tenant-a/proof.pdf',
+      { versionId: 'version-1' },
+    );
+    expect(internalClient.getObject).toHaveBeenCalledWith(
+      'buildingos-staging',
+      'tenant-a/proof.pdf',
+      { versionId: 'version-1' },
+    );
+  });
+
+  it('passes an exact version id to stream reads when requested', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    const stream = Readable.from([Buffer.from('%PDF-versioned')]);
+    internalClient.getObject.mockResolvedValue(stream);
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await expect(
+      service.getObjectStream('buildingos-staging', 'tenant-a/proof.pdf', 'version-1'),
+    ).resolves.toBe(stream);
+
+    expect(internalClient.getObject).toHaveBeenCalledWith(
+      'buildingos-staging',
+      'tenant-a/proof.pdf',
+      { versionId: 'version-1' },
+    );
+  });
+
+  it('keeps stream reads unversioned when no version id is provided', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    const stream = Readable.from([Buffer.from('%PDF-legacy')]);
+    internalClient.getObject.mockResolvedValue(stream);
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await expect(
+      service.getObjectStream('buildingos-staging', 'tenant-a/proof.pdf'),
+    ).resolves.toBe(stream);
+
+    expect(internalClient.getObject).toHaveBeenCalledWith(
+      'buildingos-staging',
+      'tenant-a/proof.pdf',
     );
   });
 

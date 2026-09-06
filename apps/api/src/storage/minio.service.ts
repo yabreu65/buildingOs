@@ -15,6 +15,7 @@ export interface MinioObjectStat {
   etag?: string;
   lastModified?: Date;
   metaData?: Record<string, string>;
+  versionId?: string | null;
 }
 
 export interface MinioUploadResult {
@@ -177,6 +178,7 @@ export class MinioService {
    * @param bucketName - Bucket name (or undefined to use default)
    * @param objectKey - Object path in bucket
    * @param expirySeconds - URL expiration time in seconds (default: 1 hour = 3600s)
+   * @param versionId - Optional exact object version to bind to the URL
    * @returns Presigned URL for GET request
    *
    * @example
@@ -188,13 +190,21 @@ export class MinioService {
     bucketName: string = this.bucket,
     objectKey: string,
     expirySeconds: number = 3600,
+    versionId?: string,
   ): Promise<string> {
     try {
-      const url = await this.presignClient.presignedGetObject(
-        bucketName,
-        objectKey,
-        expirySeconds,
-      );
+      const url = versionId
+        ? await this.presignClient.presignedGetObject(
+            bucketName,
+            objectKey,
+            expirySeconds,
+            { versionId },
+          )
+        : await this.presignClient.presignedGetObject(
+            bucketName,
+            objectKey,
+            expirySeconds,
+          );
       this.logger.debug(`Generated presigned GET URL for ${bucketName}/${objectKey}`);
       return url;
     } catch (error) {
@@ -215,9 +225,13 @@ export class MinioService {
   async statObject(
     bucketName: string = this.bucket,
     objectKey: string,
+    versionId?: string,
   ): Promise<MinioObjectStat> {
     try {
-      return await this.minioClient.statObject(bucketName, objectKey) as MinioObjectStat;
+      const stat = versionId
+        ? await this.minioClient.statObject(bucketName, objectKey, { versionId })
+        : await this.minioClient.statObject(bucketName, objectKey);
+      return stat as MinioObjectStat;
     } catch (error: unknown) {
       this.logger.error(
         `Failed to stat object: ${this.getErrorMessage(error)}`,
@@ -370,9 +384,12 @@ export class MinioService {
   async getObjectBuffer(
     bucketName: string = this.bucket,
     objectKey: string,
+    versionId?: string,
   ): Promise<Buffer> {
     try {
-      const stream = await this.minioClient.getObject(bucketName, objectKey);
+      const stream = versionId
+        ? await this.minioClient.getObject(bucketName, objectKey, { versionId })
+        : await this.minioClient.getObject(bucketName, objectKey);
       const chunks: Buffer[] = [];
 
       return await new Promise<Buffer>((resolve, reject) => {
@@ -407,9 +424,12 @@ export class MinioService {
   async getObjectStream(
     bucketName: string = this.bucket,
     objectKey: string,
+    versionId?: string,
   ): Promise<Readable> {
     try {
-      return await this.minioClient.getObject(bucketName, objectKey);
+      return versionId
+        ? await this.minioClient.getObject(bucketName, objectKey, { versionId })
+        : await this.minioClient.getObject(bucketName, objectKey);
     } catch (error: unknown) {
       this.logger.error(
         `Failed to open object stream: ${this.getErrorMessage(error)}`,

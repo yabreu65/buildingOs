@@ -30,15 +30,27 @@ interface ReceiptStorage {
   getDefaultBucket(): string;
   uploadBuffer(bucket: string, objectKey: string, content: Buffer, contentType: string): Promise<void>;
   uploadBufferIfAbsent(bucket: string, objectKey: string, content: Buffer, contentType: string): Promise<boolean>;
+  uploadBufferIfAbsentWithMetadata(
+    bucket: string,
+    objectKey: string,
+    content: Buffer,
+    contentType: string,
+  ): Promise<{ etag: string; versionId: string | null } | null>;
   objectExists(bucket: string, objectKey: string): Promise<boolean>;
   statObject(bucket: string, objectKey: string): Promise<{
     size: number;
     etag?: string;
     lastModified?: Date;
     metaData?: Record<string, string>;
+    versionId?: string | null;
   }>;
-  getObjectBuffer(bucket: string, objectKey: string): Promise<Buffer>;
-  presignDownload(bucket: string, objectKey: string, expirySeconds: number): Promise<string>;
+  getObjectBuffer(bucket: string, objectKey: string, versionId?: string): Promise<Buffer>;
+  presignDownload(
+    bucket: string,
+    objectKey: string,
+    expirySeconds: number,
+    versionId?: string,
+  ): Promise<string>;
   deleteObject(bucket: string, objectKey: string): Promise<void>;
   listObjects(bucket: string, prefix: string): Promise<string[]>;
 }
@@ -46,6 +58,7 @@ interface ReceiptStorage {
 class MinioReceiptStorage implements ReceiptStorage {
   private readonly client: Minio.Client;
   readonly putCalls: string[] = [];
+  readonly versionedGetCalls: string[] = [];
 
   constructor(
     private readonly bucket: string,
@@ -126,36 +139,56 @@ class MinioReceiptStorage implements ReceiptStorage {
     content: Buffer,
     contentType: string,
   ): Promise<boolean> {
+    return (await this.uploadBufferIfAbsentWithMetadata(
+      bucket,
+      objectKey,
+      content,
+      contentType,
+    )) !== null;
+  }
+
+  async uploadBufferIfAbsentWithMetadata(
+    bucket: string,
+    objectKey: string,
+    content: Buffer,
+    contentType: string,
+  ): Promise<{ etag: string; versionId: string | null } | null> {
     this.putCalls.push(`${bucket}/${objectKey}`);
     try {
-      await this.client.putObject(
+      const result = await this.client.putObject(
         bucket,
         objectKey,
         Readable.from([content]),
         content.length,
         { 'Content-Type': contentType, 'If-None-Match': '*' },
       );
-      return true;
+      return { etag: result.etag, versionId: result.versionId };
     } catch (error: unknown) {
       const errorLike = error as { code?: string; statusCode?: number };
       if (errorLike.code === 'PreconditionFailed' || errorLike.statusCode === 412) {
-        return false;
+        return null;
       }
       throw error;
     }
   }
 
-  async statObject(bucket: string, objectKey: string): Promise<{
+  async statObject(bucket: string, objectKey: string, versionId?: string): Promise<{
     size: number;
     etag?: string;
     lastModified?: Date;
     metaData?: Record<string, string>;
+    versionId?: string | null;
   }> {
-    return this.client.statObject(bucket, objectKey);
+    return versionId
+      ? this.client.statObject(bucket, objectKey, { versionId })
+      : this.client.statObject(bucket, objectKey);
   }
 
-  async getObjectBuffer(bucket: string, objectKey: string): Promise<Buffer> {
-    const stream = await this.client.getObject(bucket, objectKey);
+  async getObjectBuffer(bucket: string, objectKey: string, versionId?: string): Promise<Buffer> {
+    if (versionId) this.versionedGetCalls.push(`${bucket}/${objectKey}:${versionId}`);
+    const stream = versionId
+      ? await this.client.getObject(bucket, objectKey, { versionId })
+      : await this.client.getObject(bucket, objectKey);
     const chunks: Buffer[] = [];
     return new Promise<Buffer>((resolve, reject) => {
       stream.on('data', (chunk: Buffer | string) => {
@@ -170,8 +203,11 @@ class MinioReceiptStorage implements ReceiptStorage {
     bucket: string,
     objectKey: string,
     expirySeconds: number,
+    versionId?: string,
   ): Promise<string> {
-    return this.client.presignedGetObject(bucket, objectKey, expirySeconds);
+    return versionId
+      ? this.client.presignedGetObject(bucket, objectKey, expirySeconds, { versionId })
+      : this.client.presignedGetObject(bucket, objectKey, expirySeconds);
   }
 
   async deleteObject(bucket: string, objectKey: string): Promise<void> {
@@ -581,6 +617,9 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
       storage.getDefaultBucket(),
       objectKey,
     );
+    const firstStat = await storage.statObject(storage.getDefaultBucket(), objectKey);
+    expect(firstStat.versionId).toBeDefined();
+    const versionsBeforeRetry = await storage.countObjectVersions(objectKey);
 
     const freshStorage = new MinioReceiptStorage(
       storage.getDefaultBucket(),
@@ -638,6 +677,11 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
       objectKey,
     );
     expect(recoveredPdf).toEqual(firstPdf);
+    expect(files[0].objectVersionId).toBe(firstStat.versionId);
+    expect(freshStorage.versionedGetCalls).toContain(
+      `${storage.getDefaultBucket()}/${objectKey}:${firstStat.versionId}`,
+    );
+    expect(await freshStorage.countObjectVersions(objectKey)).toBe(versionsBeforeRetry);
   }, 30000);
 
   it('adopts a legacy orphan concurrently without creating a new MinIO version', async () => {
