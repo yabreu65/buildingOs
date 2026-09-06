@@ -103,6 +103,31 @@ describe('MinioService', () => {
     );
   });
 
+  it('binds a presigned download URL to an exact object version when requested', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    publicClient.presignedGetObject.mockResolvedValue('https://download.example/proof.pdf');
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await service.presignDownload(
+      'buildingos-staging',
+      'tenant-a/proof.pdf',
+      3600,
+      'version-1',
+    );
+
+    expect(publicClient.presignedGetObject).toHaveBeenCalledWith(
+      'buildingos-staging',
+      'tenant-a/proof.pdf',
+      3600,
+      { versionId: 'version-1' },
+    );
+  });
+
   it('passes an exact version id to stat and buffer reads when requested', async () => {
     const internalClient = createClientMock();
     const publicClient = createClientMock();

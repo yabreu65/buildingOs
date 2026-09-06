@@ -178,6 +178,7 @@ export class MinioService {
    * @param bucketName - Bucket name (or undefined to use default)
    * @param objectKey - Object path in bucket
    * @param expirySeconds - URL expiration time in seconds (default: 1 hour = 3600s)
+   * @param versionId - Optional exact object version to bind to the URL
    * @returns Presigned URL for GET request
    *
    * @example
@@ -189,13 +190,21 @@ export class MinioService {
     bucketName: string = this.bucket,
     objectKey: string,
     expirySeconds: number = 3600,
+    versionId?: string,
   ): Promise<string> {
     try {
-      const url = await this.presignClient.presignedGetObject(
-        bucketName,
-        objectKey,
-        expirySeconds,
-      );
+      const url = versionId
+        ? await this.presignClient.presignedGetObject(
+            bucketName,
+            objectKey,
+            expirySeconds,
+            { versionId },
+          )
+        : await this.presignClient.presignedGetObject(
+            bucketName,
+            objectKey,
+            expirySeconds,
+          );
       this.logger.debug(`Generated presigned GET URL for ${bucketName}/${objectKey}`);
       return url;
     } catch (error) {

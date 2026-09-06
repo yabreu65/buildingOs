@@ -135,6 +135,7 @@ type ReceiptPreparation =
 
 interface FinalizedReceipt extends PreparedReceiptGeneration {
   documentId: string;
+  objectVersionId?: string | null;
   wasGenerated: boolean;
   shouldNotify: boolean;
 }
@@ -295,10 +296,10 @@ export class PaymentReceiptService {
           documentId: finalizedReceipt.documentId,
           fileKey: finalizedReceipt.fileKey,
           bucket: finalizedReceipt.bucket,
-          url: await this.minio.presignDownload(
+          url: await this.presignReceiptDownload(
             finalizedReceipt.bucket,
             finalizedReceipt.fileKey,
-            3600,
+            finalizedReceipt.objectVersionId,
           ),
         };
       }
@@ -313,7 +314,11 @@ export class PaymentReceiptService {
             `Legacy receipt ${preparedReceipt.receiptNumber} has no trustworthy snapshot or complete artifact`,
           );
         }
-        const url = await this.minio.presignDownload(preparedReceipt.bucket, preparedReceipt.fileKey, 3600);
+        const url = await this.presignReceiptDownload(
+          preparedReceipt.bucket,
+          preparedReceipt.fileKey,
+          preparedReceipt.existingFile.objectVersionId,
+        );
 
         return {
           receiptNumber: preparedReceipt.receiptNumber,
@@ -357,7 +362,11 @@ export class PaymentReceiptService {
         await heartbeat.stop();
       }
 
-      const url = await this.minio.presignDownload(finalizedReceipt.bucket, finalizedReceipt.fileKey, 3600);
+      const url = await this.presignReceiptDownload(
+        finalizedReceipt.bucket,
+        finalizedReceipt.fileKey,
+        finalizedReceipt.objectVersionId,
+      );
 
       if (finalizedReceipt.shouldNotify) {
         // Receipt persistence is authoritative; delivery remains best-effort outside the transaction.
@@ -1132,6 +1141,7 @@ export class PaymentReceiptService {
         ...preparedReceipt,
         payment: currentPayment,
         documentId: document.id,
+        objectVersionId: storageMetadata.versionId ?? null,
         wasGenerated: false,
         shouldNotify: false,
       };
@@ -1337,6 +1347,8 @@ export class PaymentReceiptService {
         payment: currentPayment,
         snapshot,
         documentId,
+        objectVersionId:
+          storageMetadata.versionId ?? existingDocument?.file.objectVersionId ?? null,
         wasGenerated: !auditExists,
       };
     });
@@ -1812,10 +1824,10 @@ export class PaymentReceiptService {
     }
     this.getVerifiedReceiptSnapshot(payment);
 
-    const url = await this.minio.presignDownload(
+    const url = await this.presignReceiptDownload(
       document.file.bucket,
       document.file.objectKey,
-      3600,
+      document.file.objectVersionId,
     );
     return {
       receiptNumber: payment.receiptNumber,
@@ -1824,6 +1836,21 @@ export class PaymentReceiptService {
       bucket: document.file.bucket,
       url,
     };
+  }
+
+  private async presignReceiptDownload(
+    bucket: string,
+    objectKey: string,
+    objectVersionId?: string | null,
+  ): Promise<string> {
+    return objectVersionId
+      ? this.minio.presignDownload(
+          bucket,
+          objectKey,
+          3600,
+          objectVersionId,
+        )
+      : this.minio.presignDownload(bucket, objectKey, 3600);
   }
 
   private hashJsonValue(value: unknown): string {

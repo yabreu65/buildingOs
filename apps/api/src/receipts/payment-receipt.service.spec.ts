@@ -492,6 +492,7 @@ describe('PaymentReceiptService', () => {
       DEFAULT_BUCKET,
       expect.stringContaining('/receipts/R-'),
       3600,
+      'receipt-version-1',
     );
     expect(result?.fileKey).toContain('/receipts/R-');
   });
@@ -1246,6 +1247,12 @@ describe('PaymentReceiptService', () => {
     expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ objectVersionId: 'legacy-version-1' }),
     }));
+    expect(minio.presignDownload).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      canonicalReceiptKey(),
+      3600,
+      'legacy-version-1',
+    );
   });
 
   it("atomically takes over an expired orphan recovery claim", async () => {
@@ -1278,6 +1285,11 @@ describe('PaymentReceiptService', () => {
     expect(defaultPaymentState.receiptGeneratedAt).toEqual(lastModified);
     expect(prisma.file.create).toHaveBeenCalledTimes(1);
     expect(prisma.document.create).toHaveBeenCalledTimes(1);
+    expect(minio.presignDownload).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      canonicalReceiptKey(),
+      3600,
+    );
     expect(prisma.paymentAuditLog.create).toHaveBeenCalledTimes(1);
     expect(prisma.payment.updateMany).toHaveBeenNthCalledWith(
       1,
@@ -1570,16 +1582,37 @@ describe('PaymentReceiptService', () => {
     configureExistingReadyReceipt({}, {
       size: validPdf.length,
       checksum,
+      objectVersionId: 'receipt-version-1',
     });
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: validPdf.length });
-    minio.getObjectBuffer.mockResolvedValue(validPdf);
+    minio.statObject.mockImplementation(async (_bucket, _key, versionId) => {
+      expect(versionId).toBe('receipt-version-1');
+      return { size: validPdf.length, versionId: 'receipt-version-1' };
+    });
+    minio.getObjectBuffer.mockImplementation(async (_bucket, _key, versionId) => {
+      expect(versionId).toBe('receipt-version-1');
+      return validPdf;
+    });
 
     const first = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
     const second = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
 
     expect(first).toEqual(second);
     expect(minio.presignDownload).toHaveBeenCalledTimes(2);
+    expect(minio.presignDownload).toHaveBeenNthCalledWith(
+      1,
+      DEFAULT_BUCKET,
+      canonicalReceiptKey(),
+      3600,
+      'receipt-version-1',
+    );
+    expect(minio.presignDownload).toHaveBeenNthCalledWith(
+      2,
+      DEFAULT_BUCKET,
+      canonicalReceiptKey(),
+      3600,
+      'receipt-version-1',
+    );
     expect(minio.uploadBuffer).not.toHaveBeenCalled();
     expect(prisma.file.updateMany).not.toHaveBeenCalled();
     expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
@@ -2001,6 +2034,11 @@ describe('PaymentReceiptService', () => {
     expect(prisma.file.create).toHaveBeenCalledTimes(1);
     expect(prisma.file.create.mock.calls[0][0].data.objectVersionId).toBeUndefined();
     expect(prisma.document.create).toHaveBeenCalledTimes(1);
+    expect(minio.presignDownload).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      canonicalReceiptKey(),
+      3600,
+    );
   });
 
   it("recovers after storage succeeds but DB finalization fails, reusing the number and object", async () => {
@@ -2091,6 +2129,12 @@ describe('PaymentReceiptService', () => {
     expect(minio.getObjectBuffer).toHaveBeenCalledWith(
       DEFAULT_BUCKET,
       expect.stringContaining('/receipts/R-'),
+      'receipt-version-1',
+    );
+    expect(minio.presignDownload).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      expect.stringContaining('/receipts/R-'),
+      3600,
       'receipt-version-1',
     );
   });
@@ -2271,11 +2315,18 @@ describe('PaymentReceiptService', () => {
       receiptDocument({
         size: validPdf.length,
         checksum: createHash('sha256').update(validPdf).digest('hex'),
+        objectVersionId: 'receipt-version-1',
       }) as never,
     );
     minio.objectExists.mockResolvedValue(true);
-    minio.statObject.mockResolvedValue({ size: validPdf.length });
-    minio.getObjectBuffer.mockResolvedValue(validPdf);
+    minio.statObject.mockImplementation(async (_bucket, _key, versionId) => {
+      expect(versionId).toBe('receipt-version-1');
+      return { size: validPdf.length, versionId: 'receipt-version-1' };
+    });
+    minio.getObjectBuffer.mockImplementation(async (_bucket, _key, versionId) => {
+      expect(versionId).toBe('receipt-version-1');
+      return validPdf;
+    });
 
     const waitForReceiptGeneration = Reflect.get(
       service,
@@ -2295,6 +2346,12 @@ describe('PaymentReceiptService', () => {
     );
     expect(prisma.payment.updateMany).not.toHaveBeenCalled();
     expect(prisma.payment.update).not.toHaveBeenCalled();
+    expect(minio.presignDownload).toHaveBeenCalledWith(
+      DEFAULT_BUCKET,
+      canonicalReceiptKey(),
+      3600,
+      'receipt-version-1',
+    );
   });
 
   it('validates an existing object through the VersionId returned by stat', async () => {

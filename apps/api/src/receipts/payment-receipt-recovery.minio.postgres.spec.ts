@@ -45,7 +45,12 @@ interface ReceiptStorage {
     versionId?: string | null;
   }>;
   getObjectBuffer(bucket: string, objectKey: string, versionId?: string): Promise<Buffer>;
-  presignDownload(bucket: string, objectKey: string, expirySeconds: number): Promise<string>;
+  presignDownload(
+    bucket: string,
+    objectKey: string,
+    expirySeconds: number,
+    versionId?: string,
+  ): Promise<string>;
   deleteObject(bucket: string, objectKey: string): Promise<void>;
   listObjects(bucket: string, prefix: string): Promise<string[]>;
 }
@@ -198,8 +203,11 @@ class MinioReceiptStorage implements ReceiptStorage {
     bucket: string,
     objectKey: string,
     expirySeconds: number,
+    versionId?: string,
   ): Promise<string> {
-    return this.client.presignedGetObject(bucket, objectKey, expirySeconds);
+    return versionId
+      ? this.client.presignedGetObject(bucket, objectKey, expirySeconds, { versionId })
+      : this.client.presignedGetObject(bucket, objectKey, expirySeconds);
   }
 
   async deleteObject(bucket: string, objectKey: string): Promise<void> {
