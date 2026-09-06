@@ -48,14 +48,29 @@ class LocalReceiptStorage {
     content: Buffer,
     contentType = 'application/pdf',
   ): Promise<boolean> {
+    return (await this.uploadBufferIfAbsentWithMetadata(
+      bucket,
+      objectKey,
+      content,
+      contentType,
+    )) !== null;
+  }
+
+  async uploadBufferIfAbsentWithMetadata(
+    bucket: string,
+    objectKey: string,
+    content: Buffer,
+    contentType = 'application/pdf',
+  ): Promise<{ etag: string; versionId: string } | null> {
     if (this.delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, this.delayMs));
     }
     const key = `${bucket}/${objectKey}`;
-    if (this.objects.has(key)) return false;
+    if (this.objects.has(key)) return null;
     this.uploadCalls.push(key);
-    this.objects.set(key, this.objectMetadata(content, contentType));
-    return true;
+    const metadata = this.objectMetadata(content, contentType);
+    this.objects.set(key, metadata);
+    return { etag: metadata.etag, versionId: 'local-test-version' };
   }
 
   private objectMetadata(content: Buffer, contentType: string) {

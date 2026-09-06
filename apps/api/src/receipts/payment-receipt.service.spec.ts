@@ -80,6 +80,7 @@ describe('PaymentReceiptService', () => {
     getDefaultBucket: jest.fn(() => DEFAULT_BUCKET),
     uploadBuffer: jest.fn(),
     uploadBufferIfAbsent: jest.fn(),
+    uploadBufferIfAbsentWithMetadata: jest.fn(),
     objectExists: jest.fn(),
     statObject: jest.fn(),
     getObjectBuffer: jest.fn(),
@@ -224,6 +225,10 @@ describe('PaymentReceiptService', () => {
     minio.uploadBufferIfAbsent.mockImplementation(async (...args: unknown[]) => {
       await minio.uploadBuffer(...args);
       return true;
+    });
+    minio.uploadBufferIfAbsentWithMetadata.mockImplementation(async (...args: unknown[]) => {
+      await minio.uploadBuffer(...args);
+      return { etag: 'receipt-etag', versionId: 'receipt-version-1' };
     });
     minio.presignDownload.mockImplementation(async () => {
       expect(insideTransaction).toBe(false);
@@ -410,7 +415,7 @@ describe('PaymentReceiptService', () => {
     const uploadedBuffer = minio.uploadBuffer.mock.calls[0][2] as Buffer;
     const tmpReceiptPath = '/tmp/buildingos-payment-receipt-test.pdf';
 
-    expect(minio.uploadBuffer).toHaveBeenCalledWith(
+    expect(minio.uploadBufferIfAbsentWithMetadata).toHaveBeenCalledWith(
       DEFAULT_BUCKET,
       expect.stringContaining('/receipts/R-'),
       expect.any(Buffer),
@@ -447,6 +452,7 @@ describe('PaymentReceiptService', () => {
      expect(prisma.file.create).toHaveBeenCalledWith(expect.objectContaining({
        data: expect.objectContaining({
          bucket: DEFAULT_BUCKET,
+         objectVersionId: 'receipt-version-1',
          originalName: expect.stringMatching(/\.pdf$/),
          mimeType: 'application/pdf',
          size: uploadedBuffer.length,
@@ -478,6 +484,18 @@ describe('PaymentReceiptService', () => {
       3600,
     );
     expect(result?.fileKey).toContain('/receipts/R-');
+  });
+
+  it('fails closed before creating File when the provider omits VersionId', async () => {
+    minio.uploadBufferIfAbsentWithMetadata.mockResolvedValueOnce({
+      etag: 'etag-without-version',
+      versionId: null,
+    });
+
+    await expect(
+      service.ensureReceiptForPayment('tenant-1', 'payment-1'),
+    ).rejects.toThrow('did not return a VersionId');
+    expect(prisma.file.create).not.toHaveBeenCalled();
   });
 
   it('reuses the reserved receipt number after an upload failure', async () => {
@@ -1018,7 +1036,7 @@ describe('PaymentReceiptService', () => {
       },
     });
     expect(minio.presignDownload).not.toHaveBeenCalled();
-    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsentWithMetadata).not.toHaveBeenCalled();
     expect(minio.uploadBufferIfAbsent).not.toHaveBeenCalled();
     expect(prisma.file.create).not.toHaveBeenCalled();
   });
@@ -1590,7 +1608,7 @@ describe('PaymentReceiptService', () => {
     expect(prisma.file.create).not.toHaveBeenCalled();
     expect(prisma.document.create).not.toHaveBeenCalled();
     expect(prisma.paymentAuditLog.create).not.toHaveBeenCalled();
-    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsentWithMetadata).not.toHaveBeenCalled();
   });
 
   it('fails closed when a READY snapshot-backed receipt lacks its issuance timestamp', async () => {
@@ -1769,6 +1787,7 @@ describe('PaymentReceiptService', () => {
       mimeType: 'application/octet-stream',
       size: 1,
       checksum: 'stale-checksum',
+      objectVersionId: 'receipt-version-existing',
     });
     minio.objectExists.mockResolvedValue(true);
     minio.statObject.mockResolvedValue({ size: canonicalPdf.length });
@@ -1785,6 +1804,73 @@ describe('PaymentReceiptService', () => {
         mimeType: 'application/pdf',
         size: canonicalPdf.length,
         checksum: createHash('sha256').update(canonicalPdf).digest('hex'),
+      },
+    });
+    expect(prisma.file.updateMany.mock.calls[0][0].data.objectVersionId).toBeUndefined();
+  });
+
+  it('persists the exact VersionId when reconciling an existing File after creating its missing object', async () => {
+    const payment = readyReceiptPayment({ receiptStatus: ReceiptStatus.PENDING });
+    const generateReceiptPDF = Reflect.get(service, 'generateReceiptPDF') as (
+      payment: unknown,
+      receiptNumber: string,
+      approvedByUserName: string,
+      tenantDisplayName: string,
+    ) => Promise<Buffer>;
+    const canonicalPdf = await generateReceiptPDF.call(
+      service,
+      payment,
+      'R-COMPLE-2026-000001',
+      'Admin',
+      'Complejo Horizonte',
+    );
+    const snapshot = Reflect.get(service, 'createReceiptSnapshot') as (
+      payment: unknown,
+      receiptNumber: string,
+      tenantDisplayName: string,
+      approvedByUserName: string,
+      createdAt: Date,
+    ) => unknown;
+    const hashSnapshot = Reflect.get(service, 'hashReceiptSnapshot') as (
+      snapshotValue: unknown,
+    ) => string;
+    const receiptSnapshot = snapshot.call(
+      service,
+      payment,
+      'R-COMPLE-2026-000001',
+      'Complejo Horizonte',
+      'Admin',
+      new Date('2026-08-31T00:00:00.000Z'),
+    );
+    configureExistingReadyReceipt({
+      receiptStatus: ReceiptStatus.PENDING,
+      receiptSnapshot,
+      receiptSnapshotVersion: 'PAYMENT_RECEIPT_V1',
+      receiptSnapshotHash: hashSnapshot.call(service, receiptSnapshot),
+      receiptSnapshotCreatedAt: new Date('2026-08-31T00:00:00.000Z'),
+    }, {
+      objectVersionId: 'receipt-version-old',
+    });
+    minio.objectExists.mockResolvedValue(false);
+    minio.uploadBufferIfAbsentWithMetadata.mockResolvedValueOnce({
+      etag: 'receipt-etag-new',
+      versionId: 'receipt-version-new',
+    });
+    minio.statObject.mockResolvedValue({ size: canonicalPdf.length });
+    minio.getObjectBuffer.mockResolvedValue(canonicalPdf);
+
+    const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+
+    expect(result?.receiptNumber).toBe('R-COMPLE-2026-000001');
+    expect(prisma.file.updateMany).toHaveBeenCalledWith({
+      where: { id: 'file-1', tenantId: 'tenant-1' },
+      data: {
+        bucket: DEFAULT_BUCKET,
+        objectKey: canonicalReceiptKey(),
+        mimeType: 'application/pdf',
+        size: canonicalPdf.length,
+        checksum: createHash('sha256').update(canonicalPdf).digest('hex'),
+        objectVersionId: 'receipt-version-new',
       },
     });
   });
@@ -1859,8 +1945,9 @@ describe('PaymentReceiptService', () => {
     );
 
     expect(result?.receiptNumber).toBe("R-COMPLE-2026-000001");
-    expect(minio.uploadBuffer).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsentWithMetadata).not.toHaveBeenCalled();
     expect(prisma.file.create).toHaveBeenCalledTimes(1);
+    expect(prisma.file.create.mock.calls[0][0].data.objectVersionId).toBeUndefined();
     expect(prisma.document.create).toHaveBeenCalledTimes(1);
   });
 
@@ -2141,12 +2228,9 @@ describe('PaymentReceiptService', () => {
     expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
-  it('validates the winner after a conditional canonical object-create race', async () => {
+  it('fails closed when a conditional canonical object-create race returns no identity', async () => {
     const pdf = Buffer.from('%PDF-race-winner');
-    minio.objectExists.mockResolvedValueOnce(false);
-    minio.uploadBufferIfAbsent.mockResolvedValueOnce(false);
-    minio.statObject.mockResolvedValueOnce({ size: pdf.length });
-    minio.getObjectBuffer.mockResolvedValueOnce(pdf);
+    minio.uploadBufferIfAbsentWithMetadata.mockResolvedValueOnce(null);
     const ensureStorage = Reflect.get(service, 'ensureReceiptStorageObject') as (
       bucket: string,
       fileKey: string,
@@ -2155,17 +2239,13 @@ describe('PaymentReceiptService', () => {
 
     await expect(
       ensureStorage.call(service, DEFAULT_BUCKET, 'tenant-1/race.pdf', pdf),
-    ).resolves.toEqual(expect.objectContaining({
-      objectKey: 'tenant-1/race.pdf',
-      size: pdf.length,
-    }));
-    expect(minio.uploadBufferIfAbsent).toHaveBeenCalledWith(
+    ).rejects.toThrow('already exists without a VersionId claim');
+    expect(minio.uploadBufferIfAbsentWithMetadata).toHaveBeenCalledWith(
       DEFAULT_BUCKET,
       'tenant-1/race.pdf',
       pdf,
       'application/pdf',
     );
-    expect(minio.uploadBuffer).not.toHaveBeenCalled();
   });
 
   it('marks the heartbeat lost when the database no longer recognizes its lease', async () => {

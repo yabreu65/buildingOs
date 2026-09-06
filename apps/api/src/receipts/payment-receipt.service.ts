@@ -156,6 +156,8 @@ interface ReceiptStorageMetadata {
   readonly size: number;
   readonly checksum: string;
   readonly etag?: string;
+  readonly versionId?: string;
+  readonly createdByCurrentProcess: boolean;
   readonly lastModified?: Date;
 }
 
@@ -1227,6 +1229,11 @@ export class PaymentReceiptService {
           storageMetadata,
         );
       } else {
+        if (storageMetadata.createdByCurrentProcess && !storageMetadata.versionId) {
+          throw new ReceiptConsistencyError(
+            `Receipt storage object has no provider VersionId for ${this.bucket}/${fileKey}`,
+          );
+        }
         const existingFile = await tx.file.findFirst({
           where: {
             tenantId: currentPayment.tenantId,
@@ -1245,6 +1252,9 @@ export class PaymentReceiptService {
             tenantId: currentPayment.tenantId,
             bucket: this.bucket,
             objectKey: fileKey,
+            ...(storageMetadata.versionId
+              ? { objectVersionId: storageMetadata.versionId }
+              : {}),
             originalName: `receipt_${preparedReceipt.receiptNumber}.pdf`,
             mimeType: RECEIPT_MIME_TYPE,
             size: storageMetadata.size,
@@ -1977,6 +1987,7 @@ export class PaymentReceiptService {
       size: content.length,
       checksum: this.sha256(content),
       etag: afterRead.etag,
+      createdByCurrentProcess: false,
       lastModified: afterRead.lastModified,
     };
   }
@@ -1990,15 +2001,29 @@ export class PaymentReceiptService {
       throw new Error(`Generated receipt PDF exceeds the supported storage contract`);
     }
 
-    // Conditional creation prevents a racing worker from replacing a
-    // canonical receipt object after it has been written.
+    let versionId: string | undefined;
+    let createdByCurrentProcess = false;
     if (!(await this.minio.objectExists(bucket, fileKey))) {
-      await this.minio.uploadBufferIfAbsent(
+      // Conditional creation prevents a racing worker from replacing a
+      // canonical receipt object after it has been written.
+      const uploadResult = await this.minio.uploadBufferIfAbsentWithMetadata(
         bucket,
         fileKey,
         pdfContent,
         RECEIPT_MIME_TYPE,
       );
+      if (!uploadResult) {
+        throw new ReceiptConsistencyError(
+          `Receipt storage object already exists without a VersionId claim for ${bucket}/${fileKey}`,
+        );
+      }
+      if (!uploadResult.versionId) {
+        throw new ReceiptConsistencyError(
+          `Receipt storage provider did not return a VersionId for ${bucket}/${fileKey}`,
+        );
+      }
+      versionId = uploadResult.versionId;
+      createdByCurrentProcess = true;
     }
     const stat = await this.minio.statObject(bucket, fileKey);
     if (!this.isValidReceiptObjectStat(stat, pdfContent.length)) {
@@ -2022,6 +2047,8 @@ export class PaymentReceiptService {
       mimeType: RECEIPT_MIME_TYPE,
       size: storedContent.length,
       checksum: this.sha256(storedContent),
+      versionId,
+      createdByCurrentProcess,
     };
 
   }
@@ -2057,6 +2084,9 @@ export class PaymentReceiptService {
         mimeType: metadata.mimeType,
         size: metadata.size,
         checksum: metadata.checksum,
+        ...(metadata.createdByCurrentProcess && metadata.versionId
+          ? { objectVersionId: metadata.versionId }
+          : {}),
       },
     });
     if (result.count !== 1) {

@@ -30,6 +30,12 @@ interface ReceiptStorage {
   getDefaultBucket(): string;
   uploadBuffer(bucket: string, objectKey: string, content: Buffer, contentType: string): Promise<void>;
   uploadBufferIfAbsent(bucket: string, objectKey: string, content: Buffer, contentType: string): Promise<boolean>;
+  uploadBufferIfAbsentWithMetadata(
+    bucket: string,
+    objectKey: string,
+    content: Buffer,
+    contentType: string,
+  ): Promise<{ etag: string; versionId: string | null } | null>;
   objectExists(bucket: string, objectKey: string): Promise<boolean>;
   statObject(bucket: string, objectKey: string): Promise<{
     size: number;
@@ -126,20 +132,34 @@ class MinioReceiptStorage implements ReceiptStorage {
     content: Buffer,
     contentType: string,
   ): Promise<boolean> {
+    return (await this.uploadBufferIfAbsentWithMetadata(
+      bucket,
+      objectKey,
+      content,
+      contentType,
+    )) !== null;
+  }
+
+  async uploadBufferIfAbsentWithMetadata(
+    bucket: string,
+    objectKey: string,
+    content: Buffer,
+    contentType: string,
+  ): Promise<{ etag: string; versionId: string | null } | null> {
     this.putCalls.push(`${bucket}/${objectKey}`);
     try {
-      await this.client.putObject(
+      const result = await this.client.putObject(
         bucket,
         objectKey,
         Readable.from([content]),
         content.length,
         { 'Content-Type': contentType, 'If-None-Match': '*' },
       );
-      return true;
+      return { etag: result.etag, versionId: result.versionId };
     } catch (error: unknown) {
       const errorLike = error as { code?: string; statusCode?: number };
       if (errorLike.code === 'PreconditionFailed' || errorLike.statusCode === 412) {
-        return false;
+        return null;
       }
       throw error;
     }
