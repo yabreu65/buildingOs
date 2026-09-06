@@ -152,7 +152,7 @@ load_retry_predecessor_record() {
       previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"
       from_api_digest="$(read_deployment_record_value "$record" from_api_digest || true)"
       from_web_digest="$(read_deployment_record_value "$record" from_web_digest || true)"
-      [[ "$phase" == 'application-recreate' && "$migration_count" == '98' ]] \
+      [[ "$phase" == 'application-recreate' && ( "$migration_count" == '98' || "$migration_count" == '99' ) ]] \
         || fail 'Interrupted rollback record has an invalid recovery state'
       [[ "$from_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'Interrupted rollback record has an invalid source SHA'
       [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'Interrupted rollback record has an invalid predecessor SHA'
@@ -184,12 +184,12 @@ load_retry_predecessor_record() {
     fi
     if [[ "$status" == 'SUCCESS' ]]; then
       migration_count="$(read_deployment_record_value "$record" migration_count || true)"
-      if [[ "$migration_count" == '98' && "${record##*/}" == rollback-*.txt ]]; then
+      if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '98' || "$migration_count" == '99' ) ]]; then
         previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
         previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"
         previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"
         storage_transition='unknown'
-      elif [[ "$migration_count" == '98' || "$migration_count" == '97' ]]; then
+      elif [[ "$migration_count" == '99' || "$migration_count" == '98' || "$migration_count" == '97' ]]; then
         previous_sha="$(read_deployment_record_value "$record" target_sha || true)"
         previous_api_digest="$(read_deployment_record_value "$record" new_api_digest || true)"
         previous_web_digest="$(read_deployment_record_value "$record" new_web_digest || true)"
@@ -217,7 +217,7 @@ load_retry_predecessor_record() {
     phase="$(read_deployment_record_value "$record" phase || true)"
     migration_count="$(read_deployment_record_value "$record" migration_count || true)"
     [[ "$phase" == 'pre-migration' || "$phase" == 'migrations' || "$phase" == 'rollback-compatibility' || "$phase" == 'application-recreate' || "$phase" == 'observability' ]] || continue
-    [[ "$migration_count" == '98' || "$migration_count" == 'unknown' ]] || continue
+    [[ "$migration_count" == '99' || "$migration_count" == '98' || "$migration_count" == 'unknown' ]] || continue
     storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
     [[ -n "$storage_transition" ]] || storage_transition='unknown'
     if [[ "$record_target_sha" != "$TARGET_SHA" ]]; then
@@ -458,7 +458,7 @@ fi
 env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
   bash ./scripts/verify-production-migration-manifest.sh verify-db post
 MIGRATION_COUNT="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
-[[ "$MIGRATION_COUNT" == '98' ]] || fail "Final migration count is not exactly 98"
+[[ "$MIGRATION_COUNT" == '99' ]] || fail "Final migration count is not exactly 99"
 
 PHASE='rollback-compatibility'
 validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$TARGET_SHA"

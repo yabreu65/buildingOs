@@ -187,7 +187,7 @@ generate_receipt_for_context() {
     ROLLBACK_PROTECTED_DIR="$protected_dir" \
     ROLLBACK_EXPECTED_OWNER="$current_owner" \
     ROLLBACK_EXPECTED_GROUP="$current_group" \
-    bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 98' _ \
+    bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 99' _ \
     "$VALIDATOR" "$target_sha" "$previous_sha" "$api_digest" "$web_digest"
 }
 
@@ -388,7 +388,7 @@ expect_failure 'receipt generation rejects unvalidated compatibility' \
     ROLLBACK_PROTECTED_DIR="$protected_dir" \
     ROLLBACK_EXPECTED_OWNER="$current_owner" \
     ROLLBACK_EXPECTED_GROUP="$current_group" \
-    bash -c 'source "$1"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 98' _ \
+    bash -c 'source "$1"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 99' _ \
     "$VALIDATOR" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST"
 
 generated_receipt="$(env \
@@ -398,7 +398,7 @@ generated_receipt="$(env \
   ROLLBACK_EXPECTED_GROUP="$current_group" \
   PATH="$mock_bin:$PATH" \
   MOCK_COMPATIBILITY=UNSAFE \
-  bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4" >&2; generate_rollback_compatibility_receipt "$4" "$3" "$5" "$6" 98' _ \
+  bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4" >&2; generate_rollback_compatibility_receipt "$4" "$3" "$5" "$6" 99' _ \
   "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST")" \
   || fail_test 'receipt generation failed'
 [[ -f "$generated_receipt" ]] || fail_test 'receipt generation did not return a regular receipt path'
@@ -415,7 +415,7 @@ pass 'generates and immediately validates a safe rollback receipt'
 migration_tampered_original="$tmp_root/migration-tampered-original.receipt"
 migration_tampered_payload="$tmp_root/migration-tampered.receipt"
 cp "$generated_receipt" "$migration_tampered_original"
-awk '$0 == "migration_count=98" { print "migration_count=99"; next } { print }' \
+awk '$0 == "migration_count=99" { print "migration_count=98"; next } { print }' \
   "$generated_receipt" > "$migration_tampered_payload"
 chmod 600 "$migration_tampered_payload"
 mv "$migration_tampered_payload" "$generated_receipt"
@@ -430,7 +430,7 @@ reused_receipt="$(env \
   ROLLBACK_EXPECTED_GROUP="$current_group" \
   PATH="$mock_bin:$PATH" \
   MOCK_COMPATIBILITY=UNSAFE \
-  bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4" >&2; generate_rollback_compatibility_receipt "$4" "$3" "$5" "$6" 98' _ \
+  bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4" >&2; generate_rollback_compatibility_receipt "$4" "$3" "$5" "$6" 99' _ \
   "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST")" \
   || fail_test 'valid receipt reuse failed'
 [[ "$reused_receipt" == "$generated_receipt" ]] || fail_test 'receipt reuse returned a different path'
@@ -460,7 +460,7 @@ alternate_receipt="$(env \
   ROLLBACK_PROTECTED_DIR="$protected_dir" \
   ROLLBACK_EXPECTED_OWNER="$current_owner" \
   ROLLBACK_EXPECTED_GROUP="$current_group" \
-  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 98' _ \
+  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 99' _ \
   "$VALIDATOR" "$fixture_same_sha" "$alternate_previous_sha" "$API_DIGEST" "$WEB_DIGEST")" \
   || fail_test 'receipt generation with a different previous SHA failed'
 [[ "$alternate_receipt" != "$generated_receipt" ]] || fail_test 'receipt identity ignored the previous SHA'
@@ -473,7 +473,7 @@ digest_receipt="$(env \
   ROLLBACK_PROTECTED_DIR="$protected_dir" \
   ROLLBACK_EXPECTED_OWNER="$current_owner" \
   ROLLBACK_EXPECTED_GROUP="$current_group" \
-  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 98' _ \
+  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 99' _ \
   "$VALIDATOR" "$fixture_same_sha" "$fixture_base_sha" "$alternate_api_digest" "$WEB_DIGEST")" \
   || fail_test 'receipt generation with a different API digest failed'
 [[ "$digest_receipt" != "$generated_receipt" ]] || fail_test 'receipt identity ignored an image digest'
@@ -524,11 +524,11 @@ chmod 700 "$concurrent_dir"
 concurrent_output_a="$tmp_root/concurrent-a.out"
 concurrent_output_b="$tmp_root/concurrent-b.out"
 env TEST_MODE=1 ROLLBACK_PROTECTED_DIR="$concurrent_dir" ROLLBACK_EXPECTED_OWNER="$current_owner" ROLLBACK_EXPECTED_GROUP="$current_group" \
-  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 98' _ \
+  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 99' _ \
   "$VALIDATOR" "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$WEB_DIGEST" > "$concurrent_output_a" 2>&1 &
 concurrent_pid_a=$!
 env TEST_MODE=1 ROLLBACK_PROTECTED_DIR="$concurrent_dir" ROLLBACK_EXPECTED_OWNER="$current_owner" ROLLBACK_EXPECTED_GROUP="$current_group" \
-  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 98' _ \
+  bash -c 'source "$1"; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 99' _ \
   "$VALIDATOR" "$fixture_same_sha" "$fixture_base_sha" "$API_DIGEST" "$WEB_DIGEST" > "$concurrent_output_b" 2>&1 &
 concurrent_pid_b=$!
 concurrent_status_a=0
@@ -550,7 +550,7 @@ expect_failure 'rejects an existing receipt with mismatched immutable inputs' \
     ROLLBACK_PROTECTED_DIR="$protected_dir" \
     ROLLBACK_EXPECTED_OWNER="$current_owner" \
     ROLLBACK_EXPECTED_GROUP="$current_group" \
-    bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4" >&2; generate_rollback_compatibility_receipt "$4" "$4" "$5" "$6" 98' _ \
+    bash -c 'cd "$1"; source "$2"; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4" >&2; generate_rollback_compatibility_receipt "$4" "$4" "$5" "$6" 99' _ \
     "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_same_sha" "$API_DIGEST" "$WEB_DIGEST"
 
 printf '1..%d\n' "$tests_run"

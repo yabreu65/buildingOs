@@ -5,8 +5,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly DEPLOY_SCRIPT="$ROOT_DIR/scripts/deploy-production.sh"
 readonly ROLLBACK_SCRIPT="$ROOT_DIR/scripts/rollback-production.sh"
+readonly WORKFLOW="$ROOT_DIR/.github/workflows/deploy-production.yml"
 
 line_number() { awk -v pattern="$1" 'index($0, pattern) { print NR; exit }' "$2"; }
+line_number_after() { awk -v start="$1" -v pattern="$2" 'NR > start && index($0, pattern) { print NR; exit }' "$3"; }
 storage_guard_line="$(line_number 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")"
 target_tree_line="$(awk '$0 == "materialize_target_tree" { print NR; exit }' "$DEPLOY_SCRIPT")"
 target_compose_line="$(line_number 'TARGET_COMPOSE_FILE' "$DEPLOY_SCRIPT")"
@@ -43,6 +45,18 @@ rollback_record_line="$(line_number 'write_rollback_record IN_PROGRESS' "$ROLLBA
 [[ -n "$rollback_compose_line" && -n "$rollback_quiesce_line" && -n "$rollback_migration_line" && -n "$rollback_compatibility_line" ]]
 [[ -n "$rollback_restore_line" && -n "$rollback_recreate_started_line" && -n "$rollback_record_line" ]]
 [[ -n "$storage_guard_line" ]]
+
+rollback_success_line="$(line_number 'if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '\''98'\'' || "$migration_count" == '\''99'\'' ) ]]; then' "$DEPLOY_SCRIPT")"
+rollback_previous_sha_line="$(line_number_after "$rollback_success_line" 'previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"' "$DEPLOY_SCRIPT")"
+rollback_api_digest_line="$(line_number_after "$rollback_success_line" 'previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"' "$DEPLOY_SCRIPT")"
+rollback_web_digest_line="$(line_number_after "$rollback_success_line" 'previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"' "$DEPLOY_SCRIPT")"
+generic_success_line="$(line_number 'elif [[ "$migration_count" == '\''99'\'' || "$migration_count" == '\''98'\'' || "$migration_count" == '\''97'\'' ]]; then' "$DEPLOY_SCRIPT")"
+generic_reject_line="$(line_number_after "$generic_success_line" 'else' "$DEPLOY_SCRIPT")"
+generic_reject_continue_line="$(line_number_after "$generic_reject_line" 'continue' "$DEPLOY_SCRIPT")"
+[[ -n "$rollback_success_line" && -n "$rollback_previous_sha_line" && -n "$rollback_api_digest_line" && -n "$rollback_web_digest_line" ]]
+[[ -n "$generic_success_line" && -n "$generic_reject_line" && -n "$generic_reject_continue_line" ]]
+(( rollback_success_line < rollback_previous_sha_line && rollback_previous_sha_line < rollback_api_digest_line && rollback_api_digest_line < rollback_web_digest_line ))
+(( rollback_web_digest_line < generic_success_line && generic_success_line < generic_reject_line && generic_reject_line < generic_reject_continue_line ))
 [[ -n "$target_tree_line" && -n "$target_compose_line" ]]
 [[ -n "$api_revision_line" && -n "$web_revision_line" && -n "$revision_match_line" && -n "$previous_sha_line" ]]
 [[ "$(grep -F -c 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")" -eq 1 ]]
@@ -101,5 +115,16 @@ grep -F 'write_rollback_record SUCCESS' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'from_api_digest' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'RETRY_RECOVERY_ACTIVE=true' "$DEPLOY_SCRIPT" >/dev/null
 grep -F "storage_transition='unknown'" "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'Final migration count is not exactly 99' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '\''98'\'' || "$migration_count" == '\''99'\'' ) ]]; then' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'migration_count" == '\''99'\'' || "$migration_count" == '\''98'\'' || "$migration_count" == '\''97'\''' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'migration_count" == '\''99'\'' || "$migration_count" == '\''98'\'' || "$migration_count" == '\''unknown'\''' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'scripts/manifests/production-migrations-81-to-99.tsv' "$WORKFLOW" >/dev/null
+if grep -F 'scripts/manifests/production-migrations-81-to-98.tsv' "$WORKFLOW" >/dev/null; then
+  exit 1
+fi
 if grep -F 'incompatible_rows=' "$ROLLBACK_SCRIPT" >/dev/null; then exit 1; fi
 printf 'PASS: readonly env propagation and backup -> checkout -> build -> baseline -> pre -> migrate -> post -> compatibility -> receipt -> application recreation\n'

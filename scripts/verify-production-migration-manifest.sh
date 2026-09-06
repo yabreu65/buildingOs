@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
-readonly MANIFEST_FILE="${MANIFEST_FILE:-$SCRIPT_DIR/manifests/production-migrations-81-to-98.tsv}"
+readonly MANIFEST_FILE="${MANIFEST_FILE:-$SCRIPT_DIR/manifests/production-migrations-81-to-99.tsv}"
 readonly METADATA_EXCEPTION_FILE="${METADATA_EXCEPTION_FILE:-$SCRIPT_DIR/manifests/production-migration-metadata-exceptions.tsv}"
 readonly MIGRATIONS_DIR="${MIGRATIONS_DIR:-$REPO_ROOT/apps/api/prisma/migrations}"
 readonly POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-pawtech-postgres}"
@@ -18,9 +18,9 @@ readonly MANIFEST_VERSION=1
 readonly BASELINE_APPLIED=81
 readonly BASELINE_FAILED=0
 readonly PRE_DEPLOY_APPLIED=97
-readonly TARGET_APPLIED=98
+readonly TARGET_APPLIED=99
 readonly TARGET_FAILED=0
-readonly EXPECTED_PENDING=17
+readonly EXPECTED_PENDING=18
 readonly TAB=$'\t'
 readonly METADATA_EXCEPTION_VERSION=1
 
@@ -51,6 +51,7 @@ EXPECTED_NAMES=(
   '20260816000003_liquidation_income_offset_invariants'
   '20260816000004_legacy_income_application_provenance'
   '20260831000000_add_payment_receipt_issuance_snapshot'
+  '20260905000000_add_object_version_identity'
 )
 
 EXPECTED_CHECKSUMS=(
@@ -71,6 +72,7 @@ EXPECTED_CHECKSUMS=(
   '4ff212a16eda9e32db64b28b8eb56f29a2ee5ccb5fbb034af56a7b7cad8fc6d9'
   'f77a48381a9d32198b34f3ed92465190f8f6284ec80cc4916c304ec776905a2b'
   '36e92c7ae5a01b9193daec266183441ece906b123981154ad8d5a59f157468d0'
+  '3161d9f1ece049e80d4e8cd14f301a73f86605e4405059777b8ea1ab6b9324c5'
 )
 
 cleanup() {
