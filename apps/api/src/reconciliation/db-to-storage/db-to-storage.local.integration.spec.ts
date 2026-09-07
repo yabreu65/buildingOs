@@ -35,7 +35,9 @@ localDescribe('DB-to-storage local integration', () => {
     }
 
     await prisma.file.deleteMany({ where: { id: { in: createdFileIds } } });
-    await prisma.importJob.deleteMany({ where: { id: { in: createdImportJobIds } } });
+    await prisma.importJob.deleteMany({
+      where: { id: { in: createdImportJobIds } },
+    });
 
     for (const object of createdObjectVersions) {
       await storage.deleteObject(undefined, object.objectKey, object.versionId);
@@ -50,12 +52,16 @@ localDescribe('DB-to-storage local integration', () => {
       throw new Error('Local integration requires at least one local tenant');
     }
 
-    const prefix = `_phase3a4_db_to_storage_test/${randomUUID()}`;
-    const exactKey = `${prefix}/exact.bin`;
-    const legacyKey = `${prefix}/legacy.bin`;
-    const normalizedKey = `${prefix}/normalized.json`;
-    const operationalKey = `${prefix}/operational.bin`;
-    const missingKey = `${prefix}/missing.bin`;
+    const prefix = randomUUID();
+    const filePrefix = `tenant-${tenant.id}/${prefix}`;
+    const importPrefix = `tenant-imports/${tenant.id}/${prefix}`;
+    const exactKey = `${filePrefix}/exact.bin`;
+    const legacyKey = `${filePrefix}/legacy.bin`;
+    const originalKey = `${importPrefix}/original.xlsx`;
+    const normalizedKey = `${importPrefix}/normalized.json`;
+    const operationalKey = `${importPrefix}/operational.bin`;
+    const missingKey = `${filePrefix}/missing.bin`;
+    const contractKey = `${importPrefix}/contract.xlsx`;
 
     const uploadFixture = async (objectKey: string, content: string): Promise<string> => {
       const result = await storage.uploadBuffer(undefined, objectKey, Buffer.from(content, 'utf8'));
@@ -68,6 +74,7 @@ localDescribe('DB-to-storage local integration', () => {
 
     const exactVersionId = await uploadFixture(exactKey, 'exact');
     const legacyVersionId = await uploadFixture(legacyKey, 'legacy');
+    const originalVersionId = await uploadFixture(originalKey, 'original');
     const normalizedVersionId = await uploadFixture(normalizedKey, '{}');
     const operationalVersionId = await uploadFixture(operationalKey, 'operational');
     const missingVersionId = await uploadFixture(missingKey, 'missing');
@@ -130,8 +137,8 @@ localDescribe('DB-to-storage local integration', () => {
         fileSize: 5,
         fileMimeType: 'application/octet-stream',
         fileHash: `${prefix}-normalized`,
-        originalObjectKey: exactKey,
-        originalObjectVersionId: exactVersionId,
+        originalObjectKey: originalKey,
+        originalObjectVersionId: originalVersionId,
         normalizedObjectKey: normalizedKey,
         normalizedObjectVersionId: normalizedVersionId,
         canConfirm: true,
@@ -152,7 +159,7 @@ localDescribe('DB-to-storage local integration', () => {
         fileSize: 5,
         fileMimeType: 'application/octet-stream',
         fileHash: `${prefix}-contract`,
-        originalObjectKey: `${prefix}/contract.xlsx`,
+        originalObjectKey: contractKey,
         originalObjectVersionId: null,
         normalizedObjectKey: null,
         normalizedObjectVersionId: null,
@@ -185,7 +192,10 @@ localDescribe('DB-to-storage local integration', () => {
     });
     createdImportJobIds.push(operationalJob.id);
 
-    const statCalls: Array<{ readonly objectKey: string; readonly versionId?: string }> = [];
+    const statCalls: Array<{
+      readonly objectKey: string;
+      readonly versionId?: string;
+    }> = [];
     const scannerStorage: StorageStatClient = {
       getDefaultBucket: () => storage.getDefaultBucket(),
       statObject: async (bucket, objectKey, versionId) => {
@@ -197,11 +207,10 @@ localDescribe('DB-to-storage local integration', () => {
       },
     };
 
-    const receipt = await new DbToStorageScanner(
-      new PrismaDbToStorageDatabase(prisma),
-      scannerStorage,
-      { batchSize: 2, maxFindings: 20 },
-    ).scan();
+    const receipt = await new DbToStorageScanner(new PrismaDbToStorageDatabase(prisma), scannerStorage, {
+      batchSize: 2,
+      maxFindings: 20,
+    }).scan();
 
     expect(receipt.consistencyModel).toBe('MOVING_WINDOW');
     expect(receipt.storageObservationCounts.EXACT_PRESENT).toBeGreaterThanOrEqual(3);
@@ -209,7 +218,7 @@ localDescribe('DB-to-storage local integration', () => {
     expect(receipt.storageObservationCounts.CURRENT_PRESENT).toBeGreaterThanOrEqual(1);
     expect(receipt.classificationCounts.CONTRACT_VIOLATION).toBeGreaterThanOrEqual(1);
     expect(receipt.storageObservationCounts.OPERATIONAL_ERROR).toBeGreaterThanOrEqual(1);
-    expect(statCalls.some((call) => call.objectKey === `${prefix}/contract.xlsx`)).toBe(false);
+    expect(statCalls.some((call) => call.objectKey === contractKey)).toBe(false);
     expect(receipt.scanStatus).toBe('INCOMPLETE_OPERATIONAL_ERROR');
   });
 });

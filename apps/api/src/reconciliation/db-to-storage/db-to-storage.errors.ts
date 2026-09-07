@@ -47,11 +47,16 @@ export function isConclusiveNotFoundError(error: unknown): boolean {
   }
 
   const category = classifyProviderError(error);
-  if (category !== 'PROVIDER_ERROR' || text.includes('connection reset') || text.includes('network') || text.includes('socket')) {
+  if (
+    category !== 'PROVIDER_ERROR' ||
+    text.includes('connection reset') ||
+    text.includes('network') ||
+    text.includes('socket')
+  ) {
     return false;
   }
 
-  return status === 404 || CONCLUSIVE_NOT_FOUND_CODES.has(code);
+  return CONCLUSIVE_NOT_FOUND_CODES.has(code);
 }
 
 export function classifyProviderError(error: unknown): ProviderErrorCategory {

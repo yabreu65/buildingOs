@@ -10,21 +10,28 @@ import {
 function createDatabase(
   files: readonly FileReferenceRecord[],
   importJobs: readonly ImportJobReferenceRecord[],
-): ReadOnlyReconciliationDatabase & { readonly fileCalls: jest.Mock; readonly importCalls: jest.Mock } {
+): ReadOnlyReconciliationDatabase & {
+  readonly fileCalls: jest.Mock;
+  readonly importCalls: jest.Mock;
+} {
   const fileCalls = jest.fn();
   const importCalls = jest.fn();
-  const page = <T extends { id: string }>(rows: readonly T[], afterId: string | undefined, take: number): readonly T[] => {
+  const page = <T extends { id: string }>(
+    rows: readonly T[],
+    afterId: string | undefined,
+    take: number,
+  ): readonly T[] => {
     const orderedRows = [...rows].sort((left, right) => left.id.localeCompare(right.id));
     const start = afterId ? orderedRows.findIndex((row) => row.id > afterId) : 0;
     return orderedRows.slice(start < 0 ? orderedRows.length : start, (start < 0 ? orderedRows.length : start) + take);
   };
 
-  fileCalls.mockImplementation(({ afterId, take }: { afterId?: string; take: number }) => (
-    Promise.resolve(page(files, afterId, take))
-  ));
-  importCalls.mockImplementation(({ afterId, take }: { afterId?: string; take: number }) => (
-    Promise.resolve(page(importJobs, afterId, take))
-  ));
+  fileCalls.mockImplementation(({ afterId, take }: { afterId?: string; take: number }) =>
+    Promise.resolve(page(files, afterId, take)),
+  );
+  importCalls.mockImplementation(({ afterId, take }: { afterId?: string; take: number }) =>
+    Promise.resolve(page(importJobs, afterId, take)),
+  );
 
   return {
     findFileBatch: fileCalls,
@@ -34,7 +41,9 @@ function createDatabase(
   };
 }
 
-function createStorage(): StorageStatClient & { readonly statCalls: jest.Mock } {
+function createStorage(): StorageStatClient & {
+  readonly statCalls: jest.Mock;
+} {
   const statCalls = jest.fn();
   return {
     getDefaultBucket: () => 'buildingos',
@@ -48,7 +57,7 @@ function file(id: string, overrides: Partial<FileReferenceRecord> = {}): FileRef
     id,
     tenantId: 'tenant-1',
     bucket: 'buildingos',
-    objectKey: `tenant-1/${id}.pdf`,
+    objectKey: `tenant-tenant-1/${id}.pdf`,
     objectVersionId: 'version-1',
     ...overrides,
   };
@@ -60,7 +69,7 @@ function importJob(id: string, overrides: Partial<ImportJobReferenceRecord> = {}
     tenantId: 'tenant-1',
     status: ImportJobStatus.READY,
     previewVersion: 4,
-    originalObjectKey: `imports/${id}/original.xlsx`,
+    originalObjectKey: `tenant-imports/tenant-1/${id}/original.xlsx`,
     originalObjectVersionId: 'version-1',
     normalizedObjectKey: null,
     normalizedObjectVersionId: null,
@@ -70,13 +79,16 @@ function importJob(id: string, overrides: Partial<ImportJobReferenceRecord> = {}
 
 describe('DbToStorageScanner', () => {
   it('checks exact and legacy references with distinct missing observations', async () => {
-    const database = createDatabase([
-      file('file-exact'),
-      file('file-exact-missing', { objectVersionId: 'missing-version' }),
-      file('file-legacy', { objectVersionId: null }),
-      file('file-legacy-missing', { objectVersionId: null }),
-      file('file-invalid', { bucket: ' ', objectKey: 'invalid' }),
-    ], []);
+    const database = createDatabase(
+      [
+        file('file-exact'),
+        file('file-exact-missing', { objectVersionId: 'missing-version' }),
+        file('file-legacy', { objectVersionId: null }),
+        file('file-legacy-missing', { objectVersionId: null }),
+        file('file-invalid', { bucket: ' ', objectKey: 'invalid' }),
+      ],
+      [],
+    );
     const storage = createStorage();
     storage.statCalls.mockImplementation((_bucket: string, objectKey: string, versionId?: string) => {
       if (objectKey.includes('exact-missing')) throw { code: 'NoSuchVersion' };
@@ -86,7 +98,9 @@ describe('DbToStorageScanner', () => {
       return Promise.resolve({});
     });
 
-    const receipt = await new DbToStorageScanner(database, storage, { batchSize: 2 }).scan();
+    const receipt = await new DbToStorageScanner(database, storage, {
+      batchSize: 2,
+    }).scan();
 
     expect(receipt.recordsScanned).toBe(5);
     expect(receipt.classificationCounts).toMatchObject({
@@ -105,9 +119,7 @@ describe('DbToStorageScanner', () => {
   });
 
   it('does not fall back to a current-key stat for preview version 4 original references', async () => {
-    const database = createDatabase([], [
-      importJob('job-contract', { originalObjectVersionId: null }),
-    ]);
+    const database = createDatabase([], [importJob('job-contract', { originalObjectVersionId: null })]);
     const storage = createStorage();
 
     const receipt = await new DbToStorageScanner(database, storage).scan();
@@ -119,41 +131,58 @@ describe('DbToStorageScanner', () => {
   });
 
   it('uses current-key lookup only for legacy import references and exact stat for versioned legacy rows', async () => {
-    const database = createDatabase([], [
-      importJob('job-legacy', {
-        previewVersion: 3,
-        originalObjectVersionId: null,
-        normalizedObjectKey: 'imports/job-legacy/normalized.json',
-        normalizedObjectVersionId: null,
-      }),
-      importJob('job-exact', { previewVersion: 3 }),
-    ]);
+    const database = createDatabase(
+      [],
+      [
+        importJob('job-legacy', {
+          previewVersion: 3,
+          originalObjectVersionId: null,
+          normalizedObjectKey: 'tenant-imports/tenant-1/job-legacy/normalized.json',
+          normalizedObjectVersionId: null,
+        }),
+        importJob('job-exact', { previewVersion: 3 }),
+      ],
+    );
     const storage = createStorage();
     storage.statCalls.mockResolvedValue({});
 
     const receipt = await new DbToStorageScanner(database, storage).scan();
 
-    expect(storage.statCalls).toHaveBeenNthCalledWith(1, 'buildingos', 'imports/job-exact/original.xlsx', 'version-1');
-    expect(storage.statCalls).toHaveBeenNthCalledWith(2, 'buildingos', 'imports/job-legacy/original.xlsx');
-    expect(storage.statCalls).toHaveBeenNthCalledWith(3, 'buildingos', 'imports/job-legacy/normalized.json');
+    expect(storage.statCalls).toHaveBeenNthCalledWith(
+      1,
+      'buildingos',
+      'tenant-imports/tenant-1/job-exact/original.xlsx',
+      'version-1',
+    );
+    expect(storage.statCalls).toHaveBeenNthCalledWith(
+      2,
+      'buildingos',
+      'tenant-imports/tenant-1/job-legacy/original.xlsx',
+    );
+    expect(storage.statCalls).toHaveBeenNthCalledWith(
+      3,
+      'buildingos',
+      'tenant-imports/tenant-1/job-legacy/normalized.json',
+    );
     expect(receipt.sourceCounts['ImportJob.original'].classificationCounts.LEGACY_KEY_ONLY).toBe(1);
     expect(receipt.sourceCounts['ImportJob.original'].classificationCounts.EXACT_VERSIONED).toBe(1);
   });
 
   it('does not stat malformed VersionIds for exact or legacy references', async () => {
-    const database = createDatabase([
-      file('file-invalid-version', { objectVersionId: 'bad\u0001version' }),
-    ], [
-      importJob('job-invalid-version', {
-        originalObjectVersionId: 'bad\u0001version',
-        normalizedObjectKey: 'imports/job-invalid-version/normalized.json',
-        normalizedObjectVersionId: 'bad\u0001version',
-      }),
-      importJob('job-invalid-version-legacy', {
-        previewVersion: 3,
-        originalObjectVersionId: 'bad\u0001version',
-      }),
-    ]);
+    const database = createDatabase(
+      [file('file-invalid-version', { objectVersionId: 'bad\u0001version' })],
+      [
+        importJob('job-invalid-version', {
+          originalObjectVersionId: 'bad\u0001version',
+          normalizedObjectKey: 'tenant-imports/tenant-1/job-invalid-version/normalized.json',
+          normalizedObjectVersionId: 'bad\u0001version',
+        }),
+        importJob('job-invalid-version-legacy', {
+          previewVersion: 3,
+          originalObjectVersionId: 'bad\u0001version',
+        }),
+      ],
+    );
     const storage = createStorage();
 
     const receipt = await new DbToStorageScanner(database, storage).scan();
@@ -164,7 +193,7 @@ describe('DbToStorageScanner', () => {
   });
 
   it.each([
-    [{ statusCode: 404 }, 'EXACT_MISSING', 0],
+    [{ statusCode: 404 }, 'OPERATIONAL_ERROR', 1],
     [{ code: 'NoSuchVersion' }, 'EXACT_MISSING', 0],
     [{ code: 'NoSuchKey' }, 'EXACT_MISSING', 0],
     [{ statusCode: 500, message: 'NoSuchKey' }, 'OPERATIONAL_ERROR', 1],
@@ -188,21 +217,70 @@ describe('DbToStorageScanner', () => {
 
   it('paginates deterministically, bounds findings, and has no write-capable collaborators', async () => {
     const database = createDatabase(
-      [file('file-a', { objectVersionId: null }), file('file-b', { objectVersionId: null }), file('file-c', { objectVersionId: null })],
+      [
+        file('file-a', { objectVersionId: null }),
+        file('file-b', { objectVersionId: null }),
+        file('file-c', { objectVersionId: null }),
+      ],
       [],
     );
     const storage = createStorage();
     storage.statCalls.mockResolvedValue({});
 
-    const receipt = await new DbToStorageScanner(database, storage, { batchSize: 1, maxFindings: 2 }).scan();
+    const receipt = await new DbToStorageScanner(database, storage, {
+      batchSize: 1,
+      maxFindings: 2,
+    }).scan();
 
-    expect(database.fileCalls).toHaveBeenNthCalledWith(1, { afterId: undefined, take: 1 });
-    expect(database.fileCalls).toHaveBeenNthCalledWith(2, { afterId: 'file-a', take: 1 });
-    expect(database.fileCalls).toHaveBeenNthCalledWith(3, { afterId: 'file-b', take: 1 });
-    expect(database.fileCalls).toHaveBeenNthCalledWith(4, { afterId: 'file-c', take: 1 });
+    expect(database.fileCalls).toHaveBeenNthCalledWith(1, {
+      afterId: undefined,
+      take: 1,
+    });
+    expect(database.fileCalls).toHaveBeenNthCalledWith(2, {
+      afterId: 'file-a',
+      take: 1,
+    });
+    expect(database.fileCalls).toHaveBeenNthCalledWith(3, {
+      afterId: 'file-b',
+      take: 1,
+    });
+    expect(database.fileCalls).toHaveBeenNthCalledWith(4, {
+      afterId: 'file-c',
+      take: 1,
+    });
     expect(receipt.recordsScanned).toBe(3);
     expect(receipt.detailedFindings).toHaveLength(2);
     expect(receipt.consistencyModel).toBe('MOVING_WINDOW');
     expect(storage.statCalls).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects cross-tenant File and ImportJob keys before storage access', async () => {
+    const database = createDatabase(
+      [
+        file('file-cross-doc', { objectKey: 'tenant-tenant-2/file.pdf' }),
+        file('file-cross-receipt', {
+          objectKey: 'tenant/tenant-2/receipt.pdf',
+        }),
+        file('file-cross-pilot', {
+          objectKey: 'pilot-data-pack/tenant-2/document.txt',
+        }),
+      ],
+      [
+        importJob('job-cross', {
+          originalObjectKey: 'tenant-imports/tenant-2/original.xlsx',
+          normalizedObjectKey: 'tenant-imports/tenant-2/normalized.json',
+        }),
+      ],
+    );
+    const storage = createStorage();
+
+    const receipt = await new DbToStorageScanner(database, storage).scan();
+
+    expect(storage.statCalls).not.toHaveBeenCalled();
+    expect(receipt.invalidReferenceCount).toBe(5);
+    expect(receipt.storageObservationCounts.NOT_CHECKED).toBe(5);
+    expect(receipt.sourceCounts.File.classificationCounts.INVALID_REFERENCE).toBe(3);
+    expect(receipt.sourceCounts['ImportJob.original'].classificationCounts.INVALID_REFERENCE).toBe(1);
+    expect(receipt.sourceCounts['ImportJob.normalized'].classificationCounts.INVALID_REFERENCE).toBe(1);
   });
 });

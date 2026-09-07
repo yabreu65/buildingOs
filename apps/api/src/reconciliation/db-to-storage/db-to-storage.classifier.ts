@@ -10,6 +10,10 @@ type NullableString = string | null | undefined;
 
 type ValueState = 'ABSENT' | 'BLANK' | 'VALID' | 'INVALID';
 
+const FILE_OBJECT_KEY_NAMESPACES = ['tenant-', 'tenant/', 'pilot-data-pack/'] as const;
+const IMPORT_OBJECT_KEY_NAMESPACE = 'tenant-imports/';
+const IMPORT_OBJECT_KEY_NAMESPACES = [IMPORT_OBJECT_KEY_NAMESPACE] as const;
+
 function classifyValue(value: NullableString, allowNullishOnly: boolean): ValueState {
   if (value === null || value === undefined) {
     return 'ABSENT';
@@ -34,7 +38,23 @@ function decision(identityClass: IdentityClass, storageCheck: StorageCheck): Cla
   return { identityClass, storageCheck };
 }
 
+function hasTenantScopedObjectKey(
+  tenantId: NullableString,
+  objectKey: NullableString,
+  namespaces: readonly string[],
+): boolean {
+  if (classifyValue(tenantId, true) !== 'VALID' || typeof objectKey !== 'string') {
+    return false;
+  }
+
+  return namespaces.some((namespace) => {
+    const prefix = `${namespace}${tenantId}/`;
+    return objectKey.startsWith(prefix) && objectKey.length > prefix.length;
+  });
+}
+
 export function classifyFileReference(
+  tenantId: string,
   bucket: NullableString,
   objectKey: NullableString,
   objectVersionId: NullableString,
@@ -42,7 +62,11 @@ export function classifyFileReference(
   const bucketState = classifyValue(bucket, true);
   const keyState = classifyValue(objectKey, true);
 
-  if (bucketState !== 'VALID' || keyState !== 'VALID') {
+  if (
+    bucketState !== 'VALID' ||
+    keyState !== 'VALID' ||
+    !hasTenantScopedObjectKey(tenantId, objectKey, FILE_OBJECT_KEY_NAMESPACES)
+  ) {
     return decision('INVALID_REFERENCE', 'NONE');
   }
 
@@ -57,11 +81,15 @@ export function classifyFileReference(
 }
 
 export function classifyImportOriginalReference(
+  tenantId: string,
   previewVersion: number,
   objectKey: NullableString,
   objectVersionId: NullableString,
 ): ClassificationDecision {
-  if (classifyValue(objectKey, true) !== 'VALID') {
+  if (
+    classifyValue(objectKey, true) !== 'VALID' ||
+    !hasTenantScopedObjectKey(tenantId, objectKey, IMPORT_OBJECT_KEY_NAMESPACES)
+  ) {
     return decision('INVALID_REFERENCE', 'NONE');
   }
 
@@ -80,6 +108,7 @@ export function classifyImportOriginalReference(
 }
 
 export function classifyImportNormalizedReference(
+  tenantId: string,
   previewVersion: number,
   status: ImportJobStatus,
   objectKey: NullableString,
@@ -106,6 +135,10 @@ export function classifyImportNormalizedReference(
   }
 
   if (versionState === 'INVALID') {
+    return decision('INVALID_REFERENCE', 'NONE');
+  }
+
+  if (!hasTenantScopedObjectKey(tenantId, objectKey, IMPORT_OBJECT_KEY_NAMESPACES)) {
     return decision('INVALID_REFERENCE', 'NONE');
   }
 

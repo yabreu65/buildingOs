@@ -18,14 +18,18 @@ describe('DB-to-storage provider error classification', () => {
   });
 
   it.each([
-    { statusCode: 404 },
     { code: 'NoSuchVersion' },
     { code: 'NoSuchKey' },
+    { code: 'NotFound' },
+    { statusCode: 404, code: 'NoSuchKey' },
   ])('accepts conclusive absence %j', (error) => {
     expect(isConclusiveNotFoundError(error)).toBe(true);
   });
 
   it.each([
+    { statusCode: 404 },
+    { statusCode: 404, message: 'Not Found' },
+    { statusCode: 404, code: 'NoSuchBucket' },
     { statusCode: 500, message: 'NoSuchKey' },
     { statusCode: 403, code: 'NoSuchKey' },
     { code: 'ETIMEDOUT', message: 'NoSuchVersion' },
