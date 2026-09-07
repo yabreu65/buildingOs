@@ -6,6 +6,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { MinioService } from '../../../storage/minio.service';
 import { OnboardingImportNormalizerService } from './onboarding-import-normalizer.service';
 import { OnboardingImportConfirmationService } from './onboarding-import-confirmation.service';
+import { ONBOARDING_IMPORT_EXACT_OBJECT_IDENTITY_PREVIEW_VERSION } from '../onboarding-imports.constants';
 import type {
   ConfirmOnboardingImportSummary,
   ImportPreviewSummary,
@@ -203,6 +204,7 @@ function createCurrentJob(overrides: Partial<Record<string, unknown>> = {}) {
     previewHash: 'preview-hash',
     originalObjectKey: 'imports/import-1/original.xlsx',
     normalizedObjectKey: 'imports/import-1/normalized.json',
+    normalizedObjectVersionId: 'normalized-version-1',
     summary: createPreviewSummary(),
     counts: createPreviewSummary(),
     canConfirm: true,
@@ -309,7 +311,7 @@ describe('OnboardingImportConfirmationService', () => {
   });
 
   it('confirms a ready import transactionally and persists the confirmation result', async () => {
-    const currentJob = createCurrentJob();
+    const currentJob = createCurrentJob({ previewVersion: 4 });
     const { payload, serialized } = createPayload(currentJob.id, currentJob.tenantId, currentJob.fileHash);
     const previewHash = createHash('sha256').update(serialized, 'utf8').digest('hex');
     currentJob.previewHash = previewHash;
@@ -338,7 +340,7 @@ describe('OnboardingImportConfirmationService', () => {
       roles: [Role.TENANT_ADMIN],
       isSuperAdmin: false,
       importId: currentJob.id,
-      expectedPreviewVersion: 1,
+      expectedPreviewVersion: 4,
     });
 
     expect(result).toMatchObject({
@@ -379,6 +381,11 @@ describe('OnboardingImportConfirmationService', () => {
         confirmingByMembershipId: 'membership-1',
       },
     });
+    expect(minio.getObjectBuffer).toHaveBeenCalledWith(
+      undefined,
+      currentJob.normalizedObjectKey,
+      currentJob.normalizedObjectVersionId,
+    );
     expect(tx.importJob.update).toHaveBeenCalledWith({
       where: { id: currentJob.id },
       data: expect.objectContaining({
@@ -906,5 +913,46 @@ describe('OnboardingImportConfirmationService', () => {
 
     expect(minio.getObjectBuffer).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy normalized payload reads key-only when the stored version is null', async () => {
+    const legacyJob = createCurrentJob({ previewVersion: 3, normalizedObjectVersionId: null });
+    const { serialized } = createPayload(legacyJob.id, legacyJob.tenantId, legacyJob.fileHash);
+    (minio.getObjectBuffer as jest.Mock).mockResolvedValue(Buffer.from(serialized, 'utf8'));
+
+    await (service as any).loadNormalizedPayload(legacyJob);
+
+    expect(minio.getObjectBuffer).toHaveBeenCalledWith(
+      undefined,
+      legacyJob.normalizedObjectKey,
+      undefined,
+    );
+  });
+
+  it('fails closed before reading latest for a new exact-identity job without a version', async () => {
+    const newJob = createCurrentJob({ previewVersion: 4, normalizedObjectVersionId: null });
+
+    await expect((service as any).loadNormalizedPayload(newJob)).rejects.toThrow(
+      'La importación no tiene una versión exacta del payload normalizado',
+    );
+
+    expect(minio.getObjectBuffer).not.toHaveBeenCalled();
+  });
+
+  it('keeps preview version 4 exact-identity even if the current preview version advances', async () => {
+    const exactIdentityJob = createCurrentJob({
+      previewVersion: ONBOARDING_IMPORT_EXACT_OBJECT_IDENTITY_PREVIEW_VERSION,
+      normalizedObjectVersionId: null,
+    });
+
+    expect(ONBOARDING_IMPORT_EXACT_OBJECT_IDENTITY_PREVIEW_VERSION).toBe(4);
+    expect(ONBOARDING_IMPORT_EXACT_OBJECT_IDENTITY_PREVIEW_VERSION + 1).toBeGreaterThan(
+      ONBOARDING_IMPORT_EXACT_OBJECT_IDENTITY_PREVIEW_VERSION,
+    );
+
+    await expect((service as any).loadNormalizedPayload(exactIdentityJob)).rejects.toThrow(
+      'La importación no tiene una versión exacta del payload normalizado',
+    );
+    expect(minio.getObjectBuffer).not.toHaveBeenCalled();
   });
 });
