@@ -1,4 +1,4 @@
-import { classifyProviderError } from './db-to-storage.errors';
+import { classifyProviderError, isConclusiveNotFoundError } from './db-to-storage.errors';
 import {
   classifyFileReference,
   classifyImportNormalizedReference,
@@ -293,7 +293,7 @@ export class DbToStorageScanner {
       await this.storage.statObject(bucket, objectKey);
       return { value: 'CURRENT_PRESENT' };
     } catch (error) {
-      if (this.storage.isNotFoundError(error)) {
+      if (isConclusiveNotFoundError(error)) {
         return { value: decision.storageCheck === 'EXACT' ? 'EXACT_MISSING' : 'CURRENT_MISSING' };
       }
 

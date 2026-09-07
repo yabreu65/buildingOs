@@ -69,7 +69,6 @@ export interface ReadOnlyReconciliationDatabase {
 export interface StorageStatClient {
   getDefaultBucket(): string;
   statObject(bucket: string, objectKey: string, versionId?: string): Promise<unknown>;
-  isNotFoundError(error: unknown): boolean;
 }
 
 export type ProviderErrorCategory =

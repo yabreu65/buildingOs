@@ -6,6 +6,9 @@ interface ErrorLike {
   readonly message?: unknown;
 }
 
+const CONCLUSIVE_NOT_FOUND_CODES = new Set(['NotFound', 'NoSuchKey', 'NoSuchVersion']);
+const OPERATIONAL_ERROR_CODES = new Set(['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN']);
+
 function asErrorLike(error: unknown): ErrorLike {
   return typeof error === 'object' && error !== null ? error as ErrorLike : {};
 }
@@ -20,9 +23,35 @@ function errorCode(error: unknown): string {
   return typeof value === 'string' ? value.toUpperCase() : '';
 }
 
+function rawErrorCode(error: unknown): string {
+  const value = asErrorLike(error).code;
+  return typeof value === 'string' ? value : '';
+}
+
 function statusCode(error: unknown): number | undefined {
   const value = asErrorLike(error).statusCode;
   return typeof value === 'number' ? value : undefined;
+}
+
+/**
+ * Applies the reconciliation scanner's stricter absence policy.
+ * Operational evidence always wins over provider not-found labels.
+ */
+export function isConclusiveNotFoundError(error: unknown): boolean {
+  const status = statusCode(error);
+  const code = rawErrorCode(error);
+  const text = errorText(error);
+
+  if ((status !== undefined && status !== 404) || OPERATIONAL_ERROR_CODES.has(code.toUpperCase())) {
+    return false;
+  }
+
+  const category = classifyProviderError(error);
+  if (category !== 'PROVIDER_ERROR' || text.includes('connection reset') || text.includes('network') || text.includes('socket')) {
+    return false;
+  }
+
+  return status === 404 || CONCLUSIVE_NOT_FOUND_CODES.has(code);
 }
 
 export function classifyProviderError(error: unknown): ProviderErrorCategory {

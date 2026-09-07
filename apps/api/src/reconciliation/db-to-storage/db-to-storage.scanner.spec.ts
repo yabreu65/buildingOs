@@ -39,17 +39,6 @@ function createStorage(): StorageStatClient & { readonly statCalls: jest.Mock } 
   return {
     getDefaultBucket: () => 'buildingos',
     statObject: statCalls,
-    isNotFoundError: (error: unknown) => (
-      typeof error === 'object'
-      && error !== null
-      && (error as { code?: string; statusCode?: number }).code === 'NoSuchVersion'
-        || typeof error === 'object'
-        && error !== null
-        && (error as { code?: string; statusCode?: number }).code === 'NoSuchKey'
-        || typeof error === 'object'
-        && error !== null
-        && (error as { code?: string; statusCode?: number }).statusCode === 404
-    ),
     statCalls,
   };
 }
@@ -175,20 +164,20 @@ describe('DbToStorageScanner', () => {
   });
 
   it.each([
+    [{ statusCode: 404 }, 'EXACT_MISSING', 0],
     [{ code: 'NoSuchVersion' }, 'EXACT_MISSING', 0],
     [{ code: 'NoSuchKey' }, 'EXACT_MISSING', 0],
-    [{ code: 'ETIMEDOUT' }, 'OPERATIONAL_ERROR', 1],
+    [{ statusCode: 500, message: 'NoSuchKey' }, 'OPERATIONAL_ERROR', 1],
+    [{ statusCode: 403, code: 'NoSuchKey' }, 'OPERATIONAL_ERROR', 1],
+    [{ code: 'ETIMEDOUT', message: 'NoSuchVersion' }, 'OPERATIONAL_ERROR', 1],
+    [{ code: 'ECONNRESET', message: 'NoSuchKey' }, 'OPERATIONAL_ERROR', 1],
+    [{ message: 'NoSuchKey' }, 'OPERATIONAL_ERROR', 1],
     [{ statusCode: 403 }, 'OPERATIONAL_ERROR', 1],
     [{ statusCode: 500 }, 'OPERATIONAL_ERROR', 1],
   ])('keeps provider result %j in the correct observation bucket', async (error, observation, operationalCount) => {
     const database = createDatabase([file('file-error')], []);
     const storage = createStorage();
     storage.statCalls.mockRejectedValue(error);
-    storage.isNotFoundError = (candidate: unknown) => (
-      typeof candidate === 'object'
-      && candidate !== null
-      && ((candidate as { code?: string }).code === 'NoSuchVersion' || (candidate as { code?: string }).code === 'NoSuchKey')
-    );
 
     const receipt = await new DbToStorageScanner(database, storage).scan();
 

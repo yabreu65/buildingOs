@@ -195,7 +195,6 @@ localDescribe('DB-to-storage local integration', () => {
         }
         return storage.statObject(bucket, objectKey, versionId);
       },
-      isNotFoundError: (error) => storage.isNotFoundError(error),
     };
 
     const receipt = await new DbToStorageScanner(
