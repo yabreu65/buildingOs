@@ -19,6 +19,7 @@ import { isAllowedMediaType } from '@buildingos/contracts';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { MinioService } from '../storage/minio.service';
+import type { MinioUploadResult } from '../storage/minio.service';
 import { ONBOARDING_IMPORT_ALLOWED_MIME_TYPES, ONBOARDING_IMPORT_EXPIRES_DAYS, ONBOARDING_IMPORT_ISSUE_PAGE_SIZE_MAX, ONBOARDING_IMPORT_MAX_FILE_SIZE_BYTES, ONBOARDING_IMPORT_OBJECT_KEY_PREFIX, ONBOARDING_IMPORT_PREVIEW_VERSION, ONBOARDING_IMPORT_SCHEMA_VERSION, ONBOARDING_IMPORT_TYPE } from './onboarding-imports.constants';
 import { OnboardingImportConfirmationService } from './services/onboarding-import-confirmation.service';
 import { OnboardingImportNormalizerService } from './services/onboarding-import-normalizer.service';
@@ -128,7 +129,9 @@ interface JobCreatePayload {
   readonly fileHash: string;
   readonly fileMimeType: string;
   readonly originalObjectKey: string;
+  readonly originalObjectVersionId: string;
   readonly normalizedObjectKey: string | null;
+  readonly normalizedObjectVersionId: string | null;
   readonly summary: ImportPreviewSummary;
   readonly issues: ImportIssueRecord[];
   readonly canConfirm: boolean;
@@ -232,9 +235,9 @@ export class OnboardingImportsService {
 
     const importId = randomUUID();
     const keys = this.buildObjectKeys(input.tenantId, importId);
-    let normalizedUploaded = false;
-
-    await this.uploadOriginalFile(keys.originalObjectKey, uploadedFile.buffer, uploadedFile.mimetype);
+    const originalUpload = await this.uploadOriginalFile(keys.originalObjectKey, uploadedFile.buffer, uploadedFile.mimetype);
+    const originalObjectVersionId = this.requireObjectVersionId(originalUpload, keys.originalObjectKey);
+    let normalizedObjectVersionId: string | null = null;
 
     try {
       const parsed = this.parserService.parseWorkbook(uploadedFile.buffer);
@@ -246,8 +249,8 @@ export class OnboardingImportsService {
 
       if (normalizedObjectKey) {
         const normalizedPayload = this.buildNormalizedPayload(input.tenantId, importId, fileHash, fileName, validation, parsed.data);
-        await this.minio.uploadBuffer(undefined, normalizedObjectKey, Buffer.from(JSON.stringify(normalizedPayload), 'utf8'), 'application/json');
-        normalizedUploaded = true;
+        const normalizedUpload = await this.minio.uploadBuffer(undefined, normalizedObjectKey, Buffer.from(JSON.stringify(normalizedPayload), 'utf8'), 'application/json');
+        normalizedObjectVersionId = this.requireObjectVersionId(normalizedUpload, normalizedObjectKey);
       }
 
       const created = await this.persistJob({
@@ -260,7 +263,9 @@ export class OnboardingImportsService {
         fileHash,
         fileMimeType: uploadedFile.mimetype,
         originalObjectKey: keys.originalObjectKey,
+        originalObjectVersionId,
         normalizedObjectKey,
+        normalizedObjectVersionId,
         summary: validation.summary,
         issues: validation.issues,
         canConfirm: status === ImportJobStatus.READY,
@@ -286,7 +291,11 @@ export class OnboardingImportsService {
       return created;
     } catch (error) {
       if (this.isUniqueConflict(error)) {
-        await this.cleanupImportObjects(keys);
+        await this.cleanupImportObjects({
+          ...keys,
+          originalObjectVersionId,
+          normalizedObjectVersionId,
+        });
         const existingAfterConflict = await this.findExistingJob(input.tenantId, fileHash);
         if (existingAfterConflict) {
           const reusedAction =
@@ -313,10 +322,12 @@ export class OnboardingImportsService {
 
           return existingAfterConflict;
         }
+
+        throw error;
       }
 
-      if (normalizedUploaded) {
-        await this.minio.deleteObject(undefined, keys.normalizedObjectKey);
+      if (normalizedObjectVersionId) {
+        await this.minio.deleteObject(undefined, keys.normalizedObjectKey, normalizedObjectVersionId);
       }
 
       await this.persistFailedImport({
@@ -328,6 +339,7 @@ export class OnboardingImportsService {
         fileHash,
         fileMimeType: uploadedFile.mimetype,
         originalObjectKey: keys.originalObjectKey,
+        originalObjectVersionId,
         error,
       });
 
@@ -979,66 +991,57 @@ export class OnboardingImportsService {
   }
 
   private async persistJob(payload: JobCreatePayload): Promise<ImportJobView> {
-    try {
-      const job = await this.prisma.$transaction(async (tx) => {
-        const created = await tx.importJob.create({
-          data: {
-            id: payload.importId,
-            tenantId: payload.tenantId,
-            type: ONBOARDING_IMPORT_TYPE,
-            status: payload.status,
-            schemaVersion: ONBOARDING_IMPORT_SCHEMA_VERSION,
-            previewVersion: payload.previewVersion,
-            fileName: payload.fileName,
-            fileSize: payload.fileSize,
-            fileMimeType: payload.fileMimeType,
-            fileHash: payload.fileHash,
-            previewHash: payload.previewHash,
-            originalObjectKey: payload.originalObjectKey,
-            normalizedObjectKey: payload.normalizedObjectKey,
-            summary: payload.summary as unknown as Prisma.JsonObject,
-            counts: payload.summary as unknown as Prisma.JsonObject,
-            canConfirm: payload.canConfirm,
-            expiresAt: this.getExpirationDate(),
+    const job = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.importJob.create({
+        data: {
+          id: payload.importId,
+          tenantId: payload.tenantId,
+          type: ONBOARDING_IMPORT_TYPE,
+          status: payload.status,
+          schemaVersion: ONBOARDING_IMPORT_SCHEMA_VERSION,
+          previewVersion: payload.previewVersion,
+          fileName: payload.fileName,
+          fileSize: payload.fileSize,
+          fileMimeType: payload.fileMimeType,
+          fileHash: payload.fileHash,
+          previewHash: payload.previewHash,
+          originalObjectKey: payload.originalObjectKey,
+          originalObjectVersionId: payload.originalObjectVersionId,
+          normalizedObjectKey: payload.normalizedObjectKey,
+          normalizedObjectVersionId: payload.normalizedObjectVersionId,
+          summary: payload.summary as unknown as Prisma.JsonObject,
+          counts: payload.summary as unknown as Prisma.JsonObject,
+          canConfirm: payload.canConfirm,
+          expiresAt: this.getExpirationDate(),
+        },
+        include: {
+          issues: {
+            select: { id: true },
           },
-          include: {
-            issues: {
-              select: { id: true },
-            },
-          },
-        });
-
-        if (payload.issues.length > 0) {
-          await tx.importIssue.createMany({
-            data: payload.issues.map((issue) => ({
-              tenantId: payload.tenantId,
-              importJobId: created.id,
-              sheet: issue.sheet,
-              row: issue.row,
-              column: issue.column,
-              code: issue.code,
-              severity: issue.severity,
-              message: issue.message,
-              receivedValue: issue.receivedValue,
-              normalizedValue: issue.normalizedValue,
-            })),
-          });
-        }
-
-        return created;
+        },
       });
 
-      return this.mapJobView(job);
-    } catch (error) {
-      if (this.isUniqueConflict(error)) {
-        const existing = await this.findExistingJob(payload.tenantId, payload.fileHash);
-        if (existing) {
-          return existing;
-        }
+      if (payload.issues.length > 0) {
+        await tx.importIssue.createMany({
+          data: payload.issues.map((issue) => ({
+            tenantId: payload.tenantId,
+            importJobId: created.id,
+            sheet: issue.sheet,
+            row: issue.row,
+            column: issue.column,
+            code: issue.code,
+            severity: issue.severity,
+            message: issue.message,
+            receivedValue: issue.receivedValue,
+            normalizedValue: issue.normalizedValue,
+          })),
+        });
       }
 
-      throw error;
-    }
+      return created;
+    });
+
+    return this.mapJobView(job);
   }
 
   private async persistFailedImport(input: {
@@ -1050,6 +1053,7 @@ export class OnboardingImportsService {
     fileHash: string;
     fileMimeType: string;
     originalObjectKey: string;
+    originalObjectVersionId: string | null;
     error: unknown;
   }): Promise<void> {
     try {
@@ -1057,33 +1061,8 @@ export class OnboardingImportsService {
       const errorCode = this.sanitizeErrorCode(input.error);
       const errorMessage = this.sanitizeErrorMessage(input.error);
 
-      await this.prisma.importJob.upsert({
-        where: {
-          tenantId_type_schemaVersion_previewVersion_fileHash: {
-            tenantId: input.tenantId,
-            type: ONBOARDING_IMPORT_TYPE,
-            schemaVersion: ONBOARDING_IMPORT_SCHEMA_VERSION,
-            previewVersion: ONBOARDING_IMPORT_PREVIEW_VERSION,
-            fileHash: input.fileHash,
-          },
-        },
-        update: {
-          status: ImportJobStatus.FAILED,
-          errorCode,
-          errorMessage,
-          previewVersion: ONBOARDING_IMPORT_PREVIEW_VERSION,
-          previewHash: null,
-          summary: summary as unknown as Prisma.JsonObject,
-          counts: summary as unknown as Prisma.JsonObject,
-          canConfirm: false,
-          fileName: input.fileName,
-          fileSize: input.fileSize,
-          fileMimeType: input.fileMimeType,
-          originalObjectKey: input.originalObjectKey,
-          normalizedObjectKey: null,
-          createdByMembershipId: input.membershipId,
-        },
-        create: {
+      await this.prisma.importJob.create({
+        data: {
           id: input.importId,
           tenantId: input.tenantId,
           type: ONBOARDING_IMPORT_TYPE,
@@ -1096,7 +1075,9 @@ export class OnboardingImportsService {
           fileHash: input.fileHash,
           previewHash: null,
           originalObjectKey: input.originalObjectKey,
+          originalObjectVersionId: input.originalObjectVersionId,
           normalizedObjectKey: null,
+          normalizedObjectVersionId: null,
           summary: summary as unknown as Prisma.JsonObject,
           counts: summary as unknown as Prisma.JsonObject,
           canConfirm: false,
@@ -1106,8 +1087,23 @@ export class OnboardingImportsService {
           createdByMembershipId: input.membershipId,
         },
       });
-    } catch {
-      // Best effort only.
+    } catch (error) {
+      if (this.isUniqueConflict(error)) {
+        const originalObjectVersionId = input.originalObjectVersionId;
+        if (originalObjectVersionId) {
+          await Promise.allSettled([
+            Promise.resolve().then(() => this.minio.deleteObject(
+              undefined,
+              input.originalObjectKey,
+              originalObjectVersionId,
+            )),
+          ]);
+        }
+
+        return;
+      }
+
+      // Best effort only; preserve the original preview failure.
     }
   }
 
@@ -1132,7 +1128,7 @@ export class OnboardingImportsService {
     return job ? this.mapJobView(job) : null;
   }
 
-  private async uploadOriginalFile(objectKey: string, buffer: Buffer, mimeType: string): Promise<void> {
+  private async uploadOriginalFile(objectKey: string, buffer: Buffer, mimeType: string): Promise<MinioUploadResult> {
     if (!isAllowedMediaType(mimeType, ONBOARDING_IMPORT_ALLOWED_MIME_TYPES)) {
       throw new UnsupportedMediaTypeException('Solo se permite subir archivos .xlsx');
     }
@@ -1141,7 +1137,15 @@ export class OnboardingImportsService {
       throw new PayloadTooLargeException(`El archivo supera el máximo de ${ONBOARDING_IMPORT_MAX_FILE_SIZE_BYTES} bytes`);
     }
 
-    await this.minio.uploadBuffer(undefined, objectKey, buffer, mimeType);
+    return this.minio.uploadBuffer(undefined, objectKey, buffer, mimeType);
+  }
+
+  private requireObjectVersionId(result: MinioUploadResult, objectKey: string): string {
+    if (!result || typeof result.versionId !== 'string' || result.versionId.trim().length === 0) {
+      throw new Error(`Storage did not return a version id for ${objectKey}`);
+    }
+
+    return result.versionId;
   }
 
   private assertFile(file: UploadableSpreadsheetFile | undefined): UploadableSpreadsheetFile {
@@ -1386,11 +1390,20 @@ export class OnboardingImportsService {
     throw new Error(this.sanitizeErrorMessage(error));
   }
 
-  private async cleanupImportObjects(keys: StoredImportObjectKeys): Promise<void> {
-    await Promise.allSettled([
-      this.minio.deleteObject(undefined, keys.originalObjectKey),
-      this.minio.deleteObject(undefined, keys.normalizedObjectKey),
-    ]);
+  private async cleanupImportObjects(objects: StoredImportObjectKeys & {
+    readonly originalObjectVersionId: string | null;
+    readonly normalizedObjectVersionId: string | null;
+  }): Promise<void> {
+    const deletions: Array<Promise<void>> = [];
+
+    if (objects.originalObjectVersionId) {
+      deletions.push(this.minio.deleteObject(undefined, objects.originalObjectKey, objects.originalObjectVersionId));
+    }
+    if (objects.normalizedObjectVersionId) {
+      deletions.push(this.minio.deleteObject(undefined, objects.normalizedObjectKey, objects.normalizedObjectVersionId));
+    }
+
+    await Promise.allSettled(deletions);
   }
 
   private sameCalendarDate(left: Date, rightIsoDate: string): boolean {

@@ -1,7 +1,8 @@
 import { ImportType } from '@prisma/client';
 
 export const ONBOARDING_IMPORT_SCHEMA_VERSION = 'v1';
-export const ONBOARDING_IMPORT_PREVIEW_VERSION = 3;
+export const ONBOARDING_IMPORT_PREVIEW_VERSION = 4;
+export const ONBOARDING_IMPORT_EXACT_OBJECT_IDENTITY_PREVIEW_VERSION = 4;
 export const ONBOARDING_IMPORT_TYPE = ImportType.INITIAL_ONBOARDING;
 export const ONBOARDING_IMPORT_TEMPLATE_FILENAME = 'buildingos-importacion-inicial-v1.xlsx';
 export const ONBOARDING_IMPORT_TEMPLATE_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';

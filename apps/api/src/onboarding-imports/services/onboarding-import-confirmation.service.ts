@@ -26,6 +26,7 @@ import {
   ONBOARDING_IMPORT_CONFIRM_LOCK_TIMEOUT_MS,
   ONBOARDING_IMPORT_CONFIRM_TRANSACTION_MAX_WAIT_MS,
   ONBOARDING_IMPORT_CONFIRM_TRANSACTION_TIMEOUT_MS,
+  ONBOARDING_IMPORT_EXACT_OBJECT_IDENTITY_PREVIEW_VERSION,
   ONBOARDING_IMPORT_SCHEMA_VERSION,
 } from '../onboarding-imports.constants';
 import type {
@@ -86,6 +87,7 @@ interface ImportJobConfirmationRecord {
   readonly fileHash: string;
   readonly previewHash: string | null;
   readonly normalizedObjectKey: string | null;
+  readonly normalizedObjectVersionId: string | null;
   readonly canConfirm: boolean;
   readonly expiresAt: Date;
   readonly confirmingAt: Date | null;
@@ -954,7 +956,19 @@ export class OnboardingImportConfirmationService {
       throw new ConflictException('La importación no tiene payload normalizado disponible');
     }
 
-    const buffer = await this.minio.getObjectBuffer(undefined, job.normalizedObjectKey);
+    const versionId = job.normalizedObjectVersionId;
+    if (
+      job.previewVersion >= ONBOARDING_IMPORT_EXACT_OBJECT_IDENTITY_PREVIEW_VERSION
+      && (typeof versionId !== 'string' || versionId.trim().length === 0)
+    ) {
+      throw new ConflictException('La importación no tiene una versión exacta del payload normalizado');
+    }
+
+    const buffer = await this.minio.getObjectBuffer(
+      undefined,
+      job.normalizedObjectKey,
+      typeof versionId === 'string' && versionId.trim().length > 0 ? versionId : undefined,
+    );
     const payload = this.parseJson(buffer);
 
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
