@@ -235,13 +235,11 @@ export class OnboardingImportsService {
 
     const importId = randomUUID();
     const keys = this.buildObjectKeys(input.tenantId, importId);
-    let originalObjectVersionId: string | null = null;
+    const originalUpload = await this.uploadOriginalFile(keys.originalObjectKey, uploadedFile.buffer, uploadedFile.mimetype);
+    const originalObjectVersionId = this.requireObjectVersionId(originalUpload, keys.originalObjectKey);
     let normalizedObjectVersionId: string | null = null;
 
     try {
-      const originalUpload = await this.uploadOriginalFile(keys.originalObjectKey, uploadedFile.buffer, uploadedFile.mimetype);
-      originalObjectVersionId = this.requireObjectVersionId(originalUpload, keys.originalObjectKey);
-
       const parsed = this.parserService.parseWorkbook(uploadedFile.buffer);
       const validation = await this.validateWorkbook(input.tenantId, access.tenantCurrency, parsed.data, parsed.issues);
       const status = validation.summary.blockingIssues > 0 ? ImportJobStatus.BLOCKED : ImportJobStatus.READY;
@@ -1091,6 +1089,17 @@ export class OnboardingImportsService {
       });
     } catch (error) {
       if (this.isUniqueConflict(error)) {
+        const originalObjectVersionId = input.originalObjectVersionId;
+        if (originalObjectVersionId) {
+          await Promise.allSettled([
+            Promise.resolve().then(() => this.minio.deleteObject(
+              undefined,
+              input.originalObjectKey,
+              originalObjectVersionId,
+            )),
+          ]);
+        }
+
         return;
       }
 

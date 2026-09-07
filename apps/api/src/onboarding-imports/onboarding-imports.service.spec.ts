@@ -732,6 +732,105 @@ describe('OnboardingImportsService', () => {
     );
   });
 
+  it('does not cache an original upload timeout as a failed import', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
+    prisma.importJob.findUnique.mockResolvedValue(null);
+    minio.uploadBuffer.mockRejectedValueOnce(new Error('storage timeout'));
+
+    await expect(
+      service.previewImport(
+        { tenantId, user: buildUser(['TENANT_ADMIN']) },
+        {
+          buffer: Buffer.from('xlsx-data'),
+          originalname: 'import.xlsx',
+          mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          size: 9,
+        } as UploadableSpreadsheetFile,
+      ),
+    ).rejects.toThrow('storage timeout');
+
+    expect(prisma.importJob.create).not.toHaveBeenCalled();
+    expect(transactionCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not cache an original provider 5xx as a failed import', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
+    prisma.importJob.findUnique.mockResolvedValue(null);
+    minio.uploadBuffer.mockRejectedValueOnce(new Error('storage 503'));
+
+    await expect(
+      service.previewImport(
+        { tenantId, user: buildUser(['TENANT_ADMIN']) },
+        {
+          buffer: Buffer.from('xlsx-data'),
+          originalname: 'import.xlsx',
+          mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          size: 9,
+        } as UploadableSpreadsheetFile,
+      ),
+    ).rejects.toThrow('storage 503');
+
+    expect(prisma.importJob.create).not.toHaveBeenCalled();
+    expect(transactionCreate).not.toHaveBeenCalled();
+  });
+
+  it('allows a retry after an original upload failure without a cached failed import', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
+    prisma.importJob.findUnique.mockResolvedValue(null);
+    minio.uploadBuffer
+      .mockRejectedValueOnce(new Error('storage timeout'))
+      .mockResolvedValue({ etag: 'etag-1', versionId: 'version-1' });
+
+    const file = {
+      buffer: Buffer.from('xlsx-data'),
+      originalname: 'import.xlsx',
+      mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      size: 9,
+    } as UploadableSpreadsheetFile;
+
+    await expect(
+      service.previewImport(
+        { tenantId, user: buildUser(['TENANT_ADMIN']) },
+        file,
+      ),
+    ).rejects.toThrow('storage timeout');
+
+    expect(prisma.importJob.create).not.toHaveBeenCalled();
+
+    parserService.parseWorkbook.mockReturnValue({ data: buildParsedData(currentPeriod), issues: [] });
+    jest.spyOn(service as any, 'validateWorkbook').mockResolvedValue({
+      summary: createSummary(),
+      issues: [],
+    });
+    transactionCreate.mockResolvedValue({
+      id: 'retried-import',
+      tenantId,
+      type: 'INITIAL_ONBOARDING',
+      fileName: 'import.xlsx',
+      fileHash: 'retry-hash',
+      schemaVersion: 'v1',
+      previewVersion: 4,
+      status: ImportJobStatus.READY,
+      canConfirm: true,
+      expiresAt: new Date(Date.now() + 86_400_000),
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+      summary: createSummary(),
+      counts: createSummary(),
+      issues: [],
+    });
+
+    await expect(
+      service.previewImport(
+        { tenantId, user: buildUser(['TENANT_ADMIN']) },
+        file,
+      ),
+    ).resolves.toMatchObject({ importId: 'retried-import' });
+
+    expect(minio.uploadBuffer).toHaveBeenCalledTimes(3);
+    expect(transactionCreate).toHaveBeenCalledTimes(1);
+  });
+
   it('fails closed when the original upload has no provider version and never deletes by key', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
     prisma.importJob.findUnique.mockResolvedValue(null);
@@ -750,12 +849,8 @@ describe('OnboardingImportsService', () => {
       ),
     ).rejects.toThrow('Storage did not return a version id');
 
-    expect(prisma.importJob.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        previewVersion: 4,
-        originalObjectVersionId: null,
-      }),
-    }));
+    expect(prisma.importJob.create).not.toHaveBeenCalled();
+    expect(transactionCreate).not.toHaveBeenCalled();
     expect(minio.deleteObject).not.toHaveBeenCalled();
   });
 
@@ -810,9 +905,8 @@ describe('OnboardingImportsService', () => {
       ),
     ).rejects.toThrow('Storage did not return a version id');
 
-    expect(prisma.importJob.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ originalObjectVersionId: null }),
-    }));
+    expect(prisma.importJob.create).not.toHaveBeenCalled();
+    expect(transactionCreate).not.toHaveBeenCalled();
     expect(minio.deleteObject).not.toHaveBeenCalled();
   });
 
@@ -879,13 +973,18 @@ describe('OnboardingImportsService', () => {
         originalObjectVersionId: 'version-1',
       }),
     }));
-    expect(minio.deleteObject).not.toHaveBeenCalled();
+    expect(minio.deleteObject).toHaveBeenCalledWith(
+      undefined,
+      expect.stringContaining('/original.xlsx'),
+      'version-1',
+    );
+    expect(minio.deleteObject.mock.calls).toHaveLength(1);
+    expect(transactionCreate).not.toHaveBeenCalled();
   });
 
-  it('does not overwrite a concurrent winner when original VersionId validation fails after the initial lookup', async () => {
+  it('does not cache an original upload without a VersionId after the initial lookup', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: tenantId, currency: 'ARS' });
     prisma.importJob.findUnique.mockResolvedValue(null);
-    prisma.importJob.create.mockRejectedValue(createPrismaKnownError('P2002'));
     minio.uploadBuffer.mockResolvedValue({ etag: 'etag-without-version', versionId: null });
 
     await expect(
@@ -900,12 +999,27 @@ describe('OnboardingImportsService', () => {
       ),
     ).rejects.toThrow('Storage did not return a version id');
 
-    expect(prisma.importJob.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        status: ImportJobStatus.FAILED,
-        originalObjectVersionId: null,
-      }),
-    }));
+    expect(prisma.importJob.create).not.toHaveBeenCalled();
+    expect(transactionCreate).not.toHaveBeenCalled();
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('does not delete by key when failed-job persistence loses a race without a version', async () => {
+    prisma.importJob.create.mockRejectedValue(createPrismaKnownError('P2002'));
+
+    await (service as any).persistFailedImport({
+      tenantId,
+      membershipId: null,
+      importId: 'failed-import',
+      fileName: 'import.xlsx',
+      fileSize: 9,
+      fileHash: 'file-hash',
+      fileMimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      originalObjectKey: 'tenant-imports/tenant-1/failed-import/original.xlsx',
+      originalObjectVersionId: null,
+      error: new Error('parse failed'),
+    });
+
     expect(minio.deleteObject).not.toHaveBeenCalled();
   });
 
