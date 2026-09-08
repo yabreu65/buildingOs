@@ -53,6 +53,31 @@ function hasTenantScopedObjectKey(
   });
 }
 
+function classifyKeyOnlyAttachmentReference(objectKey: NullableString): ClassificationDecision {
+  if (objectKey === null || objectKey === undefined) {
+    return decision('NOT_APPLICABLE', 'NONE');
+  }
+
+  if (classifyValue(objectKey, true) !== 'VALID' || objectKey.includes('\\') || objectKey.startsWith('/')) {
+    return decision('INVALID_REFERENCE', 'NONE');
+  }
+
+  const segments = objectKey.split('/');
+  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+    return decision('INVALID_REFERENCE', 'NONE');
+  }
+
+  return decision('KEY_ONLY_UNVERSIONED', 'NONE');
+}
+
+export function classifyExpenseAttachmentReference(objectKey: NullableString): ClassificationDecision {
+  return classifyKeyOnlyAttachmentReference(objectKey);
+}
+
+export function classifyIncomeAttachmentReference(objectKey: NullableString): ClassificationDecision {
+  return classifyKeyOnlyAttachmentReference(objectKey);
+}
+
 export function classifyFileReference(
   tenantId: string,
   bucket: NullableString,

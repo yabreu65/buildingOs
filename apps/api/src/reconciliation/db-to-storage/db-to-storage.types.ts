@@ -7,6 +7,7 @@ export const IDENTITY_CLASSES = [
   'CONTRACT_VIOLATION',
   'INVALID_REFERENCE',
   'NOT_APPLICABLE',
+  'KEY_ONLY_UNVERSIONED',
 ] as const;
 
 export type IdentityClass = (typeof IDENTITY_CLASSES)[number];
@@ -26,6 +27,8 @@ export const REFERENCE_SOURCES = [
   'File',
   'ImportJob.original',
   'ImportJob.normalized',
+  'Expense.attachment',
+  'Income.attachment',
 ] as const;
 
 export type ReferenceSource = (typeof REFERENCE_SOURCES)[number];
@@ -56,6 +59,18 @@ export interface ImportJobReferenceRecord {
   readonly normalizedObjectVersionId: string | null;
 }
 
+export interface ExpenseReferenceRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly attachmentFileKey: string | null;
+}
+
+export interface IncomeReferenceRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly attachmentFileKey: string | null;
+}
+
 export interface DatabaseBatchOptions {
   readonly afterId?: string;
   readonly take: number;
@@ -64,6 +79,8 @@ export interface DatabaseBatchOptions {
 export interface ReadOnlyReconciliationDatabase {
   findFileBatch(options: DatabaseBatchOptions): Promise<readonly FileReferenceRecord[]>;
   findImportJobBatch(options: DatabaseBatchOptions): Promise<readonly ImportJobReferenceRecord[]>;
+  findExpenseBatch(options: DatabaseBatchOptions): Promise<readonly ExpenseReferenceRecord[]>;
+  findIncomeBatch(options: DatabaseBatchOptions): Promise<readonly IncomeReferenceRecord[]>;
 }
 
 export interface StorageStatClient {
@@ -105,6 +122,8 @@ export interface ScanReceipt {
   readonly databaseReferenceCounts: {
     readonly File: number;
     readonly ImportJob: number;
+    readonly Expense: number;
+    readonly Income: number;
     readonly totalDatabaseRows: number;
     readonly totalReferences: number;
   };

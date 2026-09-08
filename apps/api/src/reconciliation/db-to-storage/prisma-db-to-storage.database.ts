@@ -1,7 +1,9 @@
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   DatabaseBatchOptions,
+  ExpenseReferenceRecord,
   FileReferenceRecord,
+  IncomeReferenceRecord,
   ImportJobReferenceRecord,
   ReadOnlyReconciliationDatabase,
 } from './db-to-storage.types';
@@ -41,6 +43,36 @@ export class PrismaDbToStorageDatabase implements ReadOnlyReconciliationDatabase
         originalObjectVersionId: true,
         normalizedObjectKey: true,
         normalizedObjectVersionId: true,
+      },
+    });
+
+    return rows;
+  }
+
+  async findExpenseBatch(options: DatabaseBatchOptions): Promise<readonly ExpenseReferenceRecord[]> {
+    const rows = await this.prisma.expense.findMany({
+      where: options.afterId ? { id: { gt: options.afterId } } : undefined,
+      orderBy: { id: 'asc' },
+      take: options.take,
+      select: {
+        id: true,
+        tenantId: true,
+        attachmentFileKey: true,
+      },
+    });
+
+    return rows;
+  }
+
+  async findIncomeBatch(options: DatabaseBatchOptions): Promise<readonly IncomeReferenceRecord[]> {
+    const rows = await this.prisma.income.findMany({
+      where: options.afterId ? { id: { gt: options.afterId } } : undefined,
+      orderBy: { id: 'asc' },
+      take: options.take,
+      select: {
+        id: true,
+        tenantId: true,
+        attachmentFileKey: true,
       },
     });
 

@@ -1,6 +1,8 @@
 import { ImportJobStatus } from '@prisma/client';
 import {
+  classifyExpenseAttachmentReference,
   classifyFileReference,
+  classifyIncomeAttachmentReference,
   classifyImportNormalizedReference,
   classifyImportOriginalReference,
 } from './db-to-storage.classifier';
@@ -47,6 +49,39 @@ describe('DB-to-storage reference classification', () => {
     ])('rejects unsupported or cross-tenant keys without storage access: %s', (objectKey) => {
       expect(classifyFileReference('tenant-a', 'buildingos', objectKey, 'version-1')).toEqual({
         identityClass: 'INVALID_REFERENCE',
+        storageCheck: 'NONE',
+      });
+    });
+  });
+
+  describe.each([
+    ['Expense', classifyExpenseAttachmentReference],
+    ['Income', classifyIncomeAttachmentReference],
+  ])('%s attachment', (_source, classifyAttachmentReference) => {
+    it('classifies a null attachment as not applicable', () => {
+      expect(classifyAttachmentReference(null)).toEqual({
+        identityClass: 'NOT_APPLICABLE',
+        storageCheck: 'NONE',
+      });
+    });
+
+    it('rejects blank attachments without storage access', () => {
+      expect(classifyAttachmentReference('  ')).toEqual({
+        identityClass: 'INVALID_REFERENCE',
+        storageCheck: 'NONE',
+      });
+    });
+
+    it.each(['../attachment.pdf', '/absolute/attachment.pdf', 'attachments//file.pdf', 'bad\u0000key'])('rejects malformed attachments: %s', (objectKey) => {
+      expect(classifyAttachmentReference(objectKey)).toEqual({
+        identityClass: 'INVALID_REFERENCE',
+        storageCheck: 'NONE',
+      });
+    });
+
+    it('classifies a valid key-only attachment without storage access', () => {
+      expect(classifyAttachmentReference('attachments/attachment.pdf')).toEqual({
+        identityClass: 'KEY_ONLY_UNVERSIONED',
         storageCheck: 'NONE',
       });
     });

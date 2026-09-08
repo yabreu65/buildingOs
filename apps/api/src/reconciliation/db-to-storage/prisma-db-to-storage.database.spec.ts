@@ -52,4 +52,34 @@ describe('PrismaDbToStorageDatabase', () => {
       },
     });
   });
+
+  it.each([
+    ['Expense', 'expense', 'expense-1'],
+    ['Income', 'income', 'income-1'],
+  ] as const)('uses bounded deterministic %s attachment SELECT batches', async (_label, model, afterId) => {
+    const expenseFindMany = jest.fn().mockResolvedValue([]);
+    const incomeFindMany = jest.fn().mockResolvedValue([]);
+    const prisma = {
+      file: { findMany: jest.fn() },
+      importJob: { findMany: jest.fn() },
+      expense: { findMany: expenseFindMany },
+      income: { findMany: incomeFindMany },
+    } as unknown as PrismaService;
+    const database = new PrismaDbToStorageDatabase(prisma);
+
+    await (model === 'expense'
+      ? database.findExpenseBatch({ afterId, take: 50 })
+      : database.findIncomeBatch({ afterId, take: 50 }));
+
+    expect(model === 'expense' ? expenseFindMany : incomeFindMany).toHaveBeenCalledWith({
+      where: { id: { gt: afterId } },
+      orderBy: { id: 'asc' },
+      take: 50,
+      select: {
+        id: true,
+        tenantId: true,
+        attachmentFileKey: true,
+      },
+    });
+  });
 });

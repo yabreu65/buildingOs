@@ -1,6 +1,8 @@
 import { classifyProviderError, isConclusiveNotFoundError } from './db-to-storage.errors';
 import {
+  classifyExpenseAttachmentReference,
   classifyFileReference,
+  classifyIncomeAttachmentReference,
   classifyImportNormalizedReference,
   classifyImportOriginalReference,
   redactObjectReference,
@@ -8,8 +10,10 @@ import {
 import {
   ClassificationDecision,
   DetailedFinding,
+  ExpenseReferenceRecord,
   FileReferenceRecord,
   IdentityClass,
+  IncomeReferenceRecord,
   ImportJobReferenceRecord,
   ReadOnlyReconciliationDatabase,
   ReferenceSource,
@@ -32,6 +36,7 @@ function createIdentityCounts(): Record<IdentityClass, number> {
     CONTRACT_VIOLATION: 0,
     INVALID_REFERENCE: 0,
     NOT_APPLICABLE: 0,
+    KEY_ONLY_UNVERSIONED: 0,
   };
 }
 
@@ -63,6 +68,8 @@ interface MutableScanState {
   readonly maxFindings: number;
   databaseFileRows: number;
   databaseImportRows: number;
+  databaseExpenseRows: number;
+  databaseIncomeRows: number;
   recordsScanned: number;
   findingsCount: number;
   operationalErrorCount: number;
@@ -76,11 +83,15 @@ function createState(maxFindings: number): MutableScanState {
       File: createSourceCounts(),
       'ImportJob.original': createSourceCounts(),
       'ImportJob.normalized': createSourceCounts(),
+      'Expense.attachment': createSourceCounts(),
+      'Income.attachment': createSourceCounts(),
     },
     detailedFindings: [],
     maxFindings,
     databaseFileRows: 0,
     databaseImportRows: 0,
+    databaseExpenseRows: 0,
+    databaseIncomeRows: 0,
     recordsScanned: 0,
     findingsCount: 0,
     operationalErrorCount: 0,
@@ -128,6 +139,18 @@ export class DbToStorageScanner {
       this.recordDatabaseError(state, 'ImportJob.original', error);
     }
 
+    try {
+      await this.scanExpenses(state);
+    } catch (error) {
+      this.recordDatabaseError(state, 'Expense.attachment', error);
+    }
+
+    try {
+      await this.scanIncomes(state);
+    } catch (error) {
+      this.recordDatabaseError(state, 'Income.attachment', error);
+    }
+
     const completedAt = new Date().toISOString();
     const scanStatus = state.operationalErrorCount > 0
       ? 'INCOMPLETE_OPERATIONAL_ERROR'
@@ -144,7 +167,12 @@ export class DbToStorageScanner {
       databaseReferenceCounts: {
         File: state.databaseFileRows,
         ImportJob: state.databaseImportRows,
-        totalDatabaseRows: state.databaseFileRows + state.databaseImportRows,
+        Expense: state.databaseExpenseRows,
+        Income: state.databaseIncomeRows,
+        totalDatabaseRows: state.databaseFileRows
+          + state.databaseImportRows
+          + state.databaseExpenseRows
+          + state.databaseIncomeRows,
         totalReferences: state.recordsScanned,
       },
       classificationCounts: state.classificationCounts,
@@ -219,6 +247,42 @@ export class DbToStorageScanner {
     );
   }
 
+  private async scanExpenses(state: MutableScanState): Promise<void> {
+    await this.scanBatches(
+      (afterId) => this.database.findExpenseBatch({ afterId, take: this.batchSize }),
+      (row) => {
+        state.databaseExpenseRows += 1;
+        return this.inspectReference(
+          state,
+          'Expense.attachment',
+          row,
+          classifyExpenseAttachmentReference(row.attachmentFileKey),
+          null,
+          row.attachmentFileKey,
+          null,
+        );
+      },
+    );
+  }
+
+  private async scanIncomes(state: MutableScanState): Promise<void> {
+    await this.scanBatches(
+      (afterId) => this.database.findIncomeBatch({ afterId, take: this.batchSize }),
+      (row) => {
+        state.databaseIncomeRows += 1;
+        return this.inspectReference(
+          state,
+          'Income.attachment',
+          row,
+          classifyIncomeAttachmentReference(row.attachmentFileKey),
+          null,
+          row.attachmentFileKey,
+          null,
+        );
+      },
+    );
+  }
+
   private async scanBatches<T extends { id: string }>(
     fetchBatch: (afterId: string | undefined) => Promise<readonly T[]>,
     inspectBatch: (row: T) => Promise<void> | void,
@@ -247,7 +311,7 @@ export class DbToStorageScanner {
   private async inspectReference(
     state: MutableScanState,
     source: ReferenceSource,
-    record: FileReferenceRecord | ImportJobReferenceRecord,
+    record: FileReferenceRecord | ImportJobReferenceRecord | ExpenseReferenceRecord | IncomeReferenceRecord,
     decision: ClassificationDecision,
     bucket: string | null,
     objectKey: string | null,
@@ -308,7 +372,7 @@ export class DbToStorageScanner {
   }
 
   private createFinding(
-    record: FileReferenceRecord | ImportJobReferenceRecord,
+    record: FileReferenceRecord | ImportJobReferenceRecord | ExpenseReferenceRecord | IncomeReferenceRecord,
     source: ReferenceSource,
     bucket: string | null,
     objectKey: string | null,
@@ -318,6 +382,7 @@ export class DbToStorageScanner {
   ): DetailedFinding | null {
     const isLegacy = decision.identityClass === 'LEGACY_OR_UNKNOWN' || decision.identityClass === 'LEGACY_KEY_ONLY';
     const isFinding = isLegacy
+      || decision.identityClass === 'KEY_ONLY_UNVERSIONED'
       || decision.identityClass === 'CONTRACT_VIOLATION'
       || decision.identityClass === 'INVALID_REFERENCE'
       || observation === 'EXACT_MISSING'
