@@ -740,7 +740,7 @@ export class DocumentsService {
       );
     }
 
-    const cleanupIdentity = await this.prisma.$transaction(async (tx): Promise<DocumentStorageCleanupIdentity> => {
+    const cleanupIdentity = await this.prisma.$transaction(async (tx): Promise<DocumentStorageCleanupIdentity | null> => {
       await throwIfPaymentLinkedDocumentIsMutable(tx, tenantId, documentId, document.fileId);
 
       const lockedDocument = await tx.document.findFirst({
@@ -756,9 +756,16 @@ export class DocumentsService {
       }
 
       const lockedFile = lockedDocument.file;
+      const quoteReferenceCount = await tx.quote.count({
+        where: { fileId: lockedDocument.fileId },
+      });
       await tx.document.delete({
         where: { id: documentId },
       });
+
+      if (quoteReferenceCount > 0) {
+        return null;
+      }
 
       await tx.file.delete({
         where: { id: lockedDocument.fileId },
@@ -783,6 +790,10 @@ export class DocumentsService {
         category: document.category,
       },
     });
+
+    if (!cleanupIdentity) {
+      return;
+    }
 
     const objectVersionId = cleanupIdentity.objectVersionId;
     if (typeof objectVersionId !== 'string' || objectVersionId.trim().length === 0) {

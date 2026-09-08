@@ -22,6 +22,8 @@ localDescribe('Documents exact-delete local integration', () => {
   const createdObjectVersions: CreatedObjectVersion[] = [];
   const createdDocumentIds: string[] = [];
   const createdFileIds: string[] = [];
+  const createdQuoteIds: string[] = [];
+  const createdVendorIds: string[] = [];
 
   beforeAll(async () => {
     const config = new ConfigService(loadConfig());
@@ -48,8 +50,10 @@ localDescribe('Documents exact-delete local integration', () => {
       return;
     }
 
+    await prisma.quote.deleteMany({ where: { id: { in: createdQuoteIds } } });
     await prisma.document.deleteMany({ where: { id: { in: createdDocumentIds } } });
     await prisma.file.deleteMany({ where: { id: { in: createdFileIds } } });
+    await prisma.vendor.deleteMany({ where: { id: { in: createdVendorIds } } });
 
     for (const object of createdObjectVersions) {
       try {
@@ -159,6 +163,79 @@ localDescribe('Documents exact-delete local integration', () => {
 
     expect(await prisma.document.findUnique({ where: { id: document.id } })).toBeNull();
     expect(await prisma.file.findUnique({ where: { id: file.id } })).toBeNull();
+    await expectPresentVersion(objectKey, result.versionId, true);
+  });
+
+  it('preserves a shared Quote File and its storage object', async () => {
+    const tenant = await prisma.tenant.findFirst({ select: { id: true } });
+    if (!tenant) {
+      throw new Error('Local integration requires at least one local tenant');
+    }
+    const building = await prisma.building.findFirst({
+      where: { tenantId: tenant.id },
+      select: { id: true },
+    });
+    if (!building) {
+      throw new Error('Local integration requires at least one local building');
+    }
+
+    const objectKey = `tenant-${tenant.id}/documents/${randomUUID()}-shared.pdf`;
+    const result = await storage.uploadBuffer(undefined, objectKey, Buffer.from('shared', 'utf8'));
+    if (!result.versionId) {
+      throw new Error(`Local MinIO did not return a VersionId for ${objectKey}`);
+    }
+    createdObjectVersions.push({ objectKey, versionId: result.versionId });
+
+    const file = await prisma.file.create({
+      data: {
+        tenantId: tenant.id,
+        bucket: storage.getDefaultBucket(),
+        objectKey,
+        objectVersionId: result.versionId,
+        originalName: 'shared.pdf',
+        mimeType: 'application/pdf',
+        size: 6,
+      },
+      select: { id: true },
+    });
+    createdFileIds.push(file.id);
+    const document = await prisma.document.create({
+      data: {
+        tenantId: tenant.id,
+        fileId: file.id,
+        title: 'Shared quote integration document',
+        category: 'OTHER',
+        visibility: 'TENANT_ADMINS',
+      },
+      select: { id: true },
+    });
+    createdDocumentIds.push(document.id);
+    const vendor = await prisma.vendor.create({
+      data: {
+        tenantId: tenant.id,
+        name: `Exact delete integration vendor ${randomUUID()}`,
+      },
+      select: { id: true },
+    });
+    createdVendorIds.push(vendor.id);
+    const quote = await prisma.quote.create({
+      data: {
+        tenantId: tenant.id,
+        buildingId: building.id,
+        vendorId: vendor.id,
+        fileId: file.id,
+        amount: 1,
+      },
+      select: { id: true, fileId: true },
+    });
+    createdQuoteIds.push(quote.id);
+
+    await service.deleteDocument(tenant.id, document.id, 'local-integration-admin', ['TENANT_ADMIN']);
+    await flushStorageCleanup();
+
+    expect(await prisma.document.findUnique({ where: { id: document.id } })).toBeNull();
+    expect(await prisma.file.findUnique({ where: { id: file.id } })).not.toBeNull();
+    expect(await prisma.quote.findUnique({ where: { id: quote.id }, select: { fileId: true } })).toEqual({ fileId: file.id });
     await expectPresentVersion(objectKey, result.versionId, true);
   });
 
