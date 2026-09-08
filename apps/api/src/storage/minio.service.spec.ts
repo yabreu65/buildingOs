@@ -14,6 +14,8 @@ interface ClientMock {
   readonly putObject: jest.Mock;
   readonly presignedPutObject: jest.Mock;
   readonly presignedGetObject: jest.Mock;
+  readonly listObjectsQuery: jest.Mock;
+  readonly listObjects: jest.Mock;
 }
 
 const minioClientConstructor = Minio.Client as unknown as jest.Mock;
@@ -26,6 +28,8 @@ function createClientMock(): ClientMock {
     putObject: jest.fn(),
     presignedPutObject: jest.fn(),
     presignedGetObject: jest.fn(),
+    listObjectsQuery: jest.fn(),
+    listObjects: jest.fn(),
   };
 }
 
@@ -170,6 +174,95 @@ describe('MinioService', () => {
       'tenant-a/proof.pdf',
       { versionId: 'version-1' },
     );
+  });
+
+  it('lists and normalizes a bounded page of object versions with provider markers', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    internalClient.listObjectsQuery.mockResolvedValue({
+      objects: [
+        {
+          name: 'tenant-a/private/current.pdf',
+          versionId: 'current-version-secret',
+          isLatest: true,
+          isDeleteMarker: false,
+          size: 42,
+        },
+        {
+          name: 'tenant-a/private/deleted.pdf',
+          versionId: 'delete-marker-secret',
+          isLatest: 'true',
+          isDeleteMarker: true,
+        },
+      ],
+      isTruncated: true,
+      keyMarker: 'next-key-marker',
+      versionIdMarker: 'next-version-marker',
+    });
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await expect(service.listObjectVersionsPage('buildingos-staging', {
+      prefix: 'tenant-a/',
+      maxKeys: 25,
+      keyMarker: 'key-marker',
+      versionIdMarker: 'version-marker',
+    })).resolves.toEqual({
+      items: [
+        {
+          objectKey: 'tenant-a/private/current.pdf',
+          versionId: 'current-version-secret',
+          isLatest: true,
+          isDeleteMarker: false,
+          size: 42,
+        },
+        {
+          objectKey: 'tenant-a/private/deleted.pdf',
+          versionId: 'delete-marker-secret',
+          isLatest: true,
+          isDeleteMarker: true,
+        },
+      ],
+      isTruncated: true,
+      nextKeyMarker: 'next-key-marker',
+      nextVersionIdMarker: 'next-version-marker',
+    });
+    expect(internalClient.listObjectsQuery).toHaveBeenCalledWith(
+      'buildingos-staging',
+      'tenant-a/',
+      undefined,
+      {
+        Delimiter: '',
+        MaxKeys: 25,
+        IncludeVersion: true,
+        keyMarker: 'key-marker',
+        versionIdMarker: 'version-marker',
+      },
+    );
+    expect(internalClient.listObjects).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed historical entries and never falls back to current-object listing', async () => {
+    const internalClient = createClientMock();
+    const publicClient = createClientMock();
+    internalClient.listObjectsQuery.mockResolvedValue({
+      objects: [{ name: 'private.pdf' }],
+      isTruncated: false,
+    });
+    minioClientConstructor
+      .mockImplementationOnce(() => internalClient)
+      .mockImplementationOnce(() => publicClient);
+
+    const service = new MinioService(createConfig());
+
+    await expect(service.listObjectVersionsPage('buildingos-staging', {
+      prefix: '',
+      maxKeys: 100,
+    })).rejects.toThrow('Historical object listing returned an invalid entry');
+    expect(internalClient.listObjects).not.toHaveBeenCalled();
   });
 
   it('deletes an exact object version when requested', async () => {
