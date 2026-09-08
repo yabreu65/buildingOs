@@ -1,7 +1,9 @@
 import { ImportJobStatus } from '@prisma/client';
 import { DbToStorageScanner } from './db-to-storage.scanner';
 import {
+  ExpenseReferenceRecord,
   FileReferenceRecord,
+  IncomeReferenceRecord,
   ImportJobReferenceRecord,
   ReadOnlyReconciliationDatabase,
   StorageStatClient,
@@ -10,12 +12,18 @@ import {
 function createDatabase(
   files: readonly FileReferenceRecord[],
   importJobs: readonly ImportJobReferenceRecord[],
+  expenses: readonly ExpenseReferenceRecord[] = [],
+  incomes: readonly IncomeReferenceRecord[] = [],
 ): ReadOnlyReconciliationDatabase & {
   readonly fileCalls: jest.Mock;
   readonly importCalls: jest.Mock;
+  readonly expenseCalls: jest.Mock;
+  readonly incomeCalls: jest.Mock;
 } {
   const fileCalls = jest.fn();
   const importCalls = jest.fn();
+  const expenseCalls = jest.fn();
+  const incomeCalls = jest.fn();
   const page = <T extends { id: string }>(
     rows: readonly T[],
     afterId: string | undefined,
@@ -32,12 +40,22 @@ function createDatabase(
   importCalls.mockImplementation(({ afterId, take }: { afterId?: string; take: number }) =>
     Promise.resolve(page(importJobs, afterId, take)),
   );
+  expenseCalls.mockImplementation(({ afterId, take }: { afterId?: string; take: number }) =>
+    Promise.resolve(page(expenses, afterId, take)),
+  );
+  incomeCalls.mockImplementation(({ afterId, take }: { afterId?: string; take: number }) =>
+    Promise.resolve(page(incomes, afterId, take)),
+  );
 
   return {
     findFileBatch: fileCalls,
     findImportJobBatch: importCalls,
+    findExpenseBatch: expenseCalls,
+    findIncomeBatch: incomeCalls,
     fileCalls,
     importCalls,
+    expenseCalls,
+    incomeCalls,
   };
 }
 
@@ -75,6 +93,14 @@ function importJob(id: string, overrides: Partial<ImportJobReferenceRecord> = {}
     normalizedObjectVersionId: null,
     ...overrides,
   };
+}
+
+function expense(id: string, attachmentFileKey: string | null = null): ExpenseReferenceRecord {
+  return { id, tenantId: 'tenant-1', attachmentFileKey };
+}
+
+function income(id: string, attachmentFileKey: string | null = null): IncomeReferenceRecord {
+  return { id, tenantId: 'tenant-1', attachmentFileKey };
 }
 
 describe('DbToStorageScanner', () => {
@@ -282,5 +308,74 @@ describe('DbToStorageScanner', () => {
     expect(receipt.sourceCounts.File.classificationCounts.INVALID_REFERENCE).toBe(3);
     expect(receipt.sourceCounts['ImportJob.original'].classificationCounts.INVALID_REFERENCE).toBe(1);
     expect(receipt.sourceCounts['ImportJob.normalized'].classificationCounts.INVALID_REFERENCE).toBe(1);
+  });
+
+  it('includes Expense and Income key-only findings without storage access', async () => {
+    const database = createDatabase(
+      [file('file-exact')],
+      [importJob('job-legacy', { previewVersion: 3, originalObjectVersionId: null })],
+      [
+        expense('expense-null'),
+        expense('expense-same', 'tenant-tenant-1/expense.pdf'),
+        expense('expense-foreign', 'tenant-tenant-2/expense.pdf'),
+        expense('expense-key', 'receipts/expense.pdf'),
+      ],
+      [
+        income('income-blank', '  '),
+        income('income-same', 'tenant/tenant-1/income.pdf'),
+        income('income-foreign', 'pilot-data-pack/tenant-2/income.pdf'),
+        income('income-key', 'receipts/income.pdf'),
+      ],
+    );
+    const storage = createStorage();
+    storage.statCalls.mockResolvedValue({});
+
+    const receipt = await new DbToStorageScanner(database, storage).scan();
+
+    expect(storage.statCalls).toHaveBeenCalledTimes(2);
+    expect(receipt.classificationCounts).toMatchObject({
+      EXACT_VERSIONED: 1,
+      LEGACY_KEY_ONLY: 1,
+      KEY_ONLY_UNVERSIONED: 4,
+      INVALID_REFERENCE: 3,
+      NOT_APPLICABLE: 1,
+    });
+    expect(receipt.storageObservationCounts.NOT_CHECKED).toBe(9);
+    expect(receipt.sourceCounts['Expense.attachment'].classificationCounts.KEY_ONLY_UNVERSIONED).toBe(2);
+    expect(receipt.sourceCounts['Expense.attachment'].classificationCounts.NOT_APPLICABLE).toBe(1);
+    expect(receipt.sourceCounts['Expense.attachment'].classificationCounts.INVALID_REFERENCE).toBe(1);
+    expect(receipt.sourceCounts['Income.attachment'].classificationCounts.KEY_ONLY_UNVERSIONED).toBe(2);
+    expect(receipt.sourceCounts['Income.attachment'].classificationCounts.INVALID_REFERENCE).toBe(2);
+    expect(receipt.detailedFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: 'Expense.attachment', identityClass: 'KEY_ONLY_UNVERSIONED' }),
+        expect.objectContaining({ source: 'Income.attachment', identityClass: 'KEY_ONLY_UNVERSIONED' }),
+      ]),
+    );
+    expect(receipt.detailedFindings.every((finding) => !finding.objectReference?.includes('expense.pdf'))).toBe(true);
+    expect(receipt.databaseReferenceCounts).toMatchObject({ Expense: 4, Income: 4 });
+    expect(receipt.scanStatus).toBe('COMPLETE_WITH_FINDINGS');
+  });
+
+  it('paginates Expense and Income batches deterministically', async () => {
+    const database = createDatabase(
+      [],
+      [],
+      [expense('expense-a'), expense('expense-b')],
+      [income('income-a'), income('income-b')],
+    );
+    const storage = createStorage();
+
+    const receipt = await new DbToStorageScanner(database, storage, { batchSize: 1 }).scan();
+
+    expect(database.expenseCalls).toHaveBeenNthCalledWith(1, { afterId: undefined, take: 1 });
+    expect(database.expenseCalls).toHaveBeenNthCalledWith(2, { afterId: 'expense-a', take: 1 });
+    expect(database.expenseCalls).toHaveBeenNthCalledWith(3, { afterId: 'expense-b', take: 1 });
+    expect(database.incomeCalls).toHaveBeenNthCalledWith(1, { afterId: undefined, take: 1 });
+    expect(database.incomeCalls).toHaveBeenNthCalledWith(2, { afterId: 'income-a', take: 1 });
+    expect(database.incomeCalls).toHaveBeenNthCalledWith(3, { afterId: 'income-b', take: 1 });
+    expect(receipt.recordsScanned).toBe(4);
+    expect(receipt.databaseReferenceCounts).toMatchObject({ Expense: 2, Income: 2, totalDatabaseRows: 4 });
+    expect(storage.statCalls).not.toHaveBeenCalled();
   });
 });

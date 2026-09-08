@@ -1,6 +1,8 @@
 import { ImportJobStatus } from '@prisma/client';
 import {
+  classifyExpenseAttachmentReference,
   classifyFileReference,
+  classifyIncomeAttachmentReference,
   classifyImportNormalizedReference,
   classifyImportOriginalReference,
 } from './db-to-storage.classifier';
@@ -47,6 +49,63 @@ describe('DB-to-storage reference classification', () => {
     ])('rejects unsupported or cross-tenant keys without storage access: %s', (objectKey) => {
       expect(classifyFileReference('tenant-a', 'buildingos', objectKey, 'version-1')).toEqual({
         identityClass: 'INVALID_REFERENCE',
+        storageCheck: 'NONE',
+      });
+    });
+  });
+
+  describe.each([
+    ['Expense', classifyExpenseAttachmentReference],
+    ['Income', classifyIncomeAttachmentReference],
+  ])('%s attachment', (_source, classifyAttachmentReference) => {
+    it('classifies a null attachment as not applicable', () => {
+      expect(classifyAttachmentReference('tenant-a', null)).toEqual({
+        identityClass: 'NOT_APPLICABLE',
+        storageCheck: 'NONE',
+      });
+    });
+
+    it('rejects blank attachments without storage access', () => {
+      expect(classifyAttachmentReference('tenant-a', '  ')).toEqual({
+        identityClass: 'INVALID_REFERENCE',
+        storageCheck: 'NONE',
+      });
+    });
+
+    it.each(['../attachment.pdf', '/absolute/attachment.pdf', 'attachments//file.pdf', 'bad\u0000key'])('rejects malformed attachments: %s', (objectKey) => {
+      expect(classifyAttachmentReference('tenant-a', objectKey)).toEqual({
+        identityClass: 'INVALID_REFERENCE',
+        storageCheck: 'NONE',
+      });
+    });
+
+    it.each([
+      'tenant-tenant-a/file.pdf',
+      'tenant/tenant-a/file.pdf',
+      'pilot-data-pack/tenant-a/file.pdf',
+      'tenant-imports/tenant-a/file.pdf',
+    ])('classifies a same-tenant known namespace as key-only: %s', (objectKey) => {
+      expect(classifyAttachmentReference('tenant-a', objectKey)).toEqual({
+        identityClass: 'KEY_ONLY_UNVERSIONED',
+        storageCheck: 'NONE',
+      });
+    });
+
+    it.each([
+      'tenant-tenant-b/file.pdf',
+      'tenant/tenant-b/file.pdf',
+      'pilot-data-pack/tenant-b/file.pdf',
+      'tenant-imports/tenant-b/file.pdf',
+    ])('rejects a foreign-tenant known namespace: %s', (objectKey) => {
+      expect(classifyAttachmentReference('tenant-a', objectKey)).toEqual({
+        identityClass: 'INVALID_REFERENCE',
+        storageCheck: 'NONE',
+      });
+    });
+
+    it('keeps an unknown valid namespace key-only', () => {
+      expect(classifyAttachmentReference('tenant-a', 'attachments/attachment.pdf')).toEqual({
+        identityClass: 'KEY_ONLY_UNVERSIONED',
         storageCheck: 'NONE',
       });
     });

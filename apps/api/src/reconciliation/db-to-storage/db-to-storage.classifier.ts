@@ -13,6 +13,12 @@ type ValueState = 'ABSENT' | 'BLANK' | 'VALID' | 'INVALID';
 const FILE_OBJECT_KEY_NAMESPACES = ['tenant-', 'tenant/', 'pilot-data-pack/'] as const;
 const IMPORT_OBJECT_KEY_NAMESPACE = 'tenant-imports/';
 const IMPORT_OBJECT_KEY_NAMESPACES = [IMPORT_OBJECT_KEY_NAMESPACE] as const;
+const RECOGNIZED_TENANT_KEY_NAMESPACES = [
+  'tenant-imports/',
+  'pilot-data-pack/',
+  'tenant/',
+  'tenant-',
+] as const;
 
 function classifyValue(value: NullableString, allowNullishOnly: boolean): ValueState {
   if (value === null || value === undefined) {
@@ -51,6 +57,63 @@ function hasTenantScopedObjectKey(
     const prefix = `${namespace}${tenantId}/`;
     return objectKey.startsWith(prefix) && objectKey.length > prefix.length;
   });
+}
+
+function hasForeignTenantScopedObjectKey(tenantId: NullableString, objectKey: string): boolean {
+  if (classifyValue(tenantId, true) !== 'VALID') {
+    return false;
+  }
+
+  const namespace = RECOGNIZED_TENANT_KEY_NAMESPACES.find((candidate) => objectKey.startsWith(candidate));
+  if (!namespace) {
+    return false;
+  }
+
+  const segments = objectKey.slice(namespace.length).split('/');
+  if (segments.length < 2 || !segments[0] || !segments[1]) {
+    return false;
+  }
+
+  return segments[0] !== tenantId;
+}
+
+function classifyKeyOnlyAttachmentReference(
+  tenantId: NullableString,
+  objectKey: NullableString,
+): ClassificationDecision {
+  if (objectKey === null || objectKey === undefined) {
+    return decision('NOT_APPLICABLE', 'NONE');
+  }
+
+  if (
+    classifyValue(objectKey, true) !== 'VALID'
+    || objectKey.includes('\\')
+    || objectKey.startsWith('/')
+    || hasForeignTenantScopedObjectKey(tenantId, objectKey)
+  ) {
+    return decision('INVALID_REFERENCE', 'NONE');
+  }
+
+  const segments = objectKey.split('/');
+  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+    return decision('INVALID_REFERENCE', 'NONE');
+  }
+
+  return decision('KEY_ONLY_UNVERSIONED', 'NONE');
+}
+
+export function classifyExpenseAttachmentReference(
+  tenantId: string,
+  objectKey: NullableString,
+): ClassificationDecision {
+  return classifyKeyOnlyAttachmentReference(tenantId, objectKey);
+}
+
+export function classifyIncomeAttachmentReference(
+  tenantId: string,
+  objectKey: NullableString,
+): ClassificationDecision {
+  return classifyKeyOnlyAttachmentReference(tenantId, objectKey);
 }
 
 export function classifyFileReference(
