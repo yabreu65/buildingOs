@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Logger,
   NotFoundException,
   PayloadTooLargeException,
 } from '@nestjs/common';
@@ -58,10 +59,14 @@ describe('DocumentsService', () => {
     file: {
       findFirst: jest.fn(),
       create: jest.fn(),
+      delete: jest.fn(),
     },
     payment: {
       findFirst: jest.fn(),
       findMany: jest.fn(),
+    },
+    quote: {
+      count: jest.fn(),
     },
     tenant: {
       findUnique: jest.fn(),
@@ -115,6 +120,29 @@ describe('DocumentsService', () => {
     checksum: 'checksum-123',
   };
 
+  const documentForDeletion = (objectVersionId: string | null | undefined) => ({
+    id: 'document-delete',
+    fileId: 'file-delete',
+    tenantId: 'tenant-1',
+    buildingId: 'building-1',
+    unitId: 'unit-1',
+    visibility: 'RESIDENTS',
+    title: 'Receipt',
+    category: 'RECEIPT',
+    createdByMembership: {
+      id: 'membership-1',
+      userId: 'user-1',
+    },
+    file: {
+      id: 'file-delete',
+      bucket: 'buildingos',
+      objectKey: 'tenant-tenant-1/documents/file.pdf',
+      objectVersionId,
+      originalName: 'file.pdf',
+      mimeType: 'application/pdf',
+    },
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     minio.getDefaultBucket.mockReturnValue(DEFAULT_BUCKET);
@@ -124,6 +152,7 @@ describe('DocumentsService', () => {
         file: prisma.file,
         document: prisma.document,
         payment: prisma.payment,
+        quote: prisma.quote,
         $queryRaw: transactionQueryRawMock,
       } as never;
 
@@ -138,6 +167,7 @@ describe('DocumentsService', () => {
     minio.isNotFoundError.mockReturnValue(false);
     prisma.file.findFirst.mockResolvedValue(null);
     prisma.payment.findMany.mockResolvedValue([]);
+    prisma.quote.count.mockResolvedValue(0);
     prisma.unitOccupant.findMany.mockResolvedValue([]);
     prisma.document.findFirst.mockResolvedValue({
       id: 'document-1',
@@ -577,29 +607,108 @@ describe('DocumentsService', () => {
     expect(notifications.createNotification).not.toHaveBeenCalled();
   });
 
-  it('deletes unlinked documents normally', async () => {
-    prisma.document.findFirst.mockResolvedValueOnce({
-      id: 'document-delete',
-      fileId: 'file-delete',
-      tenantId: 'tenant-1',
-      buildingId: 'building-1',
-      unitId: 'unit-1',
-      visibility: 'RESIDENTS',
-      title: 'Receipt',
-      category: 'RECEIPT',
-      createdByMembership: {
-        id: 'membership-1',
-        userId: 'user-1',
-      },
-      file: { bucket: 'tenant-delete-bucket', objectKey: 'receipt.pdf', originalName: 'receipt.pdf', mimeType: 'application/pdf' },
-    } as never);
+  it('deletes the Document and File, then removes the exact storage version', async () => {
+    const document = documentForDeletion('version-1');
+    prisma.document.findFirst.mockResolvedValueOnce(document as never).mockResolvedValueOnce(document as never);
     prisma.document.delete.mockResolvedValueOnce({} as never);
+    prisma.file.delete.mockResolvedValueOnce({} as never);
 
     await expect(service.deleteDocument('tenant-1', 'document-delete', 'user-1', ['TENANT_ADMIN'])).resolves.toBeUndefined();
 
     expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
     expect(prisma.document.delete).toHaveBeenCalledWith({ where: { id: 'document-delete' } });
-    expect(minio.deleteObject).toHaveBeenCalledWith('tenant-delete-bucket', 'receipt.pdf');
+    expect(prisma.file.delete).toHaveBeenCalledWith({ where: { id: 'file-delete' } });
+    expect(prisma.document.delete.mock.invocationCallOrder[0]).toBeLessThan(prisma.file.delete.mock.invocationCallOrder[0]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(minio.deleteObject).toHaveBeenCalledWith(
+      'buildingos',
+      'tenant-tenant-1/documents/file.pdf',
+      'version-1',
+    );
+  });
+
+  it('preserves a File shared with a Quote and skips storage cleanup', async () => {
+    const document = documentForDeletion('version-1');
+    const quoteReference = { id: 'quote-1', fileId: 'file-delete' };
+    prisma.document.findFirst.mockResolvedValueOnce(document as never).mockResolvedValueOnce(document as never);
+    prisma.quote.count.mockResolvedValueOnce(1);
+    prisma.document.delete.mockResolvedValueOnce({} as never);
+
+    await expect(service.deleteDocument('tenant-1', 'document-delete', 'user-1', ['TENANT_ADMIN'])).resolves.toBeUndefined();
+
+    expect(prisma.quote.count).toHaveBeenCalledWith({ where: { fileId: 'file-delete' } });
+    expect(prisma.document.delete).toHaveBeenCalledTimes(1);
+    expect(prisma.file.delete).not.toHaveBeenCalled();
+    expect(quoteReference.fileId).toBe('file-delete');
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('preserves a File referenced by multiple Quotes', async () => {
+    const document = documentForDeletion('version-1');
+    const quoteReferences = [
+      { id: 'quote-1', fileId: 'file-delete' },
+      { id: 'quote-2', fileId: 'file-delete' },
+    ];
+    prisma.document.findFirst.mockResolvedValueOnce(document as never).mockResolvedValueOnce(document as never);
+    prisma.quote.count.mockResolvedValueOnce(quoteReferences.length);
+    prisma.document.delete.mockResolvedValueOnce({} as never);
+
+    await expect(service.deleteDocument('tenant-1', 'document-delete', 'user-1', ['TENANT_ADMIN'])).resolves.toBeUndefined();
+
+    expect(prisma.document.delete).toHaveBeenCalledTimes(1);
+    expect(prisma.file.delete).not.toHaveBeenCalled();
+    expect(quoteReferences.every((quote) => quote.fileId === 'file-delete')).toBe(true);
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it.each([null, undefined, '  '])('deletes Document and File but skips storage cleanup without exact version: %s', async (objectVersionId) => {
+    const document = documentForDeletion(objectVersionId);
+    prisma.document.findFirst.mockResolvedValueOnce(document as never).mockResolvedValueOnce(document as never);
+    prisma.document.delete.mockResolvedValueOnce({} as never);
+    prisma.file.delete.mockResolvedValueOnce({} as never);
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+
+    await expect(service.deleteDocument('tenant-1', 'document-delete', 'user-1', ['TENANT_ADMIN'])).resolves.toBeUndefined();
+
+    expect(prisma.document.delete).toHaveBeenCalledTimes(1);
+    expect(prisma.file.delete).toHaveBeenCalledTimes(1);
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('exact object version is unavailable'));
+    warnSpy.mockRestore();
+  });
+
+  it('keeps a completed DB deletion successful when exact storage cleanup fails', async () => {
+    const document = documentForDeletion('version-1');
+    prisma.document.findFirst.mockResolvedValueOnce(document as never).mockResolvedValueOnce(document as never);
+    prisma.document.delete.mockResolvedValueOnce({} as never);
+    prisma.file.delete.mockResolvedValueOnce({} as never);
+    minio.deleteObject.mockRejectedValueOnce(new Error('storage unavailable'));
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+
+    await expect(service.deleteDocument('tenant-1', 'document-delete', 'user-1', ['TENANT_ADMIN'])).resolves.toBeUndefined();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(prisma.document.delete).toHaveBeenCalledTimes(1);
+    expect(prisma.file.delete).toHaveBeenCalledTimes(1);
+    expect(minio.deleteObject).toHaveBeenCalledTimes(1);
+    expect(minio.deleteObject).toHaveBeenCalledWith('buildingos', 'tenant-tenant-1/documents/file.pdf', 'version-1');
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('exact MinIO object buildingos/tenant-tenant-1/documents/file.pdf version version-1'),
+      expect.any(String),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('does not attempt storage cleanup when the DB transaction fails', async () => {
+    const document = documentForDeletion('version-1');
+    prisma.document.findFirst.mockResolvedValueOnce(document as never);
+    prisma.$transaction.mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(service.deleteDocument('tenant-1', 'document-delete', 'user-1', ['TENANT_ADMIN'])).rejects.toThrow('database unavailable');
+
+    expect(prisma.document.delete).not.toHaveBeenCalled();
+    expect(prisma.file.delete).not.toHaveBeenCalled();
+    expect(minio.deleteObject).not.toHaveBeenCalled();
   });
 
   it('blocks document deletes when the file is linked to a payment proof or receipt', async () => {
@@ -634,6 +743,7 @@ describe('DocumentsService', () => {
       select: { id: true },
     }));
     expect(prisma.document.delete).not.toHaveBeenCalled();
+    expect(prisma.file.delete).not.toHaveBeenCalled();
     expect(minio.deleteObject).not.toHaveBeenCalled();
   });
 
@@ -1715,6 +1825,7 @@ describe('DocumentsService', () => {
 
     expect(transactionQueryRawMock).toHaveBeenCalledTimes(1);
     expect(prisma.document.delete).not.toHaveBeenCalled();
+    expect(prisma.file.delete).not.toHaveBeenCalled();
   });
 
   describe('Payment enrichment (functionalType / origin / payment)', () => {

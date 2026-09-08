@@ -88,6 +88,12 @@ type DocumentContentResponse = {
   disposition: 'inline' | 'attachment';
 };
 
+interface DocumentStorageCleanupIdentity {
+  readonly bucket: string;
+  readonly objectKey: string;
+  readonly objectVersionId: string | null;
+}
+
 const ALLOWED_UPLOAD_MIME_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
@@ -130,7 +136,7 @@ const PAYMENT_PROOF_MAX_BYTES = 10 * 1024 * 1024;
  *
  * 6. Client can delete (DELETE /documents/:id)
  *    → Validates creator/admin only
- *    → Deletes Document (cascade → File)
+ *    → Deletes Document and owned File metadata atomically
  *    → Separate async job handles MinIO cleanup
  */
 @Injectable()
@@ -691,8 +697,8 @@ export class DocumentsService {
    * Delete Document
    *
    * Only creator or admin can delete
-   * Document deletion cascades to File deletion
-   * MinIO cleanup should be done asynchronously (separate job)
+   * Deletes Document and owned File metadata in one transaction
+   * MinIO cleanup remains best-effort after the transaction commits
    */
   async deleteDocument(
     tenantId: string,
@@ -734,10 +740,7 @@ export class DocumentsService {
       );
     }
 
-    // Get file info before delete (for MinIO cleanup)
-    const fileInfo = document.file;
-
-    await this.prisma.$transaction(async (tx) => {
+    const cleanupIdentity = await this.prisma.$transaction(async (tx): Promise<DocumentStorageCleanupIdentity | null> => {
       await throwIfPaymentLinkedDocumentIsMutable(tx, tenantId, documentId, document.fileId);
 
       const lockedDocument = await tx.document.findFirst({
@@ -752,10 +755,27 @@ export class DocumentsService {
         throw new NotFoundException('Document not found');
       }
 
-      // Delete Document (cascades to File)
+      const lockedFile = lockedDocument.file;
+      const quoteReferenceCount = await tx.quote.count({
+        where: { fileId: lockedDocument.fileId },
+      });
       await tx.document.delete({
         where: { id: documentId },
       });
+
+      if (quoteReferenceCount > 0) {
+        return null;
+      }
+
+      await tx.file.delete({
+        where: { id: lockedDocument.fileId },
+      });
+
+      return {
+        bucket: lockedFile.bucket,
+        objectKey: lockedFile.objectKey,
+        objectVersionId: lockedFile.objectVersionId,
+      };
     });
 
     // [PHASE 2 QUICK #7] Audit: DOCUMENT_DELETE
@@ -771,16 +791,31 @@ export class DocumentsService {
       },
     });
 
-    // Delete file from MinIO asynchronously (fire-and-forget)
-    // Don't await or throw if it fails - document is already deleted
-    void Promise.resolve(
-      this.minio.deleteObject(fileInfo.bucket, fileInfo.objectKey),
-    ).catch((error) => {
-      this.logger.error(
-        `Failed to delete file from MinIO: ${fileInfo.bucket}/${fileInfo.objectKey}`,
-        error,
+    if (!cleanupIdentity) {
+      return;
+    }
+
+    const objectVersionId = cleanupIdentity.objectVersionId;
+    if (typeof objectVersionId !== 'string' || objectVersionId.trim().length === 0) {
+      this.logger.warn(
+        `Skipped MinIO cleanup for ${cleanupIdentity.bucket}/${cleanupIdentity.objectKey}: exact object version is unavailable`,
       );
-    });
+      return;
+    }
+
+    // Cleanup is deliberately best-effort after the DB transaction commits.
+    void Promise.resolve()
+      .then(() => this.minio.deleteObject(
+        cleanupIdentity.bucket,
+        cleanupIdentity.objectKey,
+        objectVersionId,
+      ))
+      .catch((error: unknown) => {
+        this.logger.error(
+          `Failed to delete exact MinIO object ${cleanupIdentity.bucket}/${cleanupIdentity.objectKey} version ${objectVersionId}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      });
   }
 
   /**
