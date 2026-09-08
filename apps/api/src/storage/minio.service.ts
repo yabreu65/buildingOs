@@ -23,6 +23,43 @@ export interface MinioUploadResult {
   readonly versionId: string | null;
 }
 
+export interface MinioHistoricalObjectVersion {
+  readonly objectKey: string;
+  readonly versionId: string;
+  readonly isLatest: boolean;
+  readonly isDeleteMarker: boolean;
+  readonly size?: number;
+}
+
+export interface MinioHistoricalListingOptions {
+  readonly prefix: string;
+  readonly maxKeys: number;
+  readonly keyMarker?: string;
+  readonly versionIdMarker?: string;
+}
+
+export interface MinioHistoricalObjectVersionPage {
+  readonly items: readonly MinioHistoricalObjectVersion[];
+  readonly isTruncated: boolean;
+  readonly nextKeyMarker?: string;
+  readonly nextVersionIdMarker?: string;
+}
+
+interface HistoricalObjectEntryLike {
+  readonly name?: unknown;
+  readonly versionId?: unknown;
+  readonly isLatest?: unknown;
+  readonly isDeleteMarker?: unknown;
+  readonly size?: unknown;
+}
+
+interface HistoricalListingResultLike {
+  readonly objects?: unknown;
+  readonly isTruncated?: unknown;
+  readonly keyMarker?: unknown;
+  readonly versionIdMarker?: unknown;
+}
+
 /**
  * MinIO Service: Wrapper around Minio SDK for presigned URLs and object operations
  *
@@ -311,6 +348,95 @@ export class MinioService {
       );
       throw error;
     }
+  }
+
+  /**
+   * List one bounded provider page including current versions, noncurrent
+   * versions, and delete markers. This method never falls back to the
+   * current-object-only listing API.
+   */
+  async listObjectVersionsPage(
+    bucketName: string = this.bucket,
+    options: MinioHistoricalListingOptions,
+  ): Promise<MinioHistoricalObjectVersionPage> {
+    if (!Number.isInteger(options.maxKeys) || options.maxKeys < 1 || options.maxKeys > 1000) {
+      throw new Error('Historical listing maxKeys must be an integer between 1 and 1000');
+    }
+
+    try {
+      const rawResult: unknown = await this.minioClient.listObjectsQuery(
+        bucketName,
+        options.prefix,
+        undefined,
+        {
+          Delimiter: '',
+          MaxKeys: options.maxKeys,
+          IncludeVersion: true,
+          ...(options.keyMarker ? { keyMarker: options.keyMarker } : {}),
+          ...(options.versionIdMarker ? { versionIdMarker: options.versionIdMarker } : {}),
+        },
+      );
+      const result = this.normalizeHistoricalListingResult(rawResult);
+      return result;
+    } catch (error: unknown) {
+      this.logger.error('Failed to list historical object inventory');
+      throw error;
+    }
+  }
+
+  private normalizeHistoricalListingResult(rawResult: unknown): MinioHistoricalObjectVersionPage {
+    if (typeof rawResult !== 'object' || rawResult === null) {
+      throw new Error('Historical object listing returned an invalid page');
+    }
+
+    const result = rawResult as HistoricalListingResultLike;
+    const rawObjects = result.objects ?? [];
+    if (!Array.isArray(rawObjects)) {
+      throw new Error('Historical object listing returned an invalid page');
+    }
+
+    const items = rawObjects.map((rawEntry): MinioHistoricalObjectVersion => {
+      if (typeof rawEntry !== 'object' || rawEntry === null) {
+        throw new Error('Historical object listing returned an invalid entry');
+      }
+
+      const entry = rawEntry as HistoricalObjectEntryLike;
+      if (
+        typeof entry.name !== 'string'
+        || entry.name.length === 0
+        || typeof entry.versionId !== 'string'
+        || entry.versionId.length === 0
+      ) {
+        throw new Error('Historical object listing returned an invalid entry');
+      }
+
+      const size = typeof entry.size === 'number' && Number.isFinite(entry.size) && entry.size >= 0
+        ? entry.size
+        : undefined;
+
+      return {
+        objectKey: entry.name,
+        versionId: entry.versionId,
+        isLatest: entry.isLatest === true || entry.isLatest === 'true',
+        isDeleteMarker: entry.isDeleteMarker === true || entry.isDeleteMarker === 'true',
+        ...(size !== undefined ? { size } : {}),
+      };
+    });
+
+    const isTruncated = result.isTruncated === true || result.isTruncated === 'true';
+    const nextKeyMarker = typeof result.keyMarker === 'string' && result.keyMarker.length > 0
+      ? result.keyMarker
+      : undefined;
+    const nextVersionIdMarker = typeof result.versionIdMarker === 'string' && result.versionIdMarker.length > 0
+      ? result.versionIdMarker
+      : undefined;
+
+    return {
+      items,
+      isTruncated,
+      ...(nextKeyMarker ? { nextKeyMarker } : {}),
+      ...(nextVersionIdMarker ? { nextVersionIdMarker } : {}),
+    };
   }
 
   /**
