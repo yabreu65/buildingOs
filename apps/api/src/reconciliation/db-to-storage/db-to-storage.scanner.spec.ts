@@ -314,8 +314,18 @@ describe('DbToStorageScanner', () => {
     const database = createDatabase(
       [file('file-exact')],
       [importJob('job-legacy', { previewVersion: 3, originalObjectVersionId: null })],
-      [expense('expense-null'), expense('expense-key', 'receipts/expense.pdf')],
-      [income('income-blank', '  '), income('income-key', 'receipts/income.pdf')],
+      [
+        expense('expense-null'),
+        expense('expense-same', 'tenant-tenant-1/expense.pdf'),
+        expense('expense-foreign', 'tenant-tenant-2/expense.pdf'),
+        expense('expense-key', 'receipts/expense.pdf'),
+      ],
+      [
+        income('income-blank', '  '),
+        income('income-same', 'tenant/tenant-1/income.pdf'),
+        income('income-foreign', 'pilot-data-pack/tenant-2/income.pdf'),
+        income('income-key', 'receipts/income.pdf'),
+      ],
     );
     const storage = createStorage();
     storage.statCalls.mockResolvedValue({});
@@ -326,15 +336,16 @@ describe('DbToStorageScanner', () => {
     expect(receipt.classificationCounts).toMatchObject({
       EXACT_VERSIONED: 1,
       LEGACY_KEY_ONLY: 1,
-      KEY_ONLY_UNVERSIONED: 2,
-      INVALID_REFERENCE: 1,
+      KEY_ONLY_UNVERSIONED: 4,
+      INVALID_REFERENCE: 3,
       NOT_APPLICABLE: 1,
     });
-    expect(receipt.storageObservationCounts.NOT_CHECKED).toBe(5);
-    expect(receipt.sourceCounts['Expense.attachment'].classificationCounts.KEY_ONLY_UNVERSIONED).toBe(1);
+    expect(receipt.storageObservationCounts.NOT_CHECKED).toBe(9);
+    expect(receipt.sourceCounts['Expense.attachment'].classificationCounts.KEY_ONLY_UNVERSIONED).toBe(2);
     expect(receipt.sourceCounts['Expense.attachment'].classificationCounts.NOT_APPLICABLE).toBe(1);
-    expect(receipt.sourceCounts['Income.attachment'].classificationCounts.KEY_ONLY_UNVERSIONED).toBe(1);
-    expect(receipt.sourceCounts['Income.attachment'].classificationCounts.INVALID_REFERENCE).toBe(1);
+    expect(receipt.sourceCounts['Expense.attachment'].classificationCounts.INVALID_REFERENCE).toBe(1);
+    expect(receipt.sourceCounts['Income.attachment'].classificationCounts.KEY_ONLY_UNVERSIONED).toBe(2);
+    expect(receipt.sourceCounts['Income.attachment'].classificationCounts.INVALID_REFERENCE).toBe(2);
     expect(receipt.detailedFindings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ source: 'Expense.attachment', identityClass: 'KEY_ONLY_UNVERSIONED' }),
@@ -342,7 +353,7 @@ describe('DbToStorageScanner', () => {
       ]),
     );
     expect(receipt.detailedFindings.every((finding) => !finding.objectReference?.includes('expense.pdf'))).toBe(true);
-    expect(receipt.databaseReferenceCounts).toMatchObject({ Expense: 2, Income: 2 });
+    expect(receipt.databaseReferenceCounts).toMatchObject({ Expense: 4, Income: 4 });
     expect(receipt.scanStatus).toBe('COMPLETE_WITH_FINDINGS');
   });
 
