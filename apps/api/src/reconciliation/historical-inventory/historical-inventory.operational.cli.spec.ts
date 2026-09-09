@@ -119,6 +119,23 @@ describe('reconciliation-historical-inventory-operational CLI', () => {
     expect(output).not.toContain('secret');
   });
 
+  it('reports cleanup failures without rejecting or exposing provider secrets', async () => {
+    mockedPrismaService.mockImplementation(() => ({
+      $connect: jest.fn().mockResolvedValue(undefined),
+      $disconnect: jest.fn().mockRejectedValue(new Error('postgresql://user:SUPER_SECRET@example/db password=SUPER_SECRET')),
+    } as unknown as PrismaService));
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    await expect(runOperationalCli([])).resolves.toBe(2);
+
+    const output = stderr.mock.calls.map(([message]) => String(message)).join('');
+    expect(output).toBe('Operational historical inventory failed [CLEANUP]\n');
+    expect(output).not.toContain('SUPER_SECRET');
+    expect(output).not.toContain('postgresql://');
+    expect(output).not.toContain('password=');
+    expect(output).not.toContain('stack trace');
+  });
+
   it('formats unknown failures without exposing synthetic provider secrets', () => {
     const syntheticError = new Error('postgresql://user:SUPER_SECRET@example/db S3_SECRET_KEY=SUPER_SECRET');
     const output = formatOperationalFailure(OperationalFailureCategory.UNKNOWN);

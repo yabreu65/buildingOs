@@ -132,7 +132,11 @@ export async function runOperationalCli(argv: readonly string[] = process.argv.s
   } catch (_error: unknown) {
     return reportOperationalFailure(OperationalFailureCategory.SCANNER);
   } finally {
-    await prisma.$disconnect();
+    try {
+      await prisma.$disconnect();
+    } catch (_error: unknown) {
+      return reportOperationalFailure(OperationalFailureCategory.CLEANUP);
+    }
   }
 }
 
