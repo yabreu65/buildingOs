@@ -1,15 +1,17 @@
-import { loadConfig } from '../src/config/config';
-import { ConfigService } from '../src/config/config.service';
-import { PrismaService } from '../src/prisma/prisma.service';
-import { PrismaDbToStorageDatabase } from '../src/reconciliation/db-to-storage/prisma-db-to-storage.database';
-import { HistoricalInventoryScanner } from '../src/reconciliation/historical-inventory/historical-inventory.scanner';
-import { MinioService } from '../src/storage/minio.service';
+import { loadConfig } from '../../config/config';
+import { ConfigService } from '../../config/config.service';
+import { PrismaService } from '../../prisma/prisma.service';
+import { MinioService } from '../../storage/minio.service';
+import { PrismaDbToStorageDatabase } from '../db-to-storage/prisma-db-to-storage.database';
+import { HistoricalInventoryScanner } from './historical-inventory.scanner';
 import {
   conciseHistoricalSummary,
-  HistoricalInventoryCliOptions,
+  exitCodeForStatus,
+  HistoricalInventoryCliUsageError,
   parseHistoricalInventoryCliArgs,
   writeHistoricalInventoryReceiptFile,
-} from './reconciliation-historical-inventory';
+} from './historical-inventory.operational.shared';
+import type { HistoricalInventoryCliOptions } from './historical-inventory.operational.shared';
 
 export const OPERATIONAL_STAGING_CONFIRMATION_VARIABLE = 'HISTORICAL_INVENTORY_OPERATIONAL_STAGING_CONFIRMATION';
 export const OPERATIONAL_STAGING_CONFIRMATION_TOKEN = 'HISTORICAL-INVENTORY-STAGING-READ-ONLY';
@@ -23,9 +25,20 @@ export interface OperationalEnvironment {
   readonly HISTORICAL_INVENTORY_OPERATIONAL_PRODUCTION_CONFIRMATION?: string;
 }
 
+export enum OperationalFailureCategory {
+  CONFIG = 'CONFIG',
+  AUTHORIZATION = 'AUTHORIZATION',
+  DB_CONNECT = 'DB_CONNECT',
+  STORAGE_CONNECT = 'STORAGE_CONNECT',
+  SCANNER = 'SCANNER',
+  RECEIPT_WRITE = 'RECEIPT_WRITE',
+  CLEANUP = 'CLEANUP',
+  UNKNOWN = 'UNKNOWN',
+}
+
 /**
- * Requires the runtime NODE_ENV and its environment-specific acknowledgement
- * before the operational entrypoint can create any provider clients.
+ * Requires the actual runtime NODE_ENV and its environment-specific explicit
+ * acknowledgement before the CLI creates database or storage providers.
  */
 export function assertOperationalNodeEnvironment(
   nodeEnv: string,
@@ -52,12 +65,25 @@ export function assertOperationalNodeEnvironment(
   throw new Error('Operational historical inventory is restricted to staging or production');
 }
 
+export function formatOperationalFailure(category: OperationalFailureCategory): string {
+  return `Operational historical inventory failed [${category}]\n`;
+}
+
+function reportOperationalFailure(category: OperationalFailureCategory): 2 {
+  process.stderr.write(formatOperationalFailure(category));
+  return 2;
+}
+
+/**
+ * Runs the operational scanner from compiled application source. The gate is
+ * evaluated before creating database or object-storage provider clients.
+ */
 export async function runOperationalCli(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   let options: HistoricalInventoryCliOptions | null;
   try {
-    options = parseHistoricalInventoryCliArgs(argv, 'reconciliation-historical-inventory-operational');
+    options = parseHistoricalInventoryCliArgs(argv, 'historical-inventory-operational');
   } catch (error: unknown) {
-    process.stderr.write(`${error instanceof Error ? error.message : 'Invalid CLI arguments'}\n`);
+    process.stderr.write(`${error instanceof HistoricalInventoryCliUsageError ? error.message : 'Invalid CLI arguments'}\n`);
     return 64;
   }
 
@@ -65,13 +91,28 @@ export async function runOperationalCli(argv: readonly string[] = process.argv.s
     return 0;
   }
 
-  let prisma: PrismaService | undefined;
+  let config: ConfigService;
   try {
-    const config = new ConfigService(loadConfig());
+    config = new ConfigService(loadConfig());
+  } catch (_error: unknown) {
+    return reportOperationalFailure(OperationalFailureCategory.CONFIG);
+  }
+
+  try {
     assertOperationalNodeEnvironment(config.getValue('nodeEnv'));
+  } catch (_error: unknown) {
+    return reportOperationalFailure(OperationalFailureCategory.AUTHORIZATION);
+  }
+
+  let prisma: PrismaService;
+  try {
     prisma = new PrismaService();
     await prisma.$connect();
+  } catch (_error: unknown) {
+    return reportOperationalFailure(OperationalFailureCategory.DB_CONNECT);
+  }
 
+  try {
     const receipt = await new HistoricalInventoryScanner(
       new PrismaDbToStorageDatabase(prisma),
       new MinioService(config),
@@ -79,17 +120,19 @@ export async function runOperationalCli(argv: readonly string[] = process.argv.s
     ).scan();
 
     if (options.outputPath) {
-      await writeHistoricalInventoryReceiptFile(options.outputPath, receipt);
+      try {
+        await writeHistoricalInventoryReceiptFile(options.outputPath, receipt);
+      } catch (_error: unknown) {
+        return reportOperationalFailure(OperationalFailureCategory.RECEIPT_WRITE);
+      }
     }
+
     process.stdout.write(`${JSON.stringify(conciseHistoricalSummary(receipt))}\n`);
-    return receipt.scanStatus === 'INCOMPLETE_OPERATIONAL_ERROR' ? 2 : 0;
+    return exitCodeForStatus(receipt.scanStatus);
   } catch (_error: unknown) {
-    process.stderr.write('Operational historical inventory execution failed\n');
-    return 2;
+    return reportOperationalFailure(OperationalFailureCategory.SCANNER);
   } finally {
-    if (prisma) {
-      await prisma.$disconnect();
-    }
+    await prisma.$disconnect();
   }
 }
 
