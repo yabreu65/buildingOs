@@ -1,4 +1,4 @@
-import { loadConfig } from '../../config/config';
+import { loadConfigOrThrow } from '../../config/config';
 import { ConfigService } from '../../config/config.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MinioService } from '../../storage/minio.service';
@@ -93,7 +93,7 @@ export async function runOperationalCli(argv: readonly string[] = process.argv.s
 
   let config: ConfigService;
   try {
-    config = new ConfigService(loadConfig());
+    config = new ConfigService(loadConfigOrThrow());
   } catch (_error: unknown) {
     return reportOperationalFailure(OperationalFailureCategory.CONFIG);
   }

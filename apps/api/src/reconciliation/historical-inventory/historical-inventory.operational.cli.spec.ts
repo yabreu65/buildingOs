@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AppConfig } from '../../config/config.types';
-import { loadConfig } from '../../config/config';
+import { loadConfigOrThrow } from '../../config/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { HistoricalInventoryScanner } from './historical-inventory.scanner';
 import { HistoricalInventoryReceipt } from './historical-inventory.types';
@@ -17,12 +17,12 @@ import {
 } from './historical-inventory.operational';
 import { MinioService } from '../../storage/minio.service';
 
-jest.mock('../../config/config', () => ({ loadConfig: jest.fn() }));
+jest.mock('../../config/config', () => ({ loadConfigOrThrow: jest.fn() }));
 jest.mock('../../prisma/prisma.service', () => ({ PrismaService: jest.fn() }));
 jest.mock('../../storage/minio.service', () => ({ MinioService: jest.fn() }));
 jest.mock('./historical-inventory.scanner', () => ({ HistoricalInventoryScanner: jest.fn() }));
 
-const mockedLoadConfig = loadConfig as jest.MockedFunction<typeof loadConfig>;
+const mockedLoadConfig = loadConfigOrThrow as jest.MockedFunction<typeof loadConfigOrThrow>;
 const mockedPrismaService = PrismaService as jest.MockedClass<typeof PrismaService>;
 const mockedMinioService = MinioService as jest.MockedClass<typeof MinioService>;
 const mockedScanner = HistoricalInventoryScanner as jest.MockedClass<typeof HistoricalInventoryScanner>;

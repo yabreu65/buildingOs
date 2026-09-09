@@ -43,6 +43,9 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Audit confirmation is intentionally not persisted: inject it only for a one-shot run.
+  # Normal and audit-profile rendering must not require it:
+  # docker compose --profile audit run --rm -e HISTORICAL_INVENTORY_OPERATIONAL_PRODUCTION_CONFIRMATION=<confirmation> api-historical-inventory-audit
   api-historical-inventory-audit:
     profiles: ["audit"]
     image: buildingos-api:${IMAGE_TAG:?IMAGE_TAG is required}

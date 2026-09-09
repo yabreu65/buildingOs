@@ -3,7 +3,7 @@
  * Task 1.2: Config validation for payment, email, and AI provider env vars
  */
 
-import { createConfigSchema } from './config';
+import { createConfigSchema, loadConfig, loadConfigOrThrow } from './config';
 
 describe('Production Readiness Config Validation', () => {
   const baseEnv: Record<string, string> = {
@@ -31,6 +31,44 @@ describe('Production Readiness Config Validation', () => {
     FEATURE_PORTAL_RESIDENT: 'true',
     FEATURE_PAYMENTS_MVP: 'true',
   };
+
+  describe('non-terminating operational configuration loading', () => {
+    const originalEnvironment = process.env;
+
+    beforeEach(() => {
+      process.env = { ...baseEnv, NODE_ENV: 'staging', JWT_SECRET: 'a'.repeat(64) };
+    });
+
+    afterEach(() => {
+      process.env = originalEnvironment;
+      jest.restoreAllMocks();
+    });
+
+    it('throws for real schema failures without terminating the process', () => {
+      process.env = {
+        ...process.env,
+        DATABASE_URL: 'postgresql://audit-user:VERY_SECRET_PASSWORD@db.example.test:5432/audit',
+        S3_SECRET_KEY: 'VERY_SECRET_S3_KEY',
+      };
+      delete process.env.WEB_ORIGIN;
+
+      expect(() => loadConfigOrThrow()).toThrow();
+    });
+
+    it('throws for real staging conditional failures without terminating the process', () => {
+      process.env = { ...process.env, JWT_SECRET: 'a'.repeat(40) };
+
+      expect(() => loadConfigOrThrow()).toThrow('Configuration validation failed');
+    });
+
+    it('preserves normal startup termination for invalid configuration', () => {
+      delete process.env.WEB_ORIGIN;
+      const exit = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+      expect(() => loadConfig()).toThrow();
+      expect(exit).toHaveBeenCalledWith(1);
+    });
+  });
 
   describe('NODE_ENV env var', () => {
     it('requires NODE_ENV to be explicitly provided', () => {
