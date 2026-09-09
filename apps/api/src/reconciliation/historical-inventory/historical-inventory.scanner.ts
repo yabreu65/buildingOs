@@ -25,6 +25,7 @@ import {
   HistoricalInventoryScannerOptions,
   HistoricalInventoryStorage,
   HistoricalObjectVersion,
+  HistoricalObjectVersionPage,
   HistoricalReferenceOutcome,
   HistoricalStorageOutcome,
 } from './historical-inventory.types';
@@ -39,6 +40,21 @@ interface ValidatedReference {
   readonly bucket: string;
   readonly objectKey: string;
   readonly versionId?: string;
+}
+
+interface HistoricalObjectVersionPageLike {
+  readonly items?: unknown;
+  readonly isTruncated?: unknown;
+  readonly nextKeyMarker?: unknown;
+  readonly nextVersionIdMarker?: unknown;
+}
+
+interface HistoricalObjectVersionLike {
+  readonly objectKey?: unknown;
+  readonly versionId?: unknown;
+  readonly isLatest?: unknown;
+  readonly isDeleteMarker?: unknown;
+  readonly size?: unknown;
 }
 
 interface MutableState {
@@ -136,6 +152,38 @@ function isCrossTenantReference(tenantId: string, key: string | null): boolean {
 
   const keyTenant = tenantFromRecognizedKey(key);
   return keyTenant !== undefined && keyTenant !== tenantId;
+}
+
+function isHistoricalObjectVersionShape(value: unknown): value is HistoricalObjectVersion {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const entry = value as HistoricalObjectVersionLike;
+  return typeof entry.objectKey === 'string'
+    && entry.objectKey.trim().length > 0
+    && typeof entry.versionId === 'string'
+    && entry.versionId.trim().length > 0
+    && typeof entry.isLatest === 'boolean'
+    && typeof entry.isDeleteMarker === 'boolean'
+    && (entry.size === undefined || typeof entry.size === 'number' && Number.isFinite(entry.size) && entry.size >= 0);
+}
+
+function isHistoricalObjectVersionPage(
+  value: unknown,
+  maximumEntries: number,
+): value is HistoricalObjectVersionPage {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const page = value as HistoricalObjectVersionPageLike;
+  return Array.isArray(page.items)
+    && page.items.length <= maximumEntries
+    && page.items.every(isHistoricalObjectVersionShape)
+    && typeof page.isTruncated === 'boolean'
+    && (page.nextKeyMarker === undefined || typeof page.nextKeyMarker === 'string')
+    && (page.nextVersionIdMarker === undefined || typeof page.nextVersionIdMarker === 'string');
 }
 
 function normalizeInteger(
@@ -428,7 +476,8 @@ export class HistoricalInventoryScanner {
     const buckets = [...state.buckets].sort();
     for (const bucket of buckets) {
       try {
-        await this.scanStorageBucket(state, bucket);
+        const entries = await this.scanStorageBucket(bucket);
+        entries.forEach((entry) => this.inspectStorageEntry(state, bucket, entry));
         state.successfullyListedBuckets.add(bucket);
       } catch (error: unknown) {
         this.recordOperationalError(state, 'STORAGE', error);
@@ -436,7 +485,8 @@ export class HistoricalInventoryScanner {
     }
   }
 
-  private async scanStorageBucket(state: MutableState, bucket: string): Promise<void> {
+  private async scanStorageBucket(bucket: string): Promise<HistoricalObjectVersion[]> {
+    const entries: HistoricalObjectVersion[] = [];
     let keyMarker: string | undefined;
     let versionIdMarker: string | undefined;
 
@@ -447,10 +497,13 @@ export class HistoricalInventoryScanner {
         ...(keyMarker ? { keyMarker } : {}),
         ...(versionIdMarker ? { versionIdMarker } : {}),
       });
+      if (!isHistoricalObjectVersionPage(page, this.storagePageSize)) {
+        throw new Error('Historical storage listing returned an invalid page');
+      }
 
-      page.items.forEach((entry) => this.inspectStorageEntry(state, bucket, entry));
+      entries.push(...page.items);
       if (!page.isTruncated) {
-        return;
+        return entries;
       }
 
       const nextKeyMarker = page.nextKeyMarker;
@@ -501,6 +554,10 @@ export class HistoricalInventoryScanner {
   }
 
   private finishExactReferenceCorrelation(state: MutableState): void {
+    if (!state.databaseComplete) {
+      return;
+    }
+
     for (const reference of state.exactReferences) {
       if (!state.successfullyListedBuckets.has(reference.bucket)) {
         continue;
