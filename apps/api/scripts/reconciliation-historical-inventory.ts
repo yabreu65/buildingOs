@@ -10,7 +10,7 @@ import {
 } from '../src/reconciliation/historical-inventory/historical-inventory.types';
 import { MinioService } from '../src/storage/minio.service';
 
-interface CliOptions {
+export interface HistoricalInventoryCliOptions {
   readonly databaseBatchSize: number;
   readonly storagePageSize: number;
   readonly maxFindings: number;
@@ -28,7 +28,10 @@ function parseInteger(value: string, optionName: string, minimum: number, maximu
   return parsed;
 }
 
-function parseArgs(argv: readonly string[]): CliOptions | null {
+export function parseHistoricalInventoryCliArgs(
+  argv: readonly string[],
+  executableName = 'reconciliation-historical-inventory',
+): HistoricalInventoryCliOptions | null {
   let databaseBatchSize = 100;
   let storagePageSize = 100;
   let maxFindings = 1000;
@@ -38,7 +41,7 @@ function parseArgs(argv: readonly string[]): CliOptions | null {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') {
       process.stdout.write(
-        'Usage: reconciliation-historical-inventory [--database-batch-size N] [--storage-page-size N] [--max-findings N] [--output PATH]\n',
+        `Usage: ${executableName} [--database-batch-size N] [--storage-page-size N] [--max-findings N] [--output PATH]\n`,
       );
       return null;
     }
@@ -103,15 +106,18 @@ export function conciseHistoricalSummary(receipt: HistoricalInventoryReceipt): R
   };
 }
 
-async function writeReceiptFile(outputPath: string, receipt: HistoricalInventoryReceipt): Promise<void> {
+export async function writeHistoricalInventoryReceiptFile(
+  outputPath: string,
+  receipt: HistoricalInventoryReceipt,
+): Promise<void> {
   await writeFile(outputPath, `${JSON.stringify(receipt, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await chmod(outputPath, 0o600);
 }
 
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
-  let options: CliOptions | null;
+  let options: HistoricalInventoryCliOptions | null;
   try {
-    options = parseArgs(argv);
+    options = parseHistoricalInventoryCliArgs(argv);
   } catch (error: unknown) {
     process.stderr.write(`${error instanceof CliUsageError ? error.message : 'Invalid CLI arguments'}\n`);
     return 64;
@@ -135,7 +141,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     ).scan();
 
     if (options.outputPath) {
-      await writeReceiptFile(options.outputPath, receipt);
+      await writeHistoricalInventoryReceiptFile(options.outputPath, receipt);
     }
     process.stdout.write(`${JSON.stringify(conciseHistoricalSummary(receipt))}\n`);
     return exitCodeForStatus(receipt.scanStatus);
