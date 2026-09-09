@@ -181,6 +181,73 @@ describe('HistoricalInventoryScanner', () => {
     expect(receipt.detailedFindings).toHaveLength(1);
   });
 
+  it('uses bounded bucket summaries and commits no conclusions after a later page failure', async () => {
+    const storage = createStorage([
+      [version('unowned/first-page-secret.pdf', 'first-page-secret', true)],
+      [version('unowned/second-page-secret.pdf', 'second-page-secret', false)],
+    ]);
+    const scanner = new HistoricalInventoryScanner(createDatabase(), storage, { storagePageSize: 1 });
+    let inspectedEntries = 0;
+    const summary = await (scanner as unknown as {
+      scanStorageBucket(
+        bucket: string,
+        inspect: (entry: HistoricalObjectVersion) => void,
+      ): Promise<{ readonly storageEntriesScanned: number }>;
+    }).scanStorageBucket('buildingos-local', () => {
+      inspectedEntries += 1;
+    });
+
+    expect(inspectedEntries).toBe(2);
+    expect(summary.storageEntriesScanned).toBe(2);
+    expect(JSON.stringify(summary)).not.toContain('first-page-secret');
+    expect(JSON.stringify(summary)).not.toContain('second-page-secret');
+
+    const failingStorage = createStorage([]);
+    failingStorage.listCalls
+      .mockResolvedValueOnce({
+        items: [version('unowned/provisional.pdf', 'provisional-version', true)],
+        isTruncated: true,
+        nextKeyMarker: 'page-1',
+        nextVersionIdMarker: 'version-page-1',
+      })
+      .mockRejectedValueOnce(new Error('second page failed'));
+
+    const receipt = await new HistoricalInventoryScanner(createDatabase(), failingStorage, {
+      storagePageSize: 1,
+    }).scan();
+
+    expect(receipt.scanStatus).toBe('INCOMPLETE_OPERATIONAL_ERROR');
+    expect(receipt.storageEntriesScanned).toBe(0);
+    expect(receipt.storageOutcomeCounts.CURRENT_ORPHAN_OBJECT).toBe(0);
+    expect(receipt.detailedFindings).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ outcome: 'CURRENT_ORPHAN_OBJECT' }),
+    ]));
+  });
+
+  it('accepts a non-empty whitespace-only provider object key', async () => {
+    const database = createDatabase();
+    const storage = createStorage([[version('   ', 'whitespace-version', true)]]);
+
+    const receipt = await new HistoricalInventoryScanner(database, storage).scan();
+
+    expect(receipt.scanStatus).toBe('COMPLETE_WITH_FINDINGS');
+    expect(receipt.storageEntriesScanned).toBe(1);
+    expect(receipt.storageOutcomeCounts.CURRENT_ORPHAN_OBJECT).toBe(1);
+    expect(receipt.operationalErrorCount).toBe(0);
+  });
+
+  it('accepts a non-empty whitespace-only provider version ID', async () => {
+    const database = createDatabase();
+    const storage = createStorage([[version('unowned/whitespace-version.pdf', '   ', true)]]);
+
+    const receipt = await new HistoricalInventoryScanner(database, storage).scan();
+
+    expect(receipt.scanStatus).toBe('COMPLETE_WITH_FINDINGS');
+    expect(receipt.storageEntriesScanned).toBe(1);
+    expect(receipt.storageOutcomeCounts.CURRENT_ORPHAN_OBJECT).toBe(1);
+    expect(receipt.operationalErrorCount).toBe(0);
+  });
+
   it.each([
     [{ code: 'AccessDenied', statusCode: 403 }, 'AUTHORIZATION'],
     [{ code: 'ETIMEDOUT' }, 'TIMEOUT'],
@@ -206,7 +273,45 @@ describe('HistoricalInventoryScanner', () => {
     ]));
   });
 
-  it('does not list storage for a cross-tenant-only non-default bucket reference', async () => {
+  it('does not emit missing conclusions after a database pagination failure', async () => {
+        const database = createDatabase([
+          file('exact', 'tenant-tenant-1/private/exact.pdf', 'exact-version'),
+        ]);
+        jest.spyOn(database, 'findFileBatch')
+          .mockResolvedValueOnce([file('exact', 'tenant-tenant-1/private/exact.pdf', 'exact-version')])
+          .mockRejectedValueOnce(new Error('database cursor failed'));
+        const storage = createStorage([[]]);
+
+        const receipt = await new HistoricalInventoryScanner(database, storage).scan();
+
+        expect(receipt.scanStatus).toBe('INCOMPLETE_OPERATIONAL_ERROR');
+        expect(receipt.referenceOutcomeCounts.EXACT_REFERENCED_VERSION_MISSING).toBe(0);
+        expect(receipt.storageOutcomeCounts.CURRENT_ORPHAN_OBJECT).toBe(0);
+        expect(receipt.storageOutcomeCounts.ORPHAN_HISTORICAL_VERSION).toBe(0);
+      });
+
+      it('discards a bucket inventory when a later provider page is malformed', async () => {
+        const database = createDatabase();
+        const storage = createStorage([]);
+        storage.listCalls
+          .mockResolvedValueOnce({
+            items: [version('unowned/first-page.pdf', 'first-page-version', true)],
+            isTruncated: true,
+            nextKeyMarker: 'page-1',
+            nextVersionIdMarker: 'version-page-1',
+          })
+          .mockResolvedValueOnce({ isTruncated: false });
+
+        const receipt = await new HistoricalInventoryScanner(database, storage).scan();
+
+        expect(receipt.scanStatus).toBe('INCOMPLETE_OPERATIONAL_ERROR');
+        expect(receipt.operationalErrorCount).toBe(1);
+        expect(receipt.storageEntriesScanned).toBe(0);
+        expect(receipt.storageOutcomeCounts.CURRENT_ORPHAN_OBJECT).toBe(0);
+        expect(receipt.storageOutcomeCounts.ORPHAN_HISTORICAL_VERSION).toBe(0);
+      });
+
+      it('does not list storage for a cross-tenant-only non-default bucket reference', async () => {
     const database = createDatabase([{
       id: 'cross',
       tenantId: 'tenant-1',
@@ -242,7 +347,45 @@ describe('HistoricalInventoryScanner', () => {
     expect(storage.listCalls).toHaveBeenCalledTimes(2);
   });
 
-  it('handles import exact and legacy references without storage reads other than version inventory', async () => {
+  it('keeps bucketless Expense and Income keys unproven and storage-only findings tenant-unattributed', async () => {
+        const database = createDatabase(
+          [],
+          [],
+          [{ id: 'expense', tenantId: 'tenant-1', attachmentFileKey: 'receipts/expense.pdf' }],
+        );
+        jest.spyOn(database, 'findIncomeBatch').mockResolvedValueOnce([
+          { id: 'income', tenantId: 'tenant-1', attachmentFileKey: 'receipts/income.pdf' },
+        ]);
+        const storage = createStorage([[
+          version('receipts/expense.pdf', 'expense-version', true),
+          version('receipts/income.pdf', 'income-version', false),
+        ]]);
+
+        const receipt = await new HistoricalInventoryScanner(database, storage).scan();
+        const storageFindings = receipt.detailedFindings.filter((finding) => finding.source === 'STORAGE');
+
+        expect(receipt.referenceOutcomeCounts.LEGACY_KEY_ONLY_REFERENCE).toBe(2);
+        expect(receipt.storageOutcomeCounts.CURRENT_ORPHAN_OBJECT).toBe(1);
+        expect(receipt.storageOutcomeCounts.ORPHAN_HISTORICAL_VERSION).toBe(1);
+        expect(storageFindings.every((finding) => !('tenantId' in finding))).toBe(true);
+      });
+
+      it('counts shared exact File authority once in inventory without duplicating the storage identity', async () => {
+        const sharedKey = 'tenant-tenant-1/shared/file.pdf';
+        const database = createDatabase([
+          file('file-a', sharedKey, 'shared-version'),
+          file('file-b', sharedKey, 'shared-version'),
+        ]);
+        const storage = createStorage([[version(sharedKey, 'shared-version', true)]]);
+
+        const receipt = await new HistoricalInventoryScanner(database, storage).scan();
+
+        expect(receipt.referenceOutcomeCounts.EXACT_REFERENCED_VERSION_PRESENT).toBe(2);
+        expect(receipt.storageOutcomeCounts.CURRENT_OBJECT).toBe(1);
+        expect(receipt.storageEntriesScanned).toBe(1);
+      });
+
+      it('handles import exact and legacy references without storage reads other than version inventory', async () => {
     const importRows: readonly ImportJobReferenceRecord[] = [{
       id: 'job',
       tenantId: 'tenant-1',
