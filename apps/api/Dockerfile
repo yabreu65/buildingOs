@@ -105,6 +105,9 @@ COPY --from=builder --chown=appuser:appgroup /app/packages/permissions/dist ./pa
 # Copy compiled application from builder
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist ./apps/api/dist
 
+# Fail the image build if the operational audit runner was not compiled into runtime.
+RUN test -f /app/apps/api/dist/reconciliation/historical-inventory/historical-inventory.operational.js
+
 # Expose port
 EXPOSE 3000
 

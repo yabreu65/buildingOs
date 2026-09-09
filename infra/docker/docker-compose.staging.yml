@@ -88,6 +88,39 @@ services:
     command: ["npm", "run", "seed:staging:golden", "-w", "apps/api"]
     restart: "no"
 
+  # Audit confirmation is intentionally not persisted: inject it only for a one-shot run.
+  # Normal and audit-profile rendering must not require it:
+  # docker compose --profile audit run --rm -e HISTORICAL_INVENTORY_OPERATIONAL_STAGING_CONFIRMATION=<confirmation> api-historical-inventory-audit
+  api-historical-inventory-audit:
+    profiles: ["audit"]
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    networks:
+      - buildingos_staging_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: staging
+      NODE_ENV: staging
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN is required}
+      APP_BASE_URL: ${APP_BASE_URL:?APP_BASE_URL is required}
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
+      S3_REGION: ${S3_REGION:?S3_REGION is required}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:?S3_FORCE_PATH_STYLE is required}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:?S3_PUBLIC_BASE_URL is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      FEATURE_PORTAL_RESIDENT: ${FEATURE_PORTAL_RESIDENT:?FEATURE_PORTAL_RESIDENT is required}
+      FEATURE_PAYMENTS_MVP: ${FEATURE_PAYMENTS_MVP:?FEATURE_PAYMENTS_MVP is required}
+    command: ["node", "apps/api/dist/reconciliation/historical-inventory/historical-inventory.operational.js"]
+    restart: "no"
+
   buildingos-api:
     build:
       context: ../../

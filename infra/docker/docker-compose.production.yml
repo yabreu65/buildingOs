@@ -43,6 +43,28 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Audit confirmation is intentionally not persisted: inject it only for a one-shot run.
+  # Normal and audit-profile rendering must not require it:
+  # docker compose --profile audit run --rm -e HISTORICAL_INVENTORY_OPERATIONAL_PRODUCTION_CONFIRMATION=<confirmation> api-historical-inventory-audit
+  api-historical-inventory-audit:
+    profiles: ["audit"]
+    image: buildingos-api:${IMAGE_TAG:?IMAGE_TAG is required}
+    build:
+      context: ../../
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+      args:
+        BUILD_REVISION: ${BUILD_REVISION:?BUILD_REVISION is required}
+        BUILD_VERSION: ${IMAGE_TAG:?IMAGE_TAG is required}
+    env_file:
+      - ${API_ENV_FILE:-/opt/pawtech/env/buildingos.env}
+    networks:
+      - pawtech_internal
+    environment:
+      NODE_ENV: production
+    command: ["node", "apps/api/dist/reconciliation/historical-inventory/historical-inventory.operational.js"]
+    restart: "no"
+
   buildingos-web:
     image: buildingos-web:${IMAGE_TAG:?IMAGE_TAG is required}
     build:

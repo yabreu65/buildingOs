@@ -399,11 +399,17 @@ function isValidVapidSubject(value: string): boolean {
 
 type ParsedConfig = z.infer<ReturnType<typeof createConfigSchema>>;
 
+class ConfigValidationError extends Error {
+  constructor(readonly messages: readonly string[]) {
+    super('Configuration validation failed');
+  }
+}
+
 /**
  * Load and validate configuration from process.env
  * Throws descriptive error if validation fails
  */
-export function loadConfig(): AppConfig {
+export function loadConfigOrThrow(): AppConfig {
   const nodeEnv = resolveNodeEnv(process.env.NODE_ENV);
 
   writeStdout(`[Config] Loading configuration for environment: ${nodeEnv}`);
@@ -504,13 +510,26 @@ export function loadConfig(): AppConfig {
 
     logConfigLoaded(config, nodeEnv);
     return config;
-  } catch (error) {
+  } catch (error: unknown) {
+    throw error;
+  }
+}
+
+/** Preserves normal API startup diagnostics and termination semantics. */
+export function loadConfig(): AppConfig {
+  try {
+    return loadConfigOrThrow();
+  } catch (error: unknown) {
     if (error instanceof z.ZodError) {
       writeStderr('[Config] ❌ Configuration validation failed:');
-      error.issues.forEach((err) => {
-        const path = err.path.join('.');
-        writeStderr(`  - ${path}: ${err.message}`);
+      error.issues.forEach((issue) => {
+        writeStderr(`  - ${issue.path.join('.')}: ${issue.message}`);
       });
+      process.exit(1);
+    }
+    if (error instanceof ConfigValidationError) {
+      writeStderr('[Config] ❌ Configuration validation failed:');
+      error.messages.forEach((message) => writeStderr(`  - ${message}`));
       process.exit(1);
     }
     throw error;
@@ -582,11 +601,7 @@ function validateConditionalConfig(config: ParsedConfig, nodeEnv: NodeEnv): void
   }
 
   if (errors.length > 0) {
-    writeStderr('[Config] ❌ Configuration validation failed:');
-    errors.forEach((err) => {
-      writeStderr(`  - ${err}`);
-    });
-    process.exit(1);
+    throw new ConfigValidationError(errors);
   }
 }
 
