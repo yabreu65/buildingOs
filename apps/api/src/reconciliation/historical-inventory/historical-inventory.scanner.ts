@@ -76,12 +76,40 @@ interface MutableState {
   databaseComplete: boolean;
 }
 
+interface StorageListingSummary {
+  readonly storageEntriesScanned: number;
+}
+
+interface MutableStorageBucketSummary {
+  readonly detailedFindingCapacity: number;
+  readonly foundExactIdentities: Set<string>;
+  readonly storageOutcomeCounts: Record<HistoricalStorageOutcome, number>;
+  readonly dispositionCounts: Record<Exclude<HistoricalDisposition, 'NONE'>, number>;
+  readonly detailedFindings: HistoricalInventoryFinding[];
+  findingsCount: number;
+}
+
 function createReferenceCounts(): Record<HistoricalReferenceOutcome, number> {
   return Object.fromEntries(HISTORICAL_REFERENCE_OUTCOMES.map((outcome) => [outcome, 0])) as Record<HistoricalReferenceOutcome, number>;
 }
 
 function createStorageCounts(): Record<HistoricalStorageOutcome, number> {
   return Object.fromEntries(HISTORICAL_STORAGE_OUTCOMES.map((outcome) => [outcome, 0])) as Record<HistoricalStorageOutcome, number>;
+}
+
+function createStorageBucketSummary(maxFindings: number): MutableStorageBucketSummary {
+  return {
+    detailedFindingCapacity: maxFindings,
+    foundExactIdentities: new Set<string>(),
+    storageOutcomeCounts: createStorageCounts(),
+    dispositionCounts: {
+      PRESERVE: 0,
+      REPAIR_REQUIRED_LATER: 0,
+      OPERATIONAL_ERROR: 0,
+    },
+    detailedFindings: [],
+    findingsCount: 0,
+  };
 }
 
 function createState(defaultBucket: string): MutableState {
@@ -161,9 +189,9 @@ function isHistoricalObjectVersionShape(value: unknown): value is HistoricalObje
 
   const entry = value as HistoricalObjectVersionLike;
   return typeof entry.objectKey === 'string'
-    && entry.objectKey.trim().length > 0
+    && entry.objectKey.length > 0
     && typeof entry.versionId === 'string'
-    && entry.versionId.trim().length > 0
+    && entry.versionId.length > 0
     && typeof entry.isLatest === 'boolean'
     && typeof entry.isDeleteMarker === 'boolean'
     && (entry.size === undefined || typeof entry.size === 'number' && Number.isFinite(entry.size) && entry.size >= 0);
@@ -475,9 +503,12 @@ export class HistoricalInventoryScanner {
   private async scanStorage(state: MutableState): Promise<void> {
     const buckets = [...state.buckets].sort();
     for (const bucket of buckets) {
+      const bucketSummary = createStorageBucketSummary(this.maxFindings - state.detailedFindings.length);
       try {
-        const entries = await this.scanStorageBucket(bucket);
-        entries.forEach((entry) => this.inspectStorageEntry(state, bucket, entry));
+        const listingSummary = await this.scanStorageBucket(bucket, (entry) => {
+          this.inspectStorageEntry(state, bucket, bucketSummary, entry);
+        });
+        this.commitStorageBucketSummary(state, bucketSummary, listingSummary);
         state.successfullyListedBuckets.add(bucket);
       } catch (error: unknown) {
         this.recordOperationalError(state, 'STORAGE', error);
@@ -485,8 +516,11 @@ export class HistoricalInventoryScanner {
     }
   }
 
-  private async scanStorageBucket(bucket: string): Promise<HistoricalObjectVersion[]> {
-    const entries: HistoricalObjectVersion[] = [];
+  private async scanStorageBucket(
+    bucket: string,
+    inspect: (entry: HistoricalObjectVersion) => void,
+  ): Promise<StorageListingSummary> {
+    let storageEntriesScanned = 0;
     let keyMarker: string | undefined;
     let versionIdMarker: string | undefined;
 
@@ -501,9 +535,10 @@ export class HistoricalInventoryScanner {
         throw new Error('Historical storage listing returned an invalid page');
       }
 
-      entries.push(...page.items);
+      page.items.forEach(inspect);
+      storageEntriesScanned += page.items.length;
       if (!page.isTruncated) {
-        return entries;
+        return { storageEntriesScanned };
       }
 
       const nextKeyMarker = page.nextKeyMarker;
@@ -521,14 +556,35 @@ export class HistoricalInventoryScanner {
     }
   }
 
-  private inspectStorageEntry(state: MutableState, bucket: string, entry: HistoricalObjectVersion): void {
-    state.storageEntriesScanned += 1;
+  private commitStorageBucketSummary(
+    state: MutableState,
+    bucketSummary: MutableStorageBucketSummary,
+    listingSummary: StorageListingSummary,
+  ): void {
+    state.storageEntriesScanned += listingSummary.storageEntriesScanned;
+    bucketSummary.foundExactIdentities.forEach((identity) => state.foundExactIdentities.add(identity));
+    HISTORICAL_STORAGE_OUTCOMES.forEach((outcome) => {
+      state.storageOutcomeCounts[outcome] += bucketSummary.storageOutcomeCounts[outcome];
+    });
+    state.dispositionCounts.PRESERVE += bucketSummary.dispositionCounts.PRESERVE;
+    state.dispositionCounts.REPAIR_REQUIRED_LATER += bucketSummary.dispositionCounts.REPAIR_REQUIRED_LATER;
+    state.dispositionCounts.OPERATIONAL_ERROR += bucketSummary.dispositionCounts.OPERATIONAL_ERROR;
+    state.findingsCount += bucketSummary.findingsCount;
+    state.detailedFindings.push(...bucketSummary.detailedFindings);
+  }
+
+  private inspectStorageEntry(
+    state: MutableState,
+    bucket: string,
+    bucketSummary: MutableStorageBucketSummary,
+    entry: HistoricalObjectVersion,
+  ): void {
     const exactIdentity = identityKey(bucket, entry.objectKey, entry.versionId);
     const exactReferenced = state.exactIdentities.has(exactIdentity);
     const legacyReferenced = entry.isLatest && state.legacyKeys.has(objectKey(bucket, entry.objectKey));
 
     if (!entry.isDeleteMarker && exactReferenced) {
-      state.foundExactIdentities.add(exactIdentity);
+      bucketSummary.foundExactIdentities.add(exactIdentity);
     }
 
     let outcome: HistoricalStorageOutcome;
@@ -550,7 +606,7 @@ export class HistoricalInventoryScanner {
       disposition = 'PRESERVE';
     }
 
-    this.recordStorageOutcome(state, outcome, disposition, entry.objectKey, entry.versionId);
+    this.recordStorageOutcome(bucketSummary, outcome, disposition, entry.objectKey, entry.versionId);
   }
 
   private finishExactReferenceCorrelation(state: MutableState): void {
@@ -598,20 +654,35 @@ export class HistoricalInventoryScanner {
   }
 
   private recordStorageOutcome(
-    state: MutableState,
+    bucketSummary: MutableStorageBucketSummary,
     outcome: HistoricalStorageOutcome,
     disposition: HistoricalDisposition,
     key: string,
     versionId: string,
   ): void {
-    state.storageOutcomeCounts[outcome] += 1;
-    this.recordFinding(state, {
+    bucketSummary.storageOutcomeCounts[outcome] += 1;
+    this.recordBucketFinding(bucketSummary, {
       source: 'STORAGE',
       outcome,
       disposition,
       objectReference: redactObjectReference(key),
       versionReference: redactVersionReference(versionId),
     });
+  }
+
+  private recordBucketFinding(
+    bucketSummary: MutableStorageBucketSummary,
+    finding: HistoricalInventoryFinding,
+  ): void {
+    if (finding.disposition === 'NONE') {
+      return;
+    }
+
+    bucketSummary.findingsCount += 1;
+    bucketSummary.dispositionCounts[finding.disposition] += 1;
+    if (bucketSummary.detailedFindings.length < bucketSummary.detailedFindingCapacity) {
+      bucketSummary.detailedFindings.push(finding);
+    }
   }
 
   private recordOperationalError(state: MutableState, source: 'DATABASE' | 'STORAGE', error: unknown): void {

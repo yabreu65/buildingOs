@@ -181,6 +181,73 @@ describe('HistoricalInventoryScanner', () => {
     expect(receipt.detailedFindings).toHaveLength(1);
   });
 
+  it('uses bounded bucket summaries and commits no conclusions after a later page failure', async () => {
+    const storage = createStorage([
+      [version('unowned/first-page-secret.pdf', 'first-page-secret', true)],
+      [version('unowned/second-page-secret.pdf', 'second-page-secret', false)],
+    ]);
+    const scanner = new HistoricalInventoryScanner(createDatabase(), storage, { storagePageSize: 1 });
+    let inspectedEntries = 0;
+    const summary = await (scanner as unknown as {
+      scanStorageBucket(
+        bucket: string,
+        inspect: (entry: HistoricalObjectVersion) => void,
+      ): Promise<{ readonly storageEntriesScanned: number }>;
+    }).scanStorageBucket('buildingos-local', () => {
+      inspectedEntries += 1;
+    });
+
+    expect(inspectedEntries).toBe(2);
+    expect(summary.storageEntriesScanned).toBe(2);
+    expect(JSON.stringify(summary)).not.toContain('first-page-secret');
+    expect(JSON.stringify(summary)).not.toContain('second-page-secret');
+
+    const failingStorage = createStorage([]);
+    failingStorage.listCalls
+      .mockResolvedValueOnce({
+        items: [version('unowned/provisional.pdf', 'provisional-version', true)],
+        isTruncated: true,
+        nextKeyMarker: 'page-1',
+        nextVersionIdMarker: 'version-page-1',
+      })
+      .mockRejectedValueOnce(new Error('second page failed'));
+
+    const receipt = await new HistoricalInventoryScanner(createDatabase(), failingStorage, {
+      storagePageSize: 1,
+    }).scan();
+
+    expect(receipt.scanStatus).toBe('INCOMPLETE_OPERATIONAL_ERROR');
+    expect(receipt.storageEntriesScanned).toBe(0);
+    expect(receipt.storageOutcomeCounts.CURRENT_ORPHAN_OBJECT).toBe(0);
+    expect(receipt.detailedFindings).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ outcome: 'CURRENT_ORPHAN_OBJECT' }),
+    ]));
+  });
+
+  it('accepts a non-empty whitespace-only provider object key', async () => {
+    const database = createDatabase();
+    const storage = createStorage([[version('   ', 'whitespace-version', true)]]);
+
+    const receipt = await new HistoricalInventoryScanner(database, storage).scan();
+
+    expect(receipt.scanStatus).toBe('COMPLETE_WITH_FINDINGS');
+    expect(receipt.storageEntriesScanned).toBe(1);
+    expect(receipt.storageOutcomeCounts.CURRENT_ORPHAN_OBJECT).toBe(1);
+    expect(receipt.operationalErrorCount).toBe(0);
+  });
+
+  it('accepts a non-empty whitespace-only provider version ID', async () => {
+    const database = createDatabase();
+    const storage = createStorage([[version('unowned/whitespace-version.pdf', '   ', true)]]);
+
+    const receipt = await new HistoricalInventoryScanner(database, storage).scan();
+
+    expect(receipt.scanStatus).toBe('COMPLETE_WITH_FINDINGS');
+    expect(receipt.storageEntriesScanned).toBe(1);
+    expect(receipt.storageOutcomeCounts.CURRENT_ORPHAN_OBJECT).toBe(1);
+    expect(receipt.operationalErrorCount).toBe(0);
+  });
+
   it.each([
     [{ code: 'AccessDenied', statusCode: 403 }, 'AUTHORIZATION'],
     [{ code: 'ETIMEDOUT' }, 'TIMEOUT'],
