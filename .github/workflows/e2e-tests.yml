@@ -359,12 +359,16 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Run E2E tests
+      - name: Run E2E tests (including exact receipt storage-version verification)
         id: e2e-tests
         run: npm run test:e2e -w apps/web -- --project=chromium
         env:
           BASE_URL: http://localhost:3000
           PORT: 3000
+
+      - name: Verify exact receipt storage cleanup
+        if: always()
+        run: node apps/api/scripts/verify-receipt-storage-cleanup.js
 
       - name: Stop API server
         if: always()
