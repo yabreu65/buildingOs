@@ -1,12 +1,22 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PrismaClient, ChargeType, ChargeStatus, PaymentStatus } from '@prisma/client';
+import { PrismaClient, ChargeType, ChargeStatus, PaymentStatus, ReceiptStatus } from '@prisma/client';
 
 import { login, TEST_USERS } from '../helpers/auth';
 
 const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:4000';
 const PRISMA = new PrismaClient();
 const TEST_REFERENCE = 'E2E-FIN-01';
+const AUGUST_PAYMENT_REFERENCE = `${TEST_REFERENCE}-AUG`;
+const PAYMENT_REFERENCES = [TEST_REFERENCE, AUGUST_PAYMENT_REFERENCE] as const;
 const FIAT_PERIODS = ['2026-06', '2026-07', '2026-08'] as const;
+const E2E_CHARGE_CONCEPTS = [
+  `${TEST_REFERENCE} - Expensas Junio 2026`,
+  `${TEST_REFERENCE} - Expensas Julio 2026`,
+  `${TEST_REFERENCE} - Expensas Agosto 2026`,
+  `${TEST_REFERENCE} - Expensas Unidad Vecina`,
+] as const;
+const E2E_PROOF_FILENAMES = ['proof.pdf', 'proof-august.pdf'] as const;
+const RECEIPT_POLL_TIMEOUT_MS = 30_000;
 
 /**
  * Deterministic relative dates: overdue semantics (dueDate < now) must not
@@ -57,6 +67,23 @@ interface E2EArtifactContext {
   tenantId: string;
   buildingId: string;
   unitId: string;
+  chargeIds: string[];
+  proofFileIds: string[];
+}
+
+interface PaymentArtifact {
+  id: string;
+  reference: string | null;
+  proofFileId: string | null;
+  status: PaymentStatus;
+  receiptStatus: ReceiptStatus;
+  receiptDocumentId: string | null;
+}
+
+interface ReceiptDocumentArtifact {
+  paymentId: string;
+  documentId: string;
+  fileId: string;
 }
 
 function arsAmount(buckets: Array<{ currency: string; amountMinor: number }> | undefined): number {
@@ -220,77 +247,205 @@ async function rejectPaymentViaApi(
   }
 }
 
-async function clearE2EArtifacts(tenantId: string, buildingId: string, unitId: string): Promise<void> {
-  const payments = await PRISMA.payment.findMany({
-    where: {
-      tenantId,
-      reference: { startsWith: TEST_REFERENCE },
-    },
-    select: { id: true },
-  });
-
-  if (payments.length > 0) {
-    const paymentIds = payments.map((payment) => payment.id);
-    await PRISMA.paymentAllocation.deleteMany({
-      where: { paymentId: { in: paymentIds } },
-    });
-    await PRISMA.payment.deleteMany({
-      where: { id: { in: paymentIds } },
-    });
-  }
-
-  const charges = await PRISMA.charge.findMany({
+async function getE2EPaymentArtifacts(
+  tenantId: string,
+  buildingId: string,
+  unitId: string,
+): Promise<PaymentArtifact[]> {
+  return PRISMA.payment.findMany({
     where: {
       tenantId,
       buildingId,
       unitId,
-      period: { in: [...FIAT_PERIODS] },
+      reference: { in: [...PAYMENT_REFERENCES] },
+    },
+    select: {
+      id: true,
+      reference: true,
+      proofFileId: true,
+      status: true,
+      receiptStatus: true,
+      receiptDocumentId: true,
+    },
+  });
+}
+
+async function captureReceiptDocument(
+  tenantId: string,
+  payment: PaymentArtifact,
+): Promise<ReceiptDocumentArtifact> {
+  if (payment.receiptStatus !== ReceiptStatus.READY || !payment.receiptDocumentId) {
+    throw new Error(`Payment ${payment.id} has no ready receipt document`);
+  }
+
+  const document = await PRISMA.document.findFirst({
+    where: {
+      id: payment.receiptDocumentId,
+      tenantId,
+    },
+    select: {
+      id: true,
+      file: { select: { id: true } },
+    },
+  });
+
+  if (!document) {
+    throw new Error(`Receipt document ${payment.receiptDocumentId} for payment ${payment.id} was not found`);
+  }
+
+  return {
+    paymentId: payment.id,
+    documentId: document.id,
+    fileId: document.file.id,
+  };
+}
+
+async function waitForPaymentReceipt(
+  tenantId: string,
+  buildingId: string,
+  unitId: string,
+  paymentId: string,
+  reference: string,
+): Promise<ReceiptDocumentArtifact> {
+  let receipt: ReceiptDocumentArtifact | undefined;
+
+  await expect.poll(
+    async () => {
+      const payment = await PRISMA.payment.findFirst({
+        where: {
+          id: paymentId,
+          tenantId,
+          buildingId,
+          unitId,
+          reference,
+        },
+        select: {
+          id: true,
+          reference: true,
+          proofFileId: true,
+          status: true,
+          receiptStatus: true,
+          receiptDocumentId: true,
+        },
+      });
+
+      if (!payment) {
+        throw new Error(`E2E payment ${paymentId} disappeared while waiting for receipt`);
+      }
+      if (payment.receiptStatus === ReceiptStatus.FAILED) {
+        throw new Error(`E2E payment ${paymentId} receipt generation failed`);
+      }
+      if (payment.receiptStatus !== ReceiptStatus.READY || !payment.receiptDocumentId) {
+        return false;
+      }
+
+      receipt = await captureReceiptDocument(tenantId, payment);
+      return true;
+    },
+    { timeout: RECEIPT_POLL_TIMEOUT_MS, intervals: [250, 500, 1_000] },
+  ).toBe(true);
+
+  if (!receipt) {
+    throw new Error(`Receipt for payment ${paymentId} was not captured`);
+  }
+
+  return receipt;
+}
+
+async function deleteReceiptDocumentViaApi(
+  page: Page,
+  tenantId: string,
+  receipt: ReceiptDocumentArtifact,
+): Promise<void> {
+  const response = await page.request.delete(
+    `${API_ORIGIN}/tenants/${tenantId}/documents/${receipt.documentId}`,
+    {
+      headers: {
+        'X-Tenant-Id': tenantId,
+        'x-portal-context': 'admin',
+        Accept: 'application/json',
+      },
+    },
+  );
+
+  if (!response.ok()) {
+    throw new Error(
+      `Failed to delete receipt document ${receipt.documentId} for payment ${receipt.paymentId} ` +
+        `(${response.status()} ${response.statusText()}): ${await response.text()}`,
+    );
+  }
+}
+
+async function clearE2EArtifacts(page: Page, fixture: E2EArtifactContext): Promise<void> {
+  const { tenantId, buildingId, unitId } = fixture;
+  const payments = await getE2EPaymentArtifacts(tenantId, buildingId, unitId);
+  const receipts = await Promise.all(
+    payments
+      .filter((payment) => payment.status === PaymentStatus.APPROVED || payment.status === PaymentStatus.RECONCILED)
+      .map((payment) => {
+        if (!payment.reference) {
+          throw new Error(`E2E payment ${payment.id} has no reference`);
+        }
+        return waitForPaymentReceipt(tenantId, buildingId, unitId, payment.id, payment.reference);
+      }),
+  );
+
+  const paymentIds = payments.map((payment) => payment.id);
+  const proofFileIds = new Set([
+    ...fixture.proofFileIds,
+    ...payments.flatMap((payment) => (payment.proofFileId ? [payment.proofFileId] : [])),
+  ]);
+
+  if (paymentIds.length > 0) {
+    await PRISMA.paymentAllocation.deleteMany({
+      where: { paymentId: { in: paymentIds } },
+    });
+    await PRISMA.payment.deleteMany({
+      where: { id: { in: paymentIds }, tenantId, buildingId, unitId },
+    });
+  }
+
+  for (const receipt of receipts) {
+    await deleteReceiptDocumentViaApi(page, tenantId, receipt);
+  }
+
+  const knownProofObjectKeys = E2E_PROOF_FILENAMES.map(
+    (fileName) => `e2e/payments/${TEST_REFERENCE}/${buildingId}/${unitId}/${fileName}`,
+  );
+  const residualProofFiles = await PRISMA.file.findMany({
+    where: {
+      tenantId,
+      objectKey: { in: knownProofObjectKeys },
     },
     select: { id: true },
   });
 
-  if (charges.length > 0) {
-    const chargeIds = charges.map((charge) => charge.id);
-    await PRISMA.paymentAllocation.deleteMany({
-      where: { chargeId: { in: chargeIds } },
-    });
-    await PRISMA.charge.deleteMany({
-      where: { id: { in: chargeIds } },
+  for (const file of residualProofFiles) {
+    proofFileIds.add(file.id);
+  }
+
+  if (proofFileIds.size > 0) {
+    await PRISMA.file.deleteMany({
+      where: { id: { in: [...proofFileIds] }, tenantId },
     });
   }
 
-  const taggedCharges = await PRISMA.charge.findMany({
+  const residualCharges = await PRISMA.charge.findMany({
     where: {
       tenantId,
       buildingId,
-      concept: { startsWith: TEST_REFERENCE },
+      concept: { in: [...E2E_CHARGE_CONCEPTS] },
     },
     select: { id: true },
   });
+  const chargeIds = new Set([...fixture.chargeIds, ...residualCharges.map((charge) => charge.id)]);
 
-  if (taggedCharges.length > 0) {
-    const taggedChargeIds = taggedCharges.map((charge) => charge.id);
+  if (chargeIds.size > 0) {
     await PRISMA.paymentAllocation.deleteMany({
-      where: { chargeId: { in: taggedChargeIds } },
+      where: { chargeId: { in: [...chargeIds] } },
     });
     await PRISMA.charge.deleteMany({
-      where: { id: { in: taggedChargeIds } },
-    });
-  }
-
-  const taggedFiles = await PRISMA.file.findMany({
-    where: {
-      tenantId,
-      objectKey: { startsWith: `e2e/payments/${TEST_REFERENCE}` },
-    },
-    select: { id: true },
-  });
-
-  if (taggedFiles.length > 0) {
-    await PRISMA.file.deleteMany({
-      where: {
-        id: { in: taggedFiles.map((file) => file.id) },
-      },
+      where: { id: { in: [...chargeIds] }, tenantId, buildingId },
     });
   }
 }
@@ -337,7 +492,12 @@ async function getTenantDelinquencyCount(page: Page, tenantId: string, buildingI
   return payload.total;
 }
 
-async function fetchPaymentByReference(reference: string): Promise<{
+async function fetchPaymentByReference(
+  tenantId: string,
+  buildingId: string,
+  unitId: string,
+  reference: string,
+): Promise<{
   id: string;
   status: PaymentStatus;
   amount: number;
@@ -348,7 +508,7 @@ async function fetchPaymentByReference(reference: string): Promise<{
   }>;
 }> {
   const payment = await PRISMA.payment.findFirst({
-    where: { reference },
+    where: { tenantId, buildingId, unitId, reference },
     include: {
       paymentAllocations: {
         include: {
@@ -375,9 +535,17 @@ async function fetchPaymentByReference(reference: string): Promise<{
 test.describe('Resident finance oldest-first flow', () => {
   let fixtureContext: E2EArtifactContext | undefined;
 
-  test.afterEach(async () => {
-    if (fixtureContext) {
-      await clearE2EArtifacts(fixtureContext.tenantId, fixtureContext.buildingId, fixtureContext.unitId);
+  test.afterEach(async ({ page }) => {
+    const fixture = fixtureContext;
+    if (!fixture) {
+      return;
+    }
+
+    try {
+      const cleanupTenantId = await login(page, TEST_USERS.tenantAdminB);
+      expect(cleanupTenantId).toBe(fixture.tenantId);
+      await clearE2EArtifacts(page, fixture);
+    } finally {
       fixtureContext = undefined;
     }
   });
@@ -403,8 +571,13 @@ test.describe('Resident finance oldest-first flow', () => {
       throw new Error('Expected resident B to have an active building and unit');
     }
 
-    fixtureContext = { tenantId: residentTenantId, buildingId, unitId };
-    await clearE2EArtifacts(residentTenantId, buildingId, unitId);
+    fixtureContext = {
+      tenantId: residentTenantId,
+      buildingId,
+      unitId,
+      chargeIds: [],
+      proofFileIds: [],
+    };
 
     const otherUnit = await PRISMA.unit.findFirst({
       where: {
@@ -440,24 +613,56 @@ test.describe('Resident finance oldest-first flow', () => {
     const adminTenantId = await login(adminPage, TEST_USERS.tenantAdminB);
     expect(adminTenantId).toBe(residentTenantId);
 
-    const createdCharges = await Promise.all([
-      createCharge(adminPage, residentTenantId, buildingId, unitId, '2026-06', pastDate(90), 'Expensas Junio 2026', 10000),
-      createCharge(adminPage, residentTenantId, buildingId, unitId, '2026-07', pastDate(60), 'Expensas Julio 2026', 10000),
-      createCharge(adminPage, residentTenantId, buildingId, unitId, '2026-08', futureDate(30), 'Expensas Agosto 2026', 10000),
-    ]);
+    await clearE2EArtifacts(adminPage, fixtureContext);
+
+    const juneCharge = await createCharge(
+      adminPage,
+      residentTenantId,
+      buildingId,
+      unitId,
+      FIAT_PERIODS[0],
+      pastDate(90),
+      E2E_CHARGE_CONCEPTS[0],
+      10000,
+    );
+    fixtureContext.chargeIds.push(juneCharge.id);
+    const julyCharge = await createCharge(
+      adminPage,
+      residentTenantId,
+      buildingId,
+      unitId,
+      FIAT_PERIODS[1],
+      pastDate(60),
+      E2E_CHARGE_CONCEPTS[1],
+      10000,
+    );
+    fixtureContext.chargeIds.push(julyCharge.id);
+    const augustCharge = await createCharge(
+      adminPage,
+      residentTenantId,
+      buildingId,
+      unitId,
+      FIAT_PERIODS[2],
+      futureDate(30),
+      E2E_CHARGE_CONCEPTS[2],
+      10000,
+    );
+    fixtureContext.chargeIds.push(augustCharge.id);
+    const createdCharges = [juneCharge, julyCharge, augustCharge];
 
     expect(createdCharges.map((charge) => charge.period)).toEqual(['2026-06', '2026-07', '2026-08']);
 
-    await createCharge(
+    const otherUnitCharge = await createCharge(
       adminPage,
       residentTenantId,
       buildingId,
       otherUnit.id,
       '2026-09',
       futureDate(60),
-      `${TEST_REFERENCE} - Expensas Unidad Vecina`,
+      E2E_CHARGE_CONCEPTS[3],
       5000,
     );
+    fixtureContext.chargeIds.push(otherUnitCharge.id);
 
     await page.goto(`/${residentTenantId}/resident/payments`);
     await expect(page).toHaveURL(new RegExp(`/${residentTenantId}/resident/payments$`));
@@ -476,10 +681,11 @@ test.describe('Resident finance oldest-first flow', () => {
       residentTenantId,
       buildingId,
       unitId,
-      'proof.pdf',
+      E2E_PROOF_FILENAMES[0],
       'application/pdf',
       Buffer.from([1, 2, 3, 4]),
     );
+    fixtureContext.proofFileIds.push(firstPaymentProofFileId);
     await submitPaymentViaApi(
       page,
       residentTenantId,
@@ -491,7 +697,7 @@ test.describe('Resident finance oldest-first flow', () => {
       firstPaymentProofFileId,
     );
 
-    const submittedPayment = await fetchPaymentByReference(TEST_REFERENCE);
+    const submittedPayment = await fetchPaymentByReference(residentTenantId, buildingId, unitId, TEST_REFERENCE);
     expect(submittedPayment.status).toBe(PaymentStatus.SUBMITTED);
     expect(submittedPayment.amount).toBe(20000);
     expect(submittedPayment.paymentAllocations).toHaveLength(2);
@@ -516,8 +722,18 @@ test.describe('Resident finance oldest-first flow', () => {
     await expect(adminPage.getByText('Comprobante sin procesar')).toBeVisible();
     await approvePaymentViaApi(adminPage, residentTenantId, buildingId, submittedPayment.id);
 
-    const approvedPayment = await fetchPaymentByReference(TEST_REFERENCE);
+    const approvedPayment = await fetchPaymentByReference(residentTenantId, buildingId, unitId, TEST_REFERENCE);
     expect(approvedPayment.status).toMatch(/APPROVED|RECONCILED/);
+    const approvedPaymentReceipt = await waitForPaymentReceipt(
+      residentTenantId,
+      buildingId,
+      unitId,
+      approvedPayment.id,
+      TEST_REFERENCE,
+    );
+    expect(approvedPaymentReceipt.paymentId).toBe(approvedPayment.id);
+    expect(approvedPaymentReceipt.documentId).toBeTruthy();
+    expect(approvedPaymentReceipt.fileId).toBeTruthy();
     expect(approvedPayment.paymentAllocations).toHaveLength(2);
     expect(approvedPayment.paymentAllocations.map((allocation) => allocation.charge.period)).toEqual([
       '2026-06',
@@ -539,10 +755,11 @@ test.describe('Resident finance oldest-first flow', () => {
       residentTenantId,
       buildingId,
       unitId,
-      'proof-august.pdf',
+      E2E_PROOF_FILENAMES[1],
       'application/pdf',
       Buffer.from([9, 8, 7, 6]),
     );
+    fixtureContext.proofFileIds.push(augustPaymentProofFileId);
     await submitPaymentViaApi(
       page,
       residentTenantId,
@@ -550,11 +767,16 @@ test.describe('Resident finance oldest-first flow', () => {
       unitId,
       [createdCharges[2].id],
       10000,
-      `${TEST_REFERENCE}-AUG`,
+      AUGUST_PAYMENT_REFERENCE,
       augustPaymentProofFileId,
     );
 
-    const augustPayment = await fetchPaymentByReference(`${TEST_REFERENCE}-AUG`);
+    const augustPayment = await fetchPaymentByReference(
+      residentTenantId,
+      buildingId,
+      unitId,
+      AUGUST_PAYMENT_REFERENCE,
+    );
     expect(augustPayment.status).toBe(PaymentStatus.SUBMITTED);
     expect(augustPayment.paymentAllocations).toHaveLength(1);
     expect(augustPayment.paymentAllocations[0]?.charge.period).toBe('2026-08');
@@ -562,7 +784,12 @@ test.describe('Resident finance oldest-first flow', () => {
     await adminPage.goto(`/${residentTenantId}/finanzas?tab=payments`);
     await rejectPaymentViaApi(adminPage, residentTenantId, buildingId, augustPayment.id, 'MONTO_INCORRECTO');
 
-    const rejectedAugustPayment = await fetchPaymentByReference(`${TEST_REFERENCE}-AUG`);
+    const rejectedAugustPayment = await fetchPaymentByReference(
+      residentTenantId,
+      buildingId,
+      unitId,
+      AUGUST_PAYMENT_REFERENCE,
+    );
     expect(rejectedAugustPayment.status).toBe(PaymentStatus.REJECTED);
     expect(rejectedAugustPayment.paymentAllocations).toHaveLength(0);
 
