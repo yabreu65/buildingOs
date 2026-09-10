@@ -6,6 +6,14 @@ import { expect, test, type Page } from '@playwright/test';
 import { PrismaClient, Prisma, ChargeType, ChargeStatus, PaymentStatus, ReceiptStatus } from '@prisma/client';
 
 import { login, TEST_USERS } from '../helpers/auth';
+import {
+  ReceiptTeardownFailedError,
+  ReceiptTeardownTimeoutError,
+  teardownPaymentReceipts,
+  throwReceiptTeardownFailures,
+  type ReceiptTeardownDocument,
+  type ReceiptTeardownPayment,
+} from './receipt-teardown';
 
 const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:4000';
 const PRISMA = new PrismaClient();
@@ -80,23 +88,14 @@ interface E2EArtifactContext {
   receiptDocuments: ReceiptDocumentArtifact[];
 }
 
-interface PaymentArtifact {
-  id: string;
+interface PaymentArtifact extends ReceiptTeardownPayment {
   reference: string | null;
   proofFileId: string | null;
   status: PaymentStatus;
   receiptStatus: ReceiptStatus;
-  receiptDocumentId: string | null;
 }
 
-interface ReceiptDocumentArtifact {
-  paymentId: string;
-  documentId: string;
-  fileId: string;
-  bucket: string;
-  objectKey: string;
-  objectVersionId: string;
-}
+type ReceiptDocumentArtifact = ReceiptTeardownDocument;
 
 function arsAmount(buckets: Array<{ currency: string; amountMinor: number }> | undefined): number {
   return (buckets ?? []).find((b) => b.currency === 'ARS')?.amountMinor ?? 0;
@@ -381,7 +380,7 @@ async function waitForPaymentReceipt(
         throw new Error(`E2E payment ${paymentId} disappeared while waiting for receipt`);
       }
       if (payment.receiptStatus === ReceiptStatus.FAILED) {
-        throw new Error(`E2E payment ${paymentId} receipt generation failed`);
+        throw new ReceiptTeardownFailedError(paymentId);
       }
       if (payment.receiptStatus !== ReceiptStatus.READY || !payment.receiptDocumentId) {
         return false;
@@ -460,65 +459,68 @@ async function deleteReceiptDocumentViaApi(
   }
 }
 
-function retainReceiptDocument(fixture: E2EArtifactContext, receipt: ReceiptDocumentArtifact): void {
-  const existingReceipt = fixture.receiptDocuments.find((candidate) => candidate.paymentId === receipt.paymentId);
-  if (existingReceipt && existingReceipt.documentId !== receipt.documentId) {
-    throw new Error(`Payment ${receipt.paymentId} changed receipt ownership during E2E cleanup`);
-  }
-  if (!existingReceipt) {
-    fixture.receiptDocuments.push(receipt);
-  }
-}
-
 async function clearE2EArtifacts(page: Page, fixture: E2EArtifactContext): Promise<void> {
   const { tenantId, buildingId, unitId } = fixture;
   const payments = await getE2EPaymentArtifacts(tenantId, buildingId, unitId);
-  const receiptWaitResults = await Promise.allSettled(
-    payments
-      .filter((payment) => payment.status === PaymentStatus.APPROVED || payment.status === PaymentStatus.RECONCILED)
-      .map(async (payment) => {
-        if (!payment.reference) {
-          throw new Error(`E2E payment ${payment.id} has no reference`);
+  const paymentCleanup = await teardownPaymentReceipts(fixture, payments, {
+    waitForReceipt: async (payment) => {
+      if (!payment.reference) {
+        throw new Error(`E2E payment ${payment.id} has no reference`);
+      }
+      try {
+        return await waitForPaymentReceipt(tenantId, buildingId, unitId, payment.id, payment.reference);
+      } catch (error: unknown) {
+        if (error instanceof ReceiptTeardownFailedError) {
+          throw error;
         }
-        return waitForPaymentReceipt(tenantId, buildingId, unitId, payment.id, payment.reference);
-      }),
-  );
-  const receiptWaitFailure = receiptWaitResults.find((result) => result.status === 'rejected');
+        throw new ReceiptTeardownTimeoutError(payment.id, error);
+      }
+    },
+    unlinkReceiptDocument: async (receipt) => {
+      const result = await PRISMA.payment.updateMany({
+        where: {
+          id: receipt.paymentId,
+          tenantId,
+          buildingId,
+          unitId,
+          receiptDocumentId: receipt.documentId,
+        },
+        data: { receiptDocumentId: null },
+      });
+      if (result.count !== 1) {
+        throw new Error(`Receipt document ${receipt.documentId} is no longer owned by payment ${receipt.paymentId}`);
+      }
+    },
+    restoreReceiptDocument: async (receipt) => {
+      const result = await PRISMA.payment.updateMany({
+        where: { id: receipt.paymentId, tenantId, buildingId, unitId, receiptDocumentId: null },
+        data: { receiptDocumentId: receipt.documentId },
+      });
+      if (result.count !== 1) {
+        throw new Error(`Receipt document ${receipt.documentId} relation could not be restored for payment ${receipt.paymentId}`);
+      }
+    },
+    writeReceiptCleanupManifest,
+    deleteReceiptDocument: async (receipt) => deleteReceiptDocumentViaApi(page, tenantId, receipt),
+    deletePaymentAllocations: async (paymentIds) => {
+      await PRISMA.paymentAllocation.deleteMany({ where: { paymentId: { in: paymentIds } } });
+    },
+    deletePayments: async (paymentIds) => {
+      await PRISMA.payment.deleteMany({
+        where: { id: { in: paymentIds }, tenantId, buildingId, unitId },
+      });
+    },
+  });
 
-  for (const result of receiptWaitResults) {
-    if (result.status === 'fulfilled') {
-      retainReceiptDocument(fixture, result.value);
-    }
+  if (paymentCleanup.hasPreservedPayments) {
+    throwReceiptTeardownFailures(paymentCleanup.failures);
+    throw new Error('E2E payment cleanup preserved a payment without reporting a failure');
   }
 
-  const paymentIds = payments.map((payment) => payment.id);
   const proofFileIds = new Set([
     ...fixture.proofFileIds,
     ...payments.flatMap((payment) => (payment.proofFileId ? [payment.proofFileId] : [])),
   ]);
-
-  if (paymentIds.length > 0) {
-    await PRISMA.paymentAllocation.deleteMany({
-      where: { paymentId: { in: paymentIds } },
-    });
-    await PRISMA.payment.deleteMany({
-      where: { id: { in: paymentIds }, tenantId, buildingId, unitId },
-    });
-  }
-
-  let receiptDeletionFailure: unknown;
-  for (const receipt of [...fixture.receiptDocuments]) {
-    try {
-      await writeReceiptCleanupManifest(receipt);
-      await deleteReceiptDocumentViaApi(page, tenantId, receipt);
-      fixture.receiptDocuments = fixture.receiptDocuments.filter(
-        (candidate) => candidate.documentId !== receipt.documentId,
-      );
-    } catch (error: unknown) {
-      receiptDeletionFailure ??= error;
-    }
-  }
-
   const knownProofObjectKeys = E2E_PROOF_FILENAMES.map(
     (fileName) => `e2e/payments/${TEST_REFERENCE}/${buildingId}/${unitId}/${fileName}`,
   );
@@ -559,12 +561,7 @@ async function clearE2EArtifacts(page: Page, fixture: E2EArtifactContext): Promi
     });
   }
 
-  if (receiptWaitFailure?.status === 'rejected') {
-    throw receiptWaitFailure.reason;
-  }
-  if (receiptDeletionFailure) {
-    throw receiptDeletionFailure;
-  }
+  throwReceiptTeardownFailures(paymentCleanup.failures);
 }
 
 async function getUnitLedger(page: Page, tenantId: string, unitId: string): Promise<UnitLedgerResponse> {
@@ -955,5 +952,196 @@ test.describe('Resident finance oldest-first flow', () => {
       },
     });
     expect(foreignTenantLedgerResponse.status()).toBeGreaterThanOrEqual(400);
+
+      });
+
+      test.describe('receipt teardown safeguards', () => {
+        const clearE2EPaymentArtifacts = teardownPaymentReceipts;
+        const ReceiptCleanupFailedError = ReceiptTeardownFailedError;
+        const ReceiptCleanupTimeoutError = ReceiptTeardownTimeoutError;
+        const throwCleanupFailures = throwReceiptTeardownFailures;
+
+        function payment(overrides: Partial<PaymentArtifact> = {}): PaymentArtifact {
+          return {
+            id: 'payment-1',
+            reference: TEST_REFERENCE,
+            proofFileId: 'proof-1',
+            status: PaymentStatus.APPROVED,
+            receiptStatus: ReceiptStatus.READY,
+            receiptDocumentId: 'document-1',
+            ...overrides,
+          };
+        }
+
+        function receipt(overrides: Partial<ReceiptDocumentArtifact> = {}): ReceiptDocumentArtifact {
+          return {
+            paymentId: 'payment-1',
+            documentId: 'document-1',
+            fileId: 'file-1',
+            bucket: 'e2e-payments',
+            objectKey: 'e2e/payments/receipt-1.pdf',
+            objectVersionId: 'version-1',
+            ...overrides,
+          };
+        }
+
+        function fixture(receiptDocuments: ReceiptDocumentArtifact[] = []): E2EArtifactContext {
+          return {
+            tenantId: 'tenant-1',
+            buildingId: 'building-1',
+            unitId: 'unit-1',
+            chargeIds: [],
+            proofFileIds: [],
+            receiptDocuments,
+          };
+        }
+
+        test('cleans FAILED payments and reports the receipt failure only after cleanup', async () => {
+          const calls: string[] = [];
+          const failedPayment = payment({
+            id: 'payment-failed',
+            receiptStatus: ReceiptStatus.FAILED,
+            receiptDocumentId: null,
+          });
+          const result = await clearE2EPaymentArtifacts(fixture(), [failedPayment], {
+            waitForReceipt: async () => {
+              throw new Error('waitForReceipt must not run for FAILED receipts');
+            },
+            unlinkReceiptDocument: async () => { calls.push('unlink'); },
+            restoreReceiptDocument: async () => { calls.push('restore'); },
+            writeReceiptCleanupManifest: async () => { calls.push('manifest'); },
+            deleteReceiptDocument: async () => { calls.push('delete-document'); },
+            deletePaymentAllocations: async (paymentIds) => { calls.push(`allocations:${paymentIds.join(',')}`); },
+            deletePayments: async (paymentIds) => { calls.push(`payments:${paymentIds.join(',')}`); },
+          });
+
+          expect(calls).toEqual(['allocations:payment-failed', 'payments:payment-failed']);
+          expect(result.hasPreservedPayments).toBe(false);
+          expect(() => throwCleanupFailures(result.failures)).toThrow(ReceiptCleanupFailedError);
+        });
+
+        test('detaches a READY receipt, deletes its document, then deletes only its payment artifacts', async () => {
+          const calls: string[] = [];
+          const readyReceipt = receipt();
+          const unrelatedReceipt = receipt({ paymentId: 'payment-unrelated', documentId: 'document-unrelated' });
+          const result = await clearE2EPaymentArtifacts(fixture([readyReceipt, unrelatedReceipt]), [payment()], {
+            waitForReceipt: async () => readyReceipt,
+            unlinkReceiptDocument: async (candidate) => { calls.push(`unlink:${candidate.documentId}`); },
+            restoreReceiptDocument: async (candidate) => { calls.push(`restore:${candidate.documentId}`); },
+            writeReceiptCleanupManifest: async (candidate) => { calls.push(`manifest:${candidate.documentId}`); },
+            deleteReceiptDocument: async (candidate) => { calls.push(`delete-document:${candidate.documentId}`); },
+            deletePaymentAllocations: async (paymentIds) => { calls.push(`allocations:${paymentIds.join(',')}`); },
+            deletePayments: async (paymentIds) => { calls.push(`payments:${paymentIds.join(',')}`); },
+          });
+
+          expect(calls).toEqual([
+            'unlink:document-1',
+            'manifest:document-1',
+            'delete-document:document-1',
+            'allocations:payment-1',
+            'payments:payment-1',
+          ]);
+          expect(result.hasPreservedPayments).toBe(false);
+          expect(result.failures).toEqual([]);
+          expect(unrelatedReceipt).toEqual(receipt({ paymentId: 'payment-unrelated', documentId: 'document-unrelated' }));
+        });
+
+        test('restores the READY payment relation and allocation when receipt document deletion fails', async () => {
+          const calls: string[] = [];
+          const readyReceipt = receipt();
+          const deleteFailure = new Error('document delete failed');
+          const result = await clearE2EPaymentArtifacts(fixture([readyReceipt]), [payment()], {
+            waitForReceipt: async () => readyReceipt,
+            unlinkReceiptDocument: async () => { calls.push('unlink'); },
+            restoreReceiptDocument: async () => { calls.push('restore'); },
+            writeReceiptCleanupManifest: async () => { calls.push('manifest'); },
+            deleteReceiptDocument: async () => {
+              calls.push('delete-document');
+              throw deleteFailure;
+            },
+            deletePaymentAllocations: async () => { calls.push('allocations'); },
+            deletePayments: async () => { calls.push('payments'); },
+          });
+
+          expect(calls).toEqual(['unlink', 'manifest', 'delete-document', 'restore']);
+          expect(result.hasPreservedPayments).toBe(true);
+          expect(result.failures).toEqual([deleteFailure]);
+          expect(readyReceipt.paymentId).toBe('payment-1');
+        });
+
+        test('preserves the document deletion and relation restoration errors when restoration fails', async () => {
+          const documentDeleteFailure = new Error('document delete failed');
+          const restoreFailure = new Error('relation restore failed');
+          const result = await clearE2EPaymentArtifacts(fixture([receipt()]), [payment()], {
+            waitForReceipt: async () => receipt(),
+            unlinkReceiptDocument: async () => undefined,
+            restoreReceiptDocument: async () => {
+              throw restoreFailure;
+            },
+            writeReceiptCleanupManifest: async () => undefined,
+            deleteReceiptDocument: async () => {
+              throw documentDeleteFailure;
+            },
+            deletePaymentAllocations: async () => {
+              throw new Error('payment allocations must remain after document deletion failure');
+            },
+            deletePayments: async () => {
+              throw new Error('payment must remain after document deletion failure');
+            },
+          });
+
+          expect(result.hasPreservedPayments).toBe(true);
+          expect(result.failures).toHaveLength(1);
+          expect(result.failures[0]).toBeInstanceOf(AggregateError);
+          expect((result.failures[0] as AggregateError).errors).toEqual([documentDeleteFailure, restoreFailure]);
+        });
+
+        test('safely deletes a FAILED payment with no receipt document', async () => {
+          const calls: string[] = [];
+          const result = await clearE2EPaymentArtifacts(
+            fixture(),
+            [payment({ receiptStatus: ReceiptStatus.FAILED, receiptDocumentId: null })],
+            {
+              waitForReceipt: async () => {
+                throw new Error('waitForReceipt must not run for FAILED receipts');
+              },
+              unlinkReceiptDocument: async () => { calls.push('unlink'); },
+              restoreReceiptDocument: async () => { calls.push('restore'); },
+              writeReceiptCleanupManifest: async () => { calls.push('manifest'); },
+              deleteReceiptDocument: async () => { calls.push('delete-document'); },
+              deletePaymentAllocations: async () => { calls.push('allocations'); },
+              deletePayments: async () => { calls.push('payments'); },
+            },
+          );
+
+          expect(calls).toEqual(['allocations', 'payments']);
+          expect(result.hasPreservedPayments).toBe(false);
+          expect(result.failures[0]).toBeInstanceOf(ReceiptCleanupFailedError);
+        });
+
+        test('preserves a payment and its allocation when receipt readiness times out', async () => {
+              await test.step('keeps the payment allocation untouched', async () => {
+          const calls: string[] = [];
+          const pendingPayment = payment({
+            receiptStatus: ReceiptStatus.PENDING,
+            receiptDocumentId: null,
+          });
+          const result = await clearE2EPaymentArtifacts(fixture(), [pendingPayment], {
+            waitForReceipt: async (candidate) => {
+              throw new ReceiptCleanupTimeoutError(candidate.id);
+            },
+            unlinkReceiptDocument: async () => { calls.push('unlink'); },
+            restoreReceiptDocument: async () => { calls.push('restore'); },
+            writeReceiptCleanupManifest: async () => { calls.push('manifest'); },
+            deleteReceiptDocument: async () => { calls.push('delete-document'); },
+            deletePaymentAllocations: async () => { calls.push('allocations'); },
+            deletePayments: async () => { calls.push('payments'); },
+          });
+
+          expect(calls).toEqual([]);
+          expect(result.hasPreservedPayments).toBe(true);
+          expect(result.failures[0]).toBeInstanceOf(ReceiptCleanupTimeoutError);
+        });
+      });
   });
 });

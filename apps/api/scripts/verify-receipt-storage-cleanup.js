@@ -17,8 +17,8 @@ const isExactVersionAbsent = (error) => {
     return false;
   }
 
-  const { code, statusCode } = error;
-  return code === 'NotFound' || code === 'NoSuchKey' || code === 'NoSuchVersion' || statusCode === 404;
+  const { code } = error;
+  return code === 'NoSuchKey' || code === 'NoSuchVersion';
 };
 
 const errorDescription = (error) => {
