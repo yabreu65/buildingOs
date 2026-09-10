@@ -1,5 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+
 import { expect, test, type Page } from '@playwright/test';
-import { PrismaClient, ChargeType, ChargeStatus, PaymentStatus, ReceiptStatus } from '@prisma/client';
+import { PrismaClient, Prisma, ChargeType, ChargeStatus, PaymentStatus, ReceiptStatus } from '@prisma/client';
 
 import { login, TEST_USERS } from '../helpers/auth';
 
@@ -17,6 +21,10 @@ const E2E_CHARGE_CONCEPTS = [
 ] as const;
 const E2E_PROOF_FILENAMES = ['proof.pdf', 'proof-august.pdf'] as const;
 const RECEIPT_POLL_TIMEOUT_MS = 30_000;
+const RECEIPT_CLEANUP_MANIFEST_DIRECTORY = resolve(
+  __dirname,
+  '../../../test-results/receipt-cleanup-verification',
+);
 
 /**
  * Deterministic relative dates: overdue semantics (dueDate < now) must not
@@ -69,6 +77,7 @@ interface E2EArtifactContext {
   unitId: string;
   chargeIds: string[];
   proofFileIds: string[];
+  receiptDocuments: ReceiptDocumentArtifact[];
 }
 
 interface PaymentArtifact {
@@ -84,6 +93,9 @@ interface ReceiptDocumentArtifact {
   paymentId: string;
   documentId: string;
   fileId: string;
+  bucket: string;
+  objectKey: string;
+  objectVersionId: string;
 }
 
 function arsAmount(buckets: Array<{ currency: string; amountMinor: number }> | undefined): number {
@@ -285,7 +297,13 @@ async function captureReceiptDocument(
     },
     select: {
       id: true,
-      file: { select: { id: true } },
+      file: {
+        select: {
+          id: true,
+          bucket: true,
+          objectKey: true,
+        },
+      },
     },
   });
 
@@ -293,11 +311,41 @@ async function captureReceiptDocument(
     throw new Error(`Receipt document ${payment.receiptDocumentId} for payment ${payment.id} was not found`);
   }
 
+  const [storageIdentity] = await PRISMA.$queryRaw<Array<{ objectVersionId: string | null }>>(
+    Prisma.sql`SELECT "objectVersionId" FROM "File" WHERE "id" = ${document.file.id}`,
+  );
+  const objectVersionId = storageIdentity?.objectVersionId?.trim();
+  if (!objectVersionId) {
+    throw new Error(`Receipt document ${document.id} for payment ${payment.id} has no exact storage version`);
+  }
+
   return {
     paymentId: payment.id,
     documentId: document.id,
     fileId: document.file.id,
+    bucket: document.file.bucket,
+    objectKey: document.file.objectKey,
+    objectVersionId,
   };
+}
+
+async function writeReceiptCleanupManifest(receipt: ReceiptDocumentArtifact): Promise<void> {
+  if (!/^[A-Za-z0-9_-]+$/.test(receipt.documentId)) {
+    throw new Error(`Receipt document ID ${receipt.documentId} is unsafe for a cleanup manifest path`);
+  }
+
+  await mkdir(RECEIPT_CLEANUP_MANIFEST_DIRECTORY, { recursive: true });
+
+  const manifestPath = join(RECEIPT_CLEANUP_MANIFEST_DIRECTORY, `${receipt.documentId}.json`);
+  const temporaryManifestPath = `${manifestPath}.${randomUUID()}.tmp`;
+  const manifest = JSON.stringify({
+    bucket: receipt.bucket,
+    objectKey: receipt.objectKey,
+    objectVersionId: receipt.objectVersionId,
+  });
+
+  await writeFile(temporaryManifestPath, manifest, 'utf8');
+  await rename(temporaryManifestPath, manifestPath);
 }
 
 async function waitForPaymentReceipt(
@@ -352,6 +400,42 @@ async function waitForPaymentReceipt(
   return receipt;
 }
 
+async function verifyReceiptStorageVersion(
+  page: Page,
+  tenantId: string,
+  receipt: ReceiptDocumentArtifact,
+): Promise<void> {
+  const response = await page.request.get(
+    `${API_ORIGIN}/tenants/${tenantId}/documents/${receipt.documentId}/download`,
+    {
+      headers: {
+        'X-Tenant-Id': tenantId,
+        'x-portal-context': 'admin',
+        Accept: 'application/json',
+      },
+    },
+  );
+
+  if (!response.ok()) {
+    throw new Error(
+      `Failed to create a download URL for receipt document ${receipt.documentId} ` +
+        `(${response.status()} ${response.statusText()}): ${await response.text()}`,
+    );
+  }
+
+  const payload = (await response.json()) as { url?: unknown };
+  if (typeof payload.url !== 'string') {
+    throw new Error(`Receipt document ${receipt.documentId} download URL was missing`);
+  }
+
+  const storageUrl = new URL(payload.url);
+  expect(storageUrl.searchParams.get('versionId')).toBe(receipt.objectVersionId);
+
+  const storageResponse = await page.request.get(storageUrl.toString());
+  expect(storageResponse.ok()).toBe(true);
+  expect(storageResponse.headers()['x-amz-version-id']).toBe(receipt.objectVersionId);
+}
+
 async function deleteReceiptDocumentViaApi(
   page: Page,
   tenantId: string,
@@ -376,19 +460,36 @@ async function deleteReceiptDocumentViaApi(
   }
 }
 
+function retainReceiptDocument(fixture: E2EArtifactContext, receipt: ReceiptDocumentArtifact): void {
+  const existingReceipt = fixture.receiptDocuments.find((candidate) => candidate.paymentId === receipt.paymentId);
+  if (existingReceipt && existingReceipt.documentId !== receipt.documentId) {
+    throw new Error(`Payment ${receipt.paymentId} changed receipt ownership during E2E cleanup`);
+  }
+  if (!existingReceipt) {
+    fixture.receiptDocuments.push(receipt);
+  }
+}
+
 async function clearE2EArtifacts(page: Page, fixture: E2EArtifactContext): Promise<void> {
   const { tenantId, buildingId, unitId } = fixture;
   const payments = await getE2EPaymentArtifacts(tenantId, buildingId, unitId);
-  const receipts = await Promise.all(
+  const receiptWaitResults = await Promise.allSettled(
     payments
       .filter((payment) => payment.status === PaymentStatus.APPROVED || payment.status === PaymentStatus.RECONCILED)
-      .map((payment) => {
+      .map(async (payment) => {
         if (!payment.reference) {
           throw new Error(`E2E payment ${payment.id} has no reference`);
         }
         return waitForPaymentReceipt(tenantId, buildingId, unitId, payment.id, payment.reference);
       }),
   );
+  const receiptWaitFailure = receiptWaitResults.find((result) => result.status === 'rejected');
+
+  for (const result of receiptWaitResults) {
+    if (result.status === 'fulfilled') {
+      retainReceiptDocument(fixture, result.value);
+    }
+  }
 
   const paymentIds = payments.map((payment) => payment.id);
   const proofFileIds = new Set([
@@ -405,8 +506,17 @@ async function clearE2EArtifacts(page: Page, fixture: E2EArtifactContext): Promi
     });
   }
 
-  for (const receipt of receipts) {
-    await deleteReceiptDocumentViaApi(page, tenantId, receipt);
+  let receiptDeletionFailure: unknown;
+  for (const receipt of [...fixture.receiptDocuments]) {
+    try {
+      await writeReceiptCleanupManifest(receipt);
+      await deleteReceiptDocumentViaApi(page, tenantId, receipt);
+      fixture.receiptDocuments = fixture.receiptDocuments.filter(
+        (candidate) => candidate.documentId !== receipt.documentId,
+      );
+    } catch (error: unknown) {
+      receiptDeletionFailure ??= error;
+    }
   }
 
   const knownProofObjectKeys = E2E_PROOF_FILENAMES.map(
@@ -447,6 +557,13 @@ async function clearE2EArtifacts(page: Page, fixture: E2EArtifactContext): Promi
     await PRISMA.charge.deleteMany({
       where: { id: { in: [...chargeIds] }, tenantId, buildingId },
     });
+  }
+
+  if (receiptWaitFailure?.status === 'rejected') {
+    throw receiptWaitFailure.reason;
+  }
+  if (receiptDeletionFailure) {
+    throw receiptDeletionFailure;
   }
 }
 
@@ -544,7 +661,21 @@ test.describe('Resident finance oldest-first flow', () => {
     try {
       const cleanupTenantId = await login(page, TEST_USERS.tenantAdminB);
       expect(cleanupTenantId).toBe(fixture.tenantId);
-      await clearE2EArtifacts(page, fixture);
+      try {
+        await clearE2EArtifacts(page, fixture);
+      } catch (cleanupFailure: unknown) {
+        if (fixture.receiptDocuments.length > 0) {
+          try {
+            await clearE2EArtifacts(page, fixture);
+          } catch (retryFailure: unknown) {
+            throw new AggregateError(
+              [cleanupFailure, retryFailure],
+              'E2E artifact cleanup and exact receipt document cleanup retry both failed',
+            );
+          }
+        }
+        throw cleanupFailure;
+      }
     } finally {
       fixtureContext = undefined;
     }
@@ -577,6 +708,7 @@ test.describe('Resident finance oldest-first flow', () => {
       unitId,
       chargeIds: [],
       proofFileIds: [],
+      receiptDocuments: [],
     };
 
     const otherUnit = await PRISMA.unit.findFirst({
@@ -734,6 +866,8 @@ test.describe('Resident finance oldest-first flow', () => {
     expect(approvedPaymentReceipt.paymentId).toBe(approvedPayment.id);
     expect(approvedPaymentReceipt.documentId).toBeTruthy();
     expect(approvedPaymentReceipt.fileId).toBeTruthy();
+    expect(approvedPaymentReceipt.objectVersionId).toBeTruthy();
+    await verifyReceiptStorageVersion(page, residentTenantId, approvedPaymentReceipt);
     expect(approvedPayment.paymentAllocations).toHaveLength(2);
     expect(approvedPayment.paymentAllocations.map((allocation) => allocation.charge.period)).toEqual([
       '2026-06',
