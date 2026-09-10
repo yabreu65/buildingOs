@@ -12,20 +12,34 @@ const MANIFEST_FIELDS = ['bucket', 'objectKey', 'objectVersionId'];
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-const isExactVersionAbsent = (error) => {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-
-  const { code } = error;
-  return code === 'NoSuchKey' || code === 'NoSuchVersion';
+const isExactVersionAbsent = (error, bucketConfirmed, versionId) => {
+  const { code, httpStatusCode, name } = errorDetails(error);
+  if (!bucketConfirmed || typeof versionId !== 'string' || versionId.trim().length === 0) return false;
+  return code === 'NoSuchKey' || code === 'NoSuchVersion' || httpStatusCode === 404 || (name === 'S3Error' && code === 'NotFound');
 };
 
-const errorDescription = (error) => {
-  if (error instanceof Error) {
-    return error.message;
+const errorDetails = (error) => {
+  if (!error || typeof error !== 'object') {
+    return { name: typeof error, code: undefined, httpStatusCode: undefined, message: String(error) };
   }
-  return String(error);
+
+  const candidate = error;
+  const metadata = candidate.$metadata;
+  return {
+    name: typeof candidate.name === 'string' ? candidate.name : undefined,
+    code: typeof candidate.code === 'string' ? candidate.code : typeof candidate.Code === 'string' ? candidate.Code : undefined,
+    httpStatusCode: metadata && typeof metadata === 'object' && typeof metadata.httpStatusCode === 'number'
+      ? metadata.httpStatusCode
+      : typeof candidate.statusCode === 'number' ? candidate.statusCode : undefined,
+    message: candidate instanceof Error ? candidate.message : String(error),
+  };
+};
+
+const errorDescription = (error) => errorDetails(error).message;
+
+const errorDiagnostic = (error) => {
+  const { name, code, httpStatusCode, message } = errorDetails(error);
+  return `name=${name ?? 'unknown'} code=${code ?? 'unknown'} httpStatusCode=${httpStatusCode ?? 'unknown'} message=${JSON.stringify(message)}`;
 };
 
 const validateManifest = (manifestPath, parsed) => {
@@ -110,18 +124,31 @@ const createClient = () => {
   });
 };
 
-const verifyExactVersionAbsent = async (client, manifestPath, manifest) => {
+const verifyExactVersionAbsent = async (client, manifestPath, manifest, bucketCache = new Map()) => {
+  let bucketConfirmed = bucketCache.get(manifest.bucket);
+  if (bucketConfirmed === undefined) {
+    try {
+      bucketConfirmed = await client.bucketExists(manifest.bucket);
+    } catch (error) {
+      throw new Error(`RECEIPT_STORAGE_QUERY_ERROR manifest=${manifestPath} bucket-check ${errorDiagnostic(error)}`);
+    }
+    bucketCache.set(manifest.bucket, bucketConfirmed);
+  }
+  if (!bucketConfirmed) {
+    throw new Error(`RECEIPT_STORAGE_QUERY_ERROR manifest=${manifestPath} bucket-check name=unknown code=NoSuchBucket httpStatusCode=unknown message="Bucket unavailable"`);
+  }
+
   const deadline = Date.now() + POLL_TIMEOUT_MS;
 
   while (true) {
     try {
       await client.statObject(manifest.bucket, manifest.objectKey, { versionId: manifest.objectVersionId });
     } catch (error) {
-      if (isExactVersionAbsent(error)) {
+      if (isExactVersionAbsent(error, bucketConfirmed, manifest.objectVersionId)) {
         console.log(`EXACT_VERSION_ABSENT manifest=${manifestPath}`);
         return;
       }
-      throw new Error(`RECEIPT_STORAGE_QUERY_ERROR manifest=${manifestPath} reason=${errorDescription(error)}`);
+      throw new Error(`RECEIPT_STORAGE_QUERY_ERROR manifest=${manifestPath} ${errorDiagnostic(error)}`);
     }
 
     const remainingMilliseconds = deadline - Date.now();
@@ -140,14 +167,19 @@ const main = async () => {
   }
 
   const client = createClient();
+  const bucketCache = new Map();
   for (const manifest of manifests) {
-    await verifyExactVersionAbsent(client, manifest.manifestPath, manifest.value);
+    await verifyExactVersionAbsent(client, manifest.manifestPath, manifest.value, bucketCache);
   }
 
   console.log(`RECEIPT_STORAGE_CLEANUP_OK manifests=${manifests.length}`);
 };
 
-main().catch((error) => {
-  console.error(errorDescription(error));
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(errorDescription(error));
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { isExactVersionAbsent, validateManifest, verifyExactVersionAbsent, errorDetails };
