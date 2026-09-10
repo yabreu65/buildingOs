@@ -53,6 +53,12 @@ interface FinancialSummaryResponse {
   delinquentUnitsCount: number;
 }
 
+interface E2EArtifactContext {
+  tenantId: string;
+  buildingId: string;
+  unitId: string;
+}
+
 function arsAmount(buckets: Array<{ currency: string; amountMinor: number }> | undefined): number {
   return (buckets ?? []).find((b) => b.currency === 'ARS')?.amountMinor ?? 0;
 }
@@ -367,6 +373,15 @@ async function fetchPaymentByReference(reference: string): Promise<{
 }
 
 test.describe('Resident finance oldest-first flow', () => {
+  let fixtureContext: E2EArtifactContext | undefined;
+
+  test.afterEach(async () => {
+    if (fixtureContext) {
+      await clearE2EArtifacts(fixtureContext.tenantId, fixtureContext.buildingId, fixtureContext.unitId);
+      fixtureContext = undefined;
+    }
+  });
+
   test.afterAll(async () => {
     await PRISMA.$disconnect();
   });
@@ -388,6 +403,7 @@ test.describe('Resident finance oldest-first flow', () => {
       throw new Error('Expected resident B to have an active building and unit');
     }
 
+    fixtureContext = { tenantId: residentTenantId, buildingId, unitId };
     await clearE2EArtifacts(residentTenantId, buildingId, unitId);
 
     const otherUnit = await PRISMA.unit.findFirst({
