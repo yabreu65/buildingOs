@@ -9,7 +9,11 @@ import {
   type CanonicalCurrency,
 } from "@buildingos/contracts";
 import { PrismaService } from "../prisma/prisma.service";
-import { acquireExchangeRateLock, type ExchangeRateLockClient } from './exchange-rate-locks';
+import {
+  acquireExchangeRateLock,
+  acquireExchangeRatePairLock,
+  type ExchangeRateLockClient,
+} from './exchange-rate-locks';
 
 const INT_MIN = new Prisma.Decimal("-2147483648");
 const INT_MAX = new Prisma.Decimal("2147483647");
@@ -102,6 +106,15 @@ export class CurrencyConversionService {
         "IDENTITY",
         null,
         conversionDate,
+      );
+    }
+
+    if (db.$executeRaw) {
+      await acquireExchangeRatePairLock(
+        db as ExchangeRateLockClient,
+        input.tenantId,
+        input.originalCurrency,
+        input.functionalCurrency,
       );
     }
 

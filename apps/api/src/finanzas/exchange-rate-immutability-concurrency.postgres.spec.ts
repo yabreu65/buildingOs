@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient, TenantType } from '@prisma/client';
 import { CurrencyConversionService } from './currency-conversion.service';
-import { acquireExchangeRateLock } from './exchange-rate-locks';
+import { acquireExchangeRateLock, acquireExchangeRatePairLock } from './exchange-rate-locks';
 import { MulticurrencyService } from './multicurrency.service';
 import type { PrismaService } from '../prisma/prisma.service';
 
@@ -228,6 +228,44 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     await holder;
   }, 20000);
 
+  it('serializes DIRECT rate creation with INVERSE snapshot selection', async () => {
+    const ctx = await fixture('create-vs-selection');
+    await observer.exchangeRate.delete({ where: { id: ctx.rate.id } });
+    const inverseRate = await observer.exchangeRate.create({
+      data: {
+        tenantId: ctx.tenant.id,
+        baseCurrency: 'VES',
+        quoteCurrency: 'USD',
+        rate: new Prisma.Decimal('0.025'),
+        effectiveAt: new Date('2026-08-09T00:00:00.000Z'),
+      },
+    });
+    let releaseSnapshot!: () => void;
+    const snapshotMayCommit = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
+    let snapshotSelected!: () => void;
+    const snapshotHasSelected = new Promise<void>((resolve) => { snapshotSelected = resolve; });
+    const creatorPid = await backendPid(secondClient);
+
+    const snapshotTransaction = firstClient.$transaction(async (tx) => {
+      const expense = await persistExpenseSnapshot(tx, ctx, 100);
+      snapshotSelected();
+      await snapshotMayCommit;
+      return expense;
+    });
+
+    await snapshotHasSelected;
+    const createdDirectRate = new MulticurrencyService(secondClient as unknown as PrismaService)
+      .create(ctx.tenant.id, undefined, { baseCurrency: 'USD', quoteCurrency: 'VES', rate: '40', effectiveAt: '2026-08-09' });
+    await waitUntilBlocked(creatorPid);
+    releaseSnapshot();
+
+    const [expense, directRate] = await Promise.all([snapshotTransaction, createdDirectRate]);
+    expect(expense.exchangeRateId).toBe(inverseRate.id);
+    expect(expense.exchangeRateDirection).toBe('INVERSE');
+    expect(expense.exchangeRateValue?.toString()).toBe('40');
+    expect(directRate).toMatchObject({ baseCurrency: 'USD', quoteCurrency: 'VES', rate: '40' });
+  }, 20000);
+
   it('does not share the same semantic lock identity across tenants', async () => {
     const first = await fixture('tenant-a');
     const second = await fixture('tenant-b');
@@ -246,6 +284,31 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     await expect(
       Promise.race([
         secondClient.$transaction((tx) => acquireExchangeRateLock(tx, second.tenant.id, 'same-logical-rate-id')).then(() => 'acquired'),
+        new Promise((resolve) => setTimeout(() => resolve('blocked'), 250)),
+      ]),
+    ).resolves.toBe('acquired');
+    release();
+    await holder;
+  }, 20000);
+
+  it('does not share the same pair lock identity across tenants', async () => {
+    const first = await fixture('pair-tenant-a');
+    const second = await fixture('pair-tenant-b');
+    let release!: () => void;
+    const releaseLock = new Promise<void>((resolve) => { release = resolve; });
+    let locked!: () => void;
+    const firstLocked = new Promise<void>((resolve) => { locked = resolve; });
+
+    const holder = firstClient.$transaction(async (tx) => {
+      await acquireExchangeRatePairLock(tx, first.tenant.id, 'USD', 'VES');
+      locked();
+      await releaseLock;
+    });
+    await firstLocked;
+
+    await expect(
+      Promise.race([
+        secondClient.$transaction((tx) => acquireExchangeRatePairLock(tx, second.tenant.id, 'USD', 'VES')).then(() => 'acquired'),
         new Promise((resolve) => setTimeout(() => resolve('blocked'), 250)),
       ]),
     ).resolves.toBe('acquired');

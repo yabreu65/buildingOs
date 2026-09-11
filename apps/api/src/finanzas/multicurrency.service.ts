@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { Prisma } from '@prisma/client';
 import type { CanonicalCurrency } from '@buildingos/contracts';
 import { PrismaService } from '../prisma/prisma.service';
-import { acquireExchangeRateLock } from './exchange-rate-locks';
+import { acquireExchangeRateLock, acquireExchangeRatePairLock } from './exchange-rate-locks';
 import { CreateExchangeRateDto, ExchangeRateQueryDto, UpdateExchangeRateDto } from './multicurrency.dto';
 
 export interface ExchangeRateResponse {
@@ -44,10 +44,13 @@ export class MulticurrencyService {
       const membership = await this.prisma.membership.findFirst({ where: { id: membershipId, tenantId }, select: { id: true } });
       if (!membership) throw new BadRequestException('Creator membership does not belong to tenant');
     }
-    const rate = await this.executeExchangeRateWrite(
-      this.prisma.exchangeRate.create({ data: { tenantId, baseCurrency: dto.baseCurrency, quoteCurrency: dto.quoteCurrency, rate: new Prisma.Decimal(dto.rate), effectiveAt: this.normalizeEffectiveDate(dto.effectiveAt), source: dto.source?.trim() || null, createdByMembershipId: membershipId || null } }),
-    );
-    return this.serialize(rate);
+    return this.prisma.$transaction(async (tx) => {
+      await acquireExchangeRatePairLock(tx, tenantId, dto.baseCurrency, dto.quoteCurrency);
+      const rate = await this.executeExchangeRateWrite(
+        tx.exchangeRate.create({ data: { tenantId, baseCurrency: dto.baseCurrency, quoteCurrency: dto.quoteCurrency, rate: new Prisma.Decimal(dto.rate), effectiveAt: this.normalizeEffectiveDate(dto.effectiveAt), source: dto.source?.trim() || null, createdByMembershipId: membershipId || null } }),
+      );
+      return this.serialize(rate);
+    });
   }
 
   async update(tenantId: string, id: string, dto: UpdateExchangeRateDto): Promise<ExchangeRateResponse> {
