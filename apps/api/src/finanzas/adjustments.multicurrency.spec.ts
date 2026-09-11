@@ -344,7 +344,7 @@ describe('AdjustmentsService multicurrency snapshot', () => {
       expect(query.where.baseCurrency).toBe('USD');
       expect(query.where.quoteCurrency).toBe('VES');
       expect(query.where.effectiveAt.lte).toEqual(new Date('2026-08-09T00:00:00.000Z'));
-      expect(query.orderBy.effectiveAt).toBe('desc');
+      expect(query.orderBy).toEqual([{ effectiveAt: 'desc' }, { id: 'asc' }]);
     });
   });
 

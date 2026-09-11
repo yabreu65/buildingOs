@@ -82,7 +82,7 @@ describe("CurrencyConversionService", () => {
           quoteCurrency: "VES",
           effectiveAt: { lte: new Date("2026-08-09T00:00:00.000Z") },
         },
-        orderBy: { effectiveAt: "desc" },
+        orderBy: [{ effectiveAt: "desc" }, { id: "asc" }],
         select: { id: true, rate: true, effectiveAt: true },
       });
     },
@@ -96,7 +96,7 @@ describe("CurrencyConversionService", () => {
         tenantId: "tenant-1",
         effectiveAt: { lte: new Date("2026-08-09T00:00:00.000Z") },
       },
-      orderBy: { effectiveAt: "desc" },
+      orderBy: [{ effectiveAt: "desc" }, { id: "asc" }],
     });
   });
 
@@ -122,7 +122,7 @@ describe("CurrencyConversionService", () => {
         quoteCurrency: "USD",
         effectiveAt: { lte: new Date("2026-08-09T00:00:00.000Z") },
       },
-      orderBy: { effectiveAt: "desc" },
+      orderBy: [{ effectiveAt: "desc" }, { id: "asc" }],
       select: { id: true, rate: true, effectiveAt: true },
     });
   });
@@ -343,6 +343,162 @@ describe("CurrencyConversionService", () => {
     } as Parameters<CurrencyConversionService["convert"]>[0];
   }
 
+
+  describe("canonical 3B.1 conversion engine contract", () => {
+    function canonicalInput(overrides: Record<string, unknown> = {}) {
+      return {
+        tenantId: "tenant-1",
+        originalAmountMinor: 100,
+        originalCurrency: "USD",
+        functionalCurrency: "VES",
+        operationDate: "2026-08-09",
+        ...overrides,
+      } as Parameters<CurrencyConversionService["convertToFunctionalCurrency"]>[0];
+    }
+
+    it("returns snapshot-ready IDENTITY evidence with exact amount and no ExchangeRate", async () => {
+      await expect(
+        service.convertToFunctionalCurrency(
+          canonicalInput({ originalAmountMinor: 0, originalCurrency: "COP", functionalCurrency: "COP" }),
+        ),
+      ).resolves.toEqual({
+        originalAmountMinor: 0,
+        originalCurrency: "COP",
+        functionalAmountMinor: 0,
+        functionalCurrency: "COP",
+        exchangeRateId: null,
+        exchangeRateValue: "1",
+        exchangeRateDirection: "IDENTITY",
+        exchangeRateEffectiveAt: null,
+        conversionDate: new Date("2026-08-09T00:00:00.000Z"),
+      });
+      expect(exchangeRate.findFirst).not.toHaveBeenCalled();
+    });
+
+    it("returns snapshot-ready DIRECT evidence using tenant, same-day boundary, and deterministic ordering", async () => {
+      exchangeRate.findFirst.mockResolvedValue(rate({ id: "rate-direct", rate: "36.5", effectiveAt: new Date("2026-08-09T00:00:00.000Z") }));
+
+      await expect(service.convertToFunctionalCurrency(canonicalInput())).resolves.toMatchObject({
+        originalAmountMinor: 100,
+        originalCurrency: "USD",
+        functionalAmountMinor: 3650,
+        functionalCurrency: "VES",
+        exchangeRateId: "rate-direct",
+        exchangeRateValue: "36.5",
+        exchangeRateDirection: "DIRECT",
+        exchangeRateEffectiveAt: new Date("2026-08-09T00:00:00.000Z"),
+      });
+      expect(exchangeRate.findFirst).toHaveBeenCalledWith({
+        where: {
+          tenantId: "tenant-1",
+          baseCurrency: "USD",
+          quoteCurrency: "VES",
+          effectiveAt: { lte: new Date("2026-08-09T00:00:00.000Z") },
+        },
+        orderBy: [{ effectiveAt: "desc" }, { id: "asc" }],
+        select: { id: true, rate: true, effectiveAt: true },
+      });
+    });
+
+    it("uses previous eligible DIRECT rates and ignores future rates through the lookup boundary", async () => {
+      exchangeRate.findFirst.mockResolvedValue(rate({ id: "previous-rate", rate: "2", effectiveAt: new Date("2026-08-08T00:00:00.000Z") }));
+
+      await expect(service.convertToFunctionalCurrency(canonicalInput())).resolves.toMatchObject({
+        functionalAmountMinor: 200,
+        exchangeRateId: "previous-rate",
+        exchangeRateDirection: "DIRECT",
+      });
+      expect(exchangeRate.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ effectiveAt: { lte: new Date("2026-08-09T00:00:00.000Z") } }),
+        }),
+      );
+    });
+
+    it("falls back to INVERSE only when DIRECT is missing", async () => {
+      exchangeRate.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(rate({ id: "rate-inverse", rate: "4", effectiveAt: new Date("2026-08-08T00:00:00.000Z") }));
+
+      await expect(service.convertToFunctionalCurrency(canonicalInput())).resolves.toMatchObject({
+        functionalAmountMinor: 25,
+        exchangeRateId: "rate-inverse",
+        exchangeRateValue: "0.25",
+        exchangeRateDirection: "INVERSE",
+      });
+      expect(exchangeRate.findFirst).toHaveBeenCalledTimes(2);
+    });
+
+    it("prefers DIRECT over INVERSE when both could exist", async () => {
+      exchangeRate.findFirst.mockResolvedValue(rate({ id: "direct-wins", rate: "3" }));
+
+      await expect(service.convertToFunctionalCurrency(canonicalInput())).resolves.toMatchObject({
+        functionalAmountMinor: 300,
+        exchangeRateId: "direct-wins",
+        exchangeRateDirection: "DIRECT",
+      });
+      expect(exchangeRate.findFirst).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns stable EXCHANGE_RATE_NOT_FOUND without silent fallback", async () => {
+      exchangeRate.findFirst.mockResolvedValue(null);
+
+      await expect(service.convertToFunctionalCurrency(canonicalInput())).rejects.toMatchObject({
+        response: {
+          code: "EXCHANGE_RATE_NOT_FOUND",
+          originalCurrency: "USD",
+          functionalCurrency: "VES",
+          conversionDate: "2026-08-09",
+        },
+      });
+      expect(exchangeRate.findFirst).toHaveBeenCalledTimes(2);
+    });
+
+    it("preserves tenant isolation on both DIRECT and INVERSE lookups", async () => {
+      exchangeRate.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.convertToFunctionalCurrency(canonicalInput({ tenantId: "tenant-b" })),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(exchangeRate.findFirst.mock.calls.every(([query]) => query.where.tenantId === "tenant-b")).toBe(true);
+    });
+
+    it.each([
+      ["even-down", 1, "2.5", 2],
+      ["odd-up", 1, "3.5", 4],
+      ["negative-even-up-toward-even", -1, "2.5", -2],
+      ["negative-odd-down-to-even", -1, "3.5", -4],
+    ])("uses ROUND_HALF_EVEN for %s", async (_label, originalAmountMinor, sourceRate, expected) => {
+      exchangeRate.findFirst.mockResolvedValue(rate({ rate: sourceRate }));
+
+      await expect(
+        service.convertToFunctionalCurrency(canonicalInput({ originalAmountMinor })),
+      ).resolves.toMatchObject({ functionalAmountMinor: expected });
+    });
+
+    it("keeps precision with fixed-point Decimal rates and output evidence", async () => {
+      exchangeRate.findFirst.mockResolvedValue(rate({ rate: "1.123456789012" }));
+
+      await expect(
+        service.convertToFunctionalCurrency(canonicalInput({ originalAmountMinor: 100 })),
+      ).resolves.toMatchObject({
+        functionalAmountMinor: 112,
+        exchangeRateValue: "1.123456789012",
+      });
+    });
+
+    it.each(["USD", "VES", "ARS", "COP"] as const)(
+      "accepts canonical currency %s in the 3B.1 input contract",
+      async (currency) => {
+        await expect(
+          service.convertToFunctionalCurrency(
+            canonicalInput({ originalCurrency: currency, functionalCurrency: currency }),
+          ),
+        ).resolves.toMatchObject({ exchangeRateDirection: "IDENTITY" });
+      },
+    );
+  });
+
 describe("CurrencyConversionService transaction propagation", () => {
   const rootExchangeRate = { findFirst: jest.fn() };
   const rootPrisma = { exchangeRate: rootExchangeRate } as unknown as PrismaService;
@@ -368,13 +524,11 @@ describe("CurrencyConversionService transaction propagation", () => {
   };
 
   it("uses the root PrismaService when no client is provided", async () => {
-    rootExchangeRate.findFirst.mockResolvedValue(
-      new Prisma.Decimal("36.5").toNumber() ? {
-        id: "rate-1",
-        rate: new Prisma.Decimal("36.5"),
-        effectiveAt: new Date("2026-08-08T00:00:00.000Z"),
-      } : null,
-    );
+    rootExchangeRate.findFirst.mockResolvedValue({
+      id: "rate-1",
+      rate: new Prisma.Decimal("36.5"),
+      effectiveAt: new Date("2026-08-08T00:00:00.000Z"),
+    });
 
     await rootService.convert(input);
 

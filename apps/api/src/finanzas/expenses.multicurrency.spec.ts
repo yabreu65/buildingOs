@@ -250,7 +250,7 @@ describe('ExpensesService multicurrency snapshot', () => {
           quoteCurrency: 'VES',
           effectiveAt: { lte: new Date('2026-08-09T00:00:00.000Z') },
         },
-        orderBy: { effectiveAt: 'desc' },
+        orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }],
         select: { id: true, rate: true, effectiveAt: true },
       });
       expect(exchangeRateFindFirst).toHaveBeenCalledTimes(1);
@@ -303,7 +303,7 @@ describe('ExpensesService multicurrency snapshot', () => {
           quoteCurrency: 'USD',
           effectiveAt: { lte: new Date('2026-08-09T00:00:00.000Z') },
         },
-        orderBy: { effectiveAt: 'desc' },
+        orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }],
         select: { id: true, rate: true, effectiveAt: true },
       });
     });
@@ -464,9 +464,7 @@ describe('ExpensesService multicurrency snapshot', () => {
       expect(exchangeRateFindFirst.mock.calls[0][0].where).toMatchObject({
         effectiveAt: { lte: new Date('2026-08-09T00:00:00.000Z') },
       });
-      expect(exchangeRateFindFirst.mock.calls[0][0].orderBy).toEqual({
-        effectiveAt: 'desc',
-      });
+      expect(exchangeRateFindFirst.mock.calls[0][0].orderBy).toEqual([{ effectiveAt: 'desc' }, { id: 'asc' }]);
     });
   });
 

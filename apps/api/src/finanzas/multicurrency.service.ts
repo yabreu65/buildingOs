@@ -57,11 +57,36 @@ export class MulticurrencyService {
       ...(dto.source !== undefined ? { source: dto.source.trim() || null } : {}),
     };
     const result = await this.executeExchangeRateWrite(
-      this.prisma.exchangeRate.updateMany({ where: { id, tenantId }, data }),
+      this.prisma.exchangeRate.updateMany({
+        where: {
+          id,
+          tenantId,
+          expenses: { none: {} },
+          incomes: { none: {} },
+          adjustments: { none: {} },
+          payments: { none: {} },
+        },
+        data,
+      }),
     );
-    if (result.count !== 1) throw new NotFoundException('Exchange rate not found');
+    if (result.count !== 1) {
+      await this.assertExchangeRateCanBeChanged(tenantId, id);
+      throw new NotFoundException('Exchange rate not found');
+    }
     const rate = await this.prisma.exchangeRate.findFirstOrThrow({ where: { id, tenantId } });
     return this.serialize(rate);
+  }
+
+  private async assertExchangeRateCanBeChanged(tenantId: string, id: string): Promise<void> {
+    const existing = await this.prisma.exchangeRate.findFirst({
+      where: { id, tenantId },
+      select: { id: true },
+    });
+    if (!existing) throw new NotFoundException('Exchange rate not found');
+    throw new ConflictException({
+      code: 'EXCHANGE_RATE_IN_USE',
+      message: 'Exchange rates referenced by financial snapshots cannot be modified or deleted',
+    });
   }
 
   private assertPair(dto: CreateExchangeRateDto): void {
