@@ -9,7 +9,13 @@ describe('MulticurrencyService', () => {
   const exchangeRate = {
     findMany: jest.fn(), create: jest.fn(), updateMany: jest.fn(), findFirst: jest.fn(), findFirstOrThrow: jest.fn(),
   };
-  const prisma = { tenant, membership, exchangeRate } as unknown as PrismaService;
+  const prisma = {
+    tenant,
+    membership,
+    exchangeRate,
+    $executeRaw: jest.fn(),
+    $transaction: jest.fn(async (callback: (tx: PrismaService) => Promise<unknown>) => callback(prisma)),
+  } as unknown as PrismaService;
   const service = new MulticurrencyService(prisma);
   const dto = { baseCurrency: 'USD' as const, quoteCurrency: 'VES' as const, rate: '36.500000000001', effectiveAt: '2026-08-09', source: 'Central bank' };
   const record = { id: 'rate-1', tenantId: 'tenant-1', ...dto, rate: new Prisma.Decimal(dto.rate), effectiveAt: new Date(dto.effectiveAt), source: dto.source, createdByMembershipId: 'membership-1', createdAt: new Date(), updatedAt: new Date() };

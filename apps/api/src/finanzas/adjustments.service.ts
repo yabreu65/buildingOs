@@ -108,43 +108,51 @@ export class AdjustmentsService {
       throw new ForbiddenException('Solo administradores pueden validar ajustes');
     }
 
-    const adjustment = await this.prisma.adjustment.findFirst({
-      where: { id: adjustmentId, tenantId },
-      include: { category: { select: { name: true } } },
-    });
+    let auditMetadata: { sourcePeriod: string; targetPeriod: string } | null = null;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const adjustment = await tx.adjustment.findFirst({
+        where: { id: adjustmentId, tenantId },
+        include: { category: { select: { name: true } } },
+      });
 
-    if (!adjustment) {
-      throw new NotFoundException(`Ajuste no encontrado: ${adjustmentId}`);
-    }
+      if (!adjustment) {
+        throw new NotFoundException(`Ajuste no encontrado: ${adjustmentId}`);
+      }
 
-    if (adjustment.status !== 'DRAFT') {
-      throw new BadRequestException(
-        `Solo se pueden validar ajustes en DRAFT. Estado actual: ${adjustment.status}`,
+      if (adjustment.status !== 'DRAFT') {
+        throw new BadRequestException(
+          `Solo se pueden validar ajustes en DRAFT. Estado actual: ${adjustment.status}`,
+        );
+      }
+
+      const conversionSnapshot = await this.buildAdjustmentConversionSnapshot(
+        tenantId,
+        adjustment,
+        tx,
       );
-    }
+      auditMetadata = {
+        sourcePeriod: adjustment.sourcePeriod,
+        targetPeriod: adjustment.targetPeriod,
+      };
 
-    const conversionSnapshot = await this.buildAdjustmentConversionSnapshot(
-      tenantId,
-      adjustment,
-    );
-
-    const updated = await this.prisma.adjustment.update({
-      where: { id: adjustmentId },
-      data: {
-        status: 'VALIDATED',
-        validatedByMembershipId: membershipId,
-        validatedAt: new Date(),
-        functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
-        functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
-        exchangeRateId: conversionSnapshot.exchangeRateId,
-        exchangeRateValue: conversionSnapshot.exchangeRateValue,
-        exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
-        exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
-        conversionDate: conversionSnapshot.conversionDate,
-      },
-      include: {
-        category: { select: { name: true } },
-      },
+      return tx.adjustment.update({
+        where: { id: adjustmentId },
+        data: {
+          status: 'VALIDATED',
+          validatedByMembershipId: membershipId,
+          validatedAt: new Date(),
+          functionalAmountMinor: conversionSnapshot.functionalAmountMinor,
+          functionalCurrencyCode: conversionSnapshot.functionalCurrencyCode,
+          exchangeRateId: conversionSnapshot.exchangeRateId,
+          exchangeRateValue: conversionSnapshot.exchangeRateValue,
+          exchangeRateDirection: conversionSnapshot.exchangeRateDirection,
+          exchangeRateEffectiveAt: conversionSnapshot.exchangeRateEffectiveAt,
+          conversionDate: conversionSnapshot.conversionDate,
+        },
+        include: {
+          category: { select: { name: true } },
+        },
+      });
     });
 
     void this.auditService.createLog({
@@ -153,10 +161,7 @@ export class AdjustmentsService {
       action: AuditAction.OTHER,
       entityType: 'Adjustment',
       entityId: adjustmentId,
-      metadata: {
-        sourcePeriod: adjustment.sourcePeriod,
-        targetPeriod: adjustment.targetPeriod,
-      },
+      metadata: auditMetadata ?? {},
     });
 
     return this.toDto(updated);
@@ -211,6 +216,7 @@ export class AdjustmentsService {
       currencyCode: string;
       sourceInvoiceDate: Date;
     },
+    db: PrismaService | Prisma.TransactionClient = this.prisma,
   ): Promise<{
     functionalAmountMinor: number;
     functionalCurrencyCode: string;
@@ -220,7 +226,7 @@ export class AdjustmentsService {
     exchangeRateEffectiveAt: Date | null;
     conversionDate: Date;
   }> {
-    const tenant = await this.prisma.tenant.findFirst({
+    const tenant = await db.tenant.findFirst({
       where: { id: tenantId },
       select: { id: true, functionalCurrency: true },
     });
@@ -239,7 +245,7 @@ export class AdjustmentsService {
         typeof this.currencyConversionService.convert
       >[0]['functionalCurrency'],
       conversionDate: this.toConversionDate(adjustment.sourceInvoiceDate),
-    });
+    }, db);
 
     return {
       functionalAmountMinor: result.functionalAmount,

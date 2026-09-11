@@ -9,6 +9,7 @@ import {
   type CanonicalCurrency,
 } from "@buildingos/contracts";
 import { PrismaService } from "../prisma/prisma.service";
+import { acquireExchangeRateLock, type ExchangeRateLockClient } from './exchange-rate-locks';
 
 const INT_MIN = new Prisma.Decimal("-2147483648");
 const INT_MAX = new Prisma.Decimal("2147483647");
@@ -63,6 +64,7 @@ interface RateSnapshot {
 }
 
 export interface CurrencyConversionDb {
+  readonly $executeRaw?: ExchangeRateLockClient['$executeRaw'];
   readonly exchangeRate: {
     findFirst: (args: {
       where: {
@@ -103,7 +105,7 @@ export class CurrencyConversionService {
       );
     }
 
-    const direct = await this.findRate(
+    const direct = await this.findLockedRate(
       db,
       input.tenantId,
       input.originalCurrency,
@@ -125,7 +127,7 @@ export class CurrencyConversionService {
       );
     }
 
-    const inverse = await this.findRate(
+    const inverse = await this.findLockedRate(
       db,
       input.tenantId,
       input.functionalCurrency,
@@ -178,6 +180,33 @@ export class CurrencyConversionService {
       sourceEffectiveAt: result.exchangeRateEffectiveAt,
       conversionDate: result.conversionDate,
     };
+  }
+
+  private async findLockedRate(
+    db: CurrencyConversionDb,
+    tenantId: string,
+    baseCurrency: CanonicalCurrency,
+    quoteCurrency: CanonicalCurrency,
+    conversionDate: Date,
+  ): Promise<RateSnapshot | null> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const selected = await this.findRate(db, tenantId, baseCurrency, quoteCurrency, conversionDate);
+      if (!selected) return null;
+
+      if (!db.$executeRaw) return selected;
+      await acquireExchangeRateLock(db as ExchangeRateLockClient, tenantId, selected.id);
+
+      const revalidated = await this.findRate(db, tenantId, baseCurrency, quoteCurrency, conversionDate);
+      if (!revalidated) return null;
+      if (revalidated.id === selected.id) return revalidated;
+    }
+
+    throw new UnprocessableEntityException({
+      code: 'EXCHANGE_RATE_SELECTION_UNSTABLE',
+      baseCurrency,
+      quoteCurrency,
+      conversionDate: conversionDate.toISOString(),
+    });
   }
 
   private async findRate(

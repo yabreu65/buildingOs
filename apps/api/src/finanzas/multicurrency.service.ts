@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { Prisma } from '@prisma/client';
 import type { CanonicalCurrency } from '@buildingos/contracts';
 import { PrismaService } from '../prisma/prisma.service';
+import { acquireExchangeRateLock } from './exchange-rate-locks';
 import { CreateExchangeRateDto, ExchangeRateQueryDto, UpdateExchangeRateDto } from './multicurrency.dto';
 
 export interface ExchangeRateResponse {
@@ -56,29 +57,40 @@ export class MulticurrencyService {
       effectiveAt: this.normalizeEffectiveDate(dto.effectiveAt),
       ...(dto.source !== undefined ? { source: dto.source.trim() || null } : {}),
     };
-    const result = await this.executeExchangeRateWrite(
-      this.prisma.exchangeRate.updateMany({
-        where: {
-          id,
-          tenantId,
-          expenses: { none: {} },
-          incomes: { none: {} },
-          adjustments: { none: {} },
-          payments: { none: {} },
-        },
-        data,
-      }),
-    );
-    if (result.count !== 1) {
-      await this.assertExchangeRateCanBeChanged(tenantId, id);
-      throw new NotFoundException('Exchange rate not found');
-    }
-    const rate = await this.prisma.exchangeRate.findFirstOrThrow({ where: { id, tenantId } });
-    return this.serialize(rate);
+    return this.prisma.$transaction(async (tx) => {
+      await acquireExchangeRateLock(tx, tenantId, id);
+      const result = await this.executeExchangeRateWrite(
+        tx.exchangeRate.updateMany({
+          where: this.unusedExchangeRateWhere(tenantId, id),
+          data,
+        }),
+      );
+      if (result.count !== 1) {
+        await this.assertExchangeRateCanBeChanged(tx, tenantId, id);
+        throw new NotFoundException('Exchange rate not found');
+      }
+      const rate = await tx.exchangeRate.findFirstOrThrow({ where: { id, tenantId } });
+      return this.serialize(rate);
+    });
   }
 
-  private async assertExchangeRateCanBeChanged(tenantId: string, id: string): Promise<void> {
-    const existing = await this.prisma.exchangeRate.findFirst({
+  private unusedExchangeRateWhere(tenantId: string, id: string): Prisma.ExchangeRateWhereInput {
+    return {
+      id,
+      tenantId,
+      expenses: { none: {} },
+      incomes: { none: {} },
+      adjustments: { none: {} },
+      payments: { none: {} },
+    };
+  }
+
+  private async assertExchangeRateCanBeChanged(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    id: string,
+  ): Promise<void> {
+    const existing = await tx.exchangeRate.findFirst({
       where: { id, tenantId },
       select: { id: true },
     });
