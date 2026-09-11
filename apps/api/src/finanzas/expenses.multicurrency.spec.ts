@@ -250,10 +250,10 @@ describe('ExpensesService multicurrency snapshot', () => {
           quoteCurrency: 'VES',
           effectiveAt: { lte: new Date('2026-08-09T00:00:00.000Z') },
         },
-        orderBy: { effectiveAt: 'desc' },
+        orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }],
         select: { id: true, rate: true, effectiveAt: true },
       });
-      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(1);
+      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -261,6 +261,9 @@ describe('ExpensesService multicurrency snapshot', () => {
     beforeEach(() => {
       exchangeRateFindFirst
         .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          rate({ id: 'inverse-rate-1', rate: '4' }),
+        )
         .mockResolvedValueOnce(
           rate({ id: 'inverse-rate-1', rate: '4' }),
         );
@@ -303,7 +306,7 @@ describe('ExpensesService multicurrency snapshot', () => {
           quoteCurrency: 'USD',
           effectiveAt: { lte: new Date('2026-08-09T00:00:00.000Z') },
         },
-        orderBy: { effectiveAt: 'desc' },
+        orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }],
         select: { id: true, rate: true, effectiveAt: true },
       });
     });
@@ -454,7 +457,7 @@ describe('ExpensesService multicurrency snapshot', () => {
     it('uses same-day rate, prior rate, and never a future rate', async () => {
       exchangeRateFindFirst
         .mockResolvedValueOnce(rate({ id: 'same-day' }))
-        .mockResolvedValueOnce(rate({ id: 'future' }));
+        .mockResolvedValueOnce(rate({ id: 'same-day' }));
       (prisma.expense.findFirst as jest.Mock).mockResolvedValue(
         makeExpense({ currencyCode: 'USD', amountMinor: 100 }) as never,
       );
@@ -464,9 +467,7 @@ describe('ExpensesService multicurrency snapshot', () => {
       expect(exchangeRateFindFirst.mock.calls[0][0].where).toMatchObject({
         effectiveAt: { lte: new Date('2026-08-09T00:00:00.000Z') },
       });
-      expect(exchangeRateFindFirst.mock.calls[0][0].orderBy).toEqual({
-        effectiveAt: 'desc',
-      });
+      expect(exchangeRateFindFirst.mock.calls[0][0].orderBy).toEqual([{ effectiveAt: 'desc' }, { id: 'asc' }]);
     });
   });
 
@@ -477,7 +478,7 @@ describe('ExpensesService multicurrency snapshot', () => {
           rate({ id: 'rate-1', rate: '36.5', effectiveAt: new Date('2026-08-08T00:00:00.000Z') }),
         )
         .mockResolvedValueOnce(
-          rate({ id: 'rate-2', rate: '1000', effectiveAt: new Date('2026-08-10T00:00:00.000Z') }),
+          rate({ id: 'rate-1', rate: '36.5', effectiveAt: new Date('2026-08-08T00:00:00.000Z') }),
         );
       (prisma.expense.findFirst as jest.Mock).mockResolvedValue(
         makeExpense({ currencyCode: 'USD', amountMinor: 100 }) as never,
@@ -498,7 +499,7 @@ describe('ExpensesService multicurrency snapshot', () => {
 
       const persisted = await validate();
 
-      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(1);
+      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(2);
       expect(persisted.exchangeRateId).toBe('rate-1');
       expect(persisted.exchangeRateValue).toBe('36.5');
       expect(persisted.functionalAmountMinor).toBe(3650);

@@ -9,11 +9,37 @@ import {
   type CanonicalCurrency,
 } from "@buildingos/contracts";
 import { PrismaService } from "../prisma/prisma.service";
+import {
+  acquireExchangeRateLock,
+  acquireExchangeRatePairLock,
+  type ExchangeRateLockClient,
+} from './exchange-rate-locks';
 
 const INT_MIN = new Prisma.Decimal("-2147483648");
 const INT_MAX = new Prisma.Decimal("2147483647");
 
 export type CurrencyConversionDirection = "IDENTITY" | "DIRECT" | "INVERSE";
+
+export interface MulticurrencyConversionInput {
+  readonly tenantId: string;
+  readonly originalAmountMinor: number;
+  readonly originalCurrency: CanonicalCurrency;
+  readonly functionalCurrency: CanonicalCurrency;
+  /** Strict UTC date-only YYYY-MM-DD accounting date for exchange-rate lookup. */
+  readonly operationDate: string;
+}
+
+export interface MulticurrencyConversionResult {
+  readonly originalAmountMinor: number;
+  readonly originalCurrency: CanonicalCurrency;
+  readonly functionalAmountMinor: number;
+  readonly functionalCurrency: CanonicalCurrency;
+  readonly exchangeRateId: string | null;
+  readonly exchangeRateValue: string;
+  readonly exchangeRateDirection: CurrencyConversionDirection;
+  readonly exchangeRateEffectiveAt: Date | null;
+  readonly conversionDate: Date;
+}
 
 export interface CurrencyConversionInput {
   readonly tenantId: string;
@@ -42,6 +68,7 @@ interface RateSnapshot {
 }
 
 export interface CurrencyConversionDb {
+  readonly $executeRaw?: ExchangeRateLockClient['$executeRaw'];
   readonly exchangeRate: {
     findFirst: (args: {
       where: {
@@ -50,7 +77,7 @@ export interface CurrencyConversionDb {
         quoteCurrency: CanonicalCurrency;
         effectiveAt: { lte: Date };
       };
-      orderBy: { effectiveAt: 'desc' };
+      orderBy: [{ effectiveAt: "desc" }, { id: "asc" }];
       select: { id: true; rate: true; effectiveAt: true };
     }) => Promise<{
       id: string;
@@ -64,17 +91,17 @@ export interface CurrencyConversionDb {
 export class CurrencyConversionService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async convert(
-    input: CurrencyConversionInput,
+  async convertToFunctionalCurrency(
+    input: MulticurrencyConversionInput,
     db: CurrencyConversionDb = this.prisma,
-  ): Promise<CurrencyConversionResult> {
-    this.assertInput(input);
-    const conversionDate = this.normalizeDate(input.conversionDate);
+  ): Promise<MulticurrencyConversionResult> {
+    this.assertCanonicalInput(input);
+    const conversionDate = this.normalizeDate(input.operationDate, "operationDate");
 
     if (input.originalCurrency === input.functionalCurrency) {
-      return this.result(
+      return this.canonicalResult(
         input,
-        input.amount,
+        input.originalAmountMinor,
         new Prisma.Decimal(1),
         "IDENTITY",
         null,
@@ -82,7 +109,16 @@ export class CurrencyConversionService {
       );
     }
 
-    const direct = await this.findRate(
+    if (db.$executeRaw) {
+      await acquireExchangeRatePairLock(
+        db as ExchangeRateLockClient,
+        input.tenantId,
+        input.originalCurrency,
+        input.functionalCurrency,
+      );
+    }
+
+    const direct = await this.findLockedRate(
       db,
       input.tenantId,
       input.originalCurrency,
@@ -104,7 +140,7 @@ export class CurrencyConversionService {
       );
     }
 
-    const inverse = await this.findRate(
+    const inverse = await this.findLockedRate(
       db,
       input.tenantId,
       input.functionalCurrency,
@@ -130,7 +166,59 @@ export class CurrencyConversionService {
       code: "EXCHANGE_RATE_NOT_FOUND",
       originalCurrency: input.originalCurrency,
       functionalCurrency: input.functionalCurrency,
-      conversionDate: input.conversionDate,
+      conversionDate: input.operationDate,
+    });
+  }
+
+  async convert(
+    input: CurrencyConversionInput,
+    db: CurrencyConversionDb = this.prisma,
+  ): Promise<CurrencyConversionResult> {
+    const result = await this.convertToFunctionalCurrency({
+      tenantId: input.tenantId,
+      originalAmountMinor: input.amount,
+      originalCurrency: input.originalCurrency,
+      functionalCurrency: input.functionalCurrency,
+      operationDate: input.conversionDate,
+    }, db);
+
+    return {
+      originalAmount: result.originalAmountMinor,
+      originalCurrency: result.originalCurrency,
+      functionalAmount: result.functionalAmountMinor,
+      functionalCurrency: result.functionalCurrency,
+      sourceExchangeRateId: result.exchangeRateId,
+      appliedRate: result.exchangeRateValue,
+      direction: result.exchangeRateDirection,
+      sourceEffectiveAt: result.exchangeRateEffectiveAt,
+      conversionDate: result.conversionDate,
+    };
+  }
+
+  private async findLockedRate(
+    db: CurrencyConversionDb,
+    tenantId: string,
+    baseCurrency: CanonicalCurrency,
+    quoteCurrency: CanonicalCurrency,
+    conversionDate: Date,
+  ): Promise<RateSnapshot | null> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const selected = await this.findRate(db, tenantId, baseCurrency, quoteCurrency, conversionDate);
+      if (!selected) return null;
+
+      if (!db.$executeRaw) return selected;
+      await acquireExchangeRateLock(db as ExchangeRateLockClient, tenantId, selected.id);
+
+      const revalidated = await this.findRate(db, tenantId, baseCurrency, quoteCurrency, conversionDate);
+      if (!revalidated) return null;
+      if (revalidated.id === selected.id) return revalidated;
+    }
+
+    throw new UnprocessableEntityException({
+      code: 'EXCHANGE_RATE_SELECTION_UNSTABLE',
+      baseCurrency,
+      quoteCurrency,
+      conversionDate: conversionDate.toISOString(),
     });
   }
 
@@ -148,7 +236,7 @@ export class CurrencyConversionService {
         quoteCurrency,
         effectiveAt: { lte: conversionDate },
       },
-      orderBy: { effectiveAt: "desc" },
+      orderBy: [{ effectiveAt: "desc" }, { id: "asc" }],
       select: { id: true, rate: true, effectiveAt: true },
     });
   }
@@ -169,17 +257,17 @@ export class CurrencyConversionService {
   }
 
   private convertWithRate(
-    input: CurrencyConversionInput,
+    input: MulticurrencyConversionInput,
     source: RateSnapshot,
     appliedRate: Prisma.Decimal,
     direction: Exclude<CurrencyConversionDirection, "IDENTITY">,
     conversionDate: Date,
-  ): CurrencyConversionResult {
-    const converted = new Prisma.Decimal(input.amount)
+  ): MulticurrencyConversionResult {
+    const converted = new Prisma.Decimal(input.originalAmountMinor)
       .mul(appliedRate)
       .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_EVEN);
     this.assertStorageRange(converted);
-    return this.result(
+    return this.canonicalResult(
       input,
       converted.toNumber(),
       appliedRate,
@@ -189,28 +277,28 @@ export class CurrencyConversionService {
     );
   }
 
-  private result(
-    input: CurrencyConversionInput,
-    functionalAmount: number,
+  private canonicalResult(
+    input: MulticurrencyConversionInput,
+    functionalAmountMinor: number,
     appliedRate: Prisma.Decimal,
     direction: CurrencyConversionDirection,
     source: RateSnapshot | null,
     conversionDate: Date,
-  ): CurrencyConversionResult {
+  ): MulticurrencyConversionResult {
     return {
-      originalAmount: input.amount,
+      originalAmountMinor: input.originalAmountMinor,
       originalCurrency: input.originalCurrency,
-      functionalAmount,
+      functionalAmountMinor,
       functionalCurrency: input.functionalCurrency,
-      sourceExchangeRateId: source?.id ?? null,
-      appliedRate: appliedRate.toFixed(),
-      direction,
-      sourceEffectiveAt: source?.effectiveAt ?? null,
+      exchangeRateId: source?.id ?? null,
+      exchangeRateValue: appliedRate.toFixed(),
+      exchangeRateDirection: direction,
+      exchangeRateEffectiveAt: source?.effectiveAt ?? null,
       conversionDate,
     };
   }
 
-  private assertInput(input: CurrencyConversionInput): void {
+  private assertCanonicalInput(input: MulticurrencyConversionInput): void {
     if (
       !isCanonicalCurrency(input.originalCurrency) ||
       !isCanonicalCurrency(input.functionalCurrency)
@@ -220,13 +308,13 @@ export class CurrencyConversionService {
       );
     }
     if (
-      !Number.isInteger(input.amount) ||
-      !Number.isSafeInteger(input.amount)
+      !Number.isInteger(input.originalAmountMinor) ||
+      !Number.isSafeInteger(input.originalAmountMinor)
     ) {
       throw new BadRequestException("Amount must be an integer in minor units");
     }
-    this.assertStorageRange(new Prisma.Decimal(input.amount));
-    this.normalizeDate(input.conversionDate);
+    this.assertStorageRange(new Prisma.Decimal(input.originalAmountMinor));
+    this.normalizeDate(input.operationDate, "operationDate");
   }
 
   private assertStorageRange(amount: Prisma.Decimal): void {
@@ -241,14 +329,14 @@ export class CurrencyConversionService {
     }
   }
 
-  private normalizeDate(value: string): Date {
+  private normalizeDate(value: string, fieldName = "conversionDate"): Date {
     if (
       typeof value !== "string" ||
       value.trim() !== value ||
       !/^\d{4}-\d{2}-\d{2}$/.test(value)
     ) {
       throw new BadRequestException(
-        "conversionDate must be a valid YYYY-MM-DD date",
+        `${fieldName} must be a valid YYYY-MM-DD date`,
       );
     }
     const date = new Date(`${value}T00:00:00.000Z`);
@@ -257,7 +345,7 @@ export class CurrencyConversionService {
       date.toISOString().slice(0, 10) !== value
     ) {
       throw new BadRequestException(
-        "conversionDate must be a valid YYYY-MM-DD date",
+        `${fieldName} must be a valid YYYY-MM-DD date`,
       );
     }
     return date;

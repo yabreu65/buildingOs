@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { Prisma } from '@prisma/client';
 import type { CanonicalCurrency } from '@buildingos/contracts';
 import { PrismaService } from '../prisma/prisma.service';
+import { acquireExchangeRateLock, acquireExchangeRatePairLock } from './exchange-rate-locks';
 import { CreateExchangeRateDto, ExchangeRateQueryDto, UpdateExchangeRateDto } from './multicurrency.dto';
 
 export interface ExchangeRateResponse {
@@ -43,10 +44,13 @@ export class MulticurrencyService {
       const membership = await this.prisma.membership.findFirst({ where: { id: membershipId, tenantId }, select: { id: true } });
       if (!membership) throw new BadRequestException('Creator membership does not belong to tenant');
     }
-    const rate = await this.executeExchangeRateWrite(
-      this.prisma.exchangeRate.create({ data: { tenantId, baseCurrency: dto.baseCurrency, quoteCurrency: dto.quoteCurrency, rate: new Prisma.Decimal(dto.rate), effectiveAt: this.normalizeEffectiveDate(dto.effectiveAt), source: dto.source?.trim() || null, createdByMembershipId: membershipId || null } }),
-    );
-    return this.serialize(rate);
+    return this.prisma.$transaction(async (tx) => {
+      await acquireExchangeRatePairLock(tx, tenantId, dto.baseCurrency, dto.quoteCurrency);
+      const rate = await this.executeExchangeRateWrite(
+        tx.exchangeRate.create({ data: { tenantId, baseCurrency: dto.baseCurrency, quoteCurrency: dto.quoteCurrency, rate: new Prisma.Decimal(dto.rate), effectiveAt: this.normalizeEffectiveDate(dto.effectiveAt), source: dto.source?.trim() || null, createdByMembershipId: membershipId || null } }),
+      );
+      return this.serialize(rate);
+    });
   }
 
   async update(tenantId: string, id: string, dto: UpdateExchangeRateDto): Promise<ExchangeRateResponse> {
@@ -56,12 +60,55 @@ export class MulticurrencyService {
       effectiveAt: this.normalizeEffectiveDate(dto.effectiveAt),
       ...(dto.source !== undefined ? { source: dto.source.trim() || null } : {}),
     };
-    const result = await this.executeExchangeRateWrite(
-      this.prisma.exchangeRate.updateMany({ where: { id, tenantId }, data }),
-    );
-    if (result.count !== 1) throw new NotFoundException('Exchange rate not found');
-    const rate = await this.prisma.exchangeRate.findFirstOrThrow({ where: { id, tenantId } });
-    return this.serialize(rate);
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.exchangeRate.findFirst({
+        where: { id, tenantId },
+        select: { id: true, baseCurrency: true, quoteCurrency: true },
+      });
+      if (!existing) throw new NotFoundException('Exchange rate not found');
+
+      await acquireExchangeRatePairLock(tx, tenantId, existing.baseCurrency, existing.quoteCurrency);
+      await acquireExchangeRateLock(tx, tenantId, id);
+      const result = await this.executeExchangeRateWrite(
+        tx.exchangeRate.updateMany({
+          where: this.unusedExchangeRateWhere(tenantId, id),
+          data,
+        }),
+      );
+      if (result.count !== 1) {
+        await this.assertExchangeRateCanBeChanged(tx, tenantId, id);
+        throw new NotFoundException('Exchange rate not found');
+      }
+      const rate = await tx.exchangeRate.findFirstOrThrow({ where: { id, tenantId } });
+      return this.serialize(rate);
+    });
+  }
+
+  private unusedExchangeRateWhere(tenantId: string, id: string): Prisma.ExchangeRateWhereInput {
+    return {
+      id,
+      tenantId,
+      expenses: { none: {} },
+      incomes: { none: {} },
+      adjustments: { none: {} },
+      payments: { none: {} },
+    };
+  }
+
+  private async assertExchangeRateCanBeChanged(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    id: string,
+  ): Promise<void> {
+    const existing = await tx.exchangeRate.findFirst({
+      where: { id, tenantId },
+      select: { id: true },
+    });
+    if (!existing) throw new NotFoundException('Exchange rate not found');
+    throw new ConflictException({
+      code: 'EXCHANGE_RATE_IN_USE',
+      message: 'Exchange rates referenced by financial snapshots cannot be modified or deleted',
+    });
   }
 
   private assertPair(dto: CreateExchangeRateDto): void {

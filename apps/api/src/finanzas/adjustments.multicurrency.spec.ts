@@ -104,6 +104,10 @@ describe('AdjustmentsService multicurrency snapshot', () => {
     exchangeRateFindFirst = jest.fn();
 
     const prismaValue = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $transaction: jest.fn(async (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+        callback(prismaValue as unknown as Prisma.TransactionClient),
+      ),
       adjustment: {
         findFirst: jest.fn(),
         findMany: jest.fn(),
@@ -344,7 +348,7 @@ describe('AdjustmentsService multicurrency snapshot', () => {
       expect(query.where.baseCurrency).toBe('USD');
       expect(query.where.quoteCurrency).toBe('VES');
       expect(query.where.effectiveAt.lte).toEqual(new Date('2026-08-09T00:00:00.000Z'));
-      expect(query.orderBy.effectiveAt).toBe('desc');
+      expect(query.orderBy).toEqual([{ effectiveAt: 'desc' }, { id: 'asc' }]);
     });
   });
 
@@ -408,7 +412,7 @@ describe('AdjustmentsService multicurrency snapshot', () => {
       expect(data.exchangeRateDirection).toBe('DIRECT');
       expect(data.exchangeRateId).toBe('rate-direct');
       expect(data.functionalAmountMinor).toBe(36500);
-      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(1);
+      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(2);
     });
   });
 

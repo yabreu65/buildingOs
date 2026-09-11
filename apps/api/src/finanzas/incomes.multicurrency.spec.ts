@@ -290,10 +290,10 @@ describe('IncomesService multicurrency snapshot', () => {
           quoteCurrency: 'VES',
           effectiveAt: { lte: new Date('2026-08-09T00:00:00.000Z') },
         },
-        orderBy: { effectiveAt: 'desc' },
+        orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }],
         select: { id: true, rate: true, effectiveAt: true },
       });
-      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(1);
+      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -301,6 +301,9 @@ describe('IncomesService multicurrency snapshot', () => {
     beforeEach(() => {
       exchangeRateFindFirst
         .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          rate({ id: 'inverse-rate-1', rate: '4' }),
+        )
         .mockResolvedValueOnce(
           rate({ id: 'inverse-rate-1', rate: '4' }),
         );
@@ -343,7 +346,7 @@ describe('IncomesService multicurrency snapshot', () => {
           quoteCurrency: 'USD',
           effectiveAt: { lte: new Date('2026-08-09T00:00:00.000Z') },
         },
-        orderBy: { effectiveAt: 'desc' },
+        orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }],
         select: { id: true, rate: true, effectiveAt: true },
       });
     });
@@ -353,7 +356,7 @@ describe('IncomesService multicurrency snapshot', () => {
     it('uses the direct rate when both direct and inverse rates exist', async () => {
       exchangeRateFindFirst
         .mockResolvedValueOnce(rate({ id: 'direct-rate', rate: '36.5' }))
-        .mockResolvedValueOnce(rate({ id: 'inverse-rate', rate: '0.02' }));
+        .mockResolvedValueOnce(rate({ id: 'direct-rate', rate: '36.5' }));
       (prisma.income.findFirst as jest.Mock).mockResolvedValue(
         makeIncome({ currencyCode: 'USD', amountMinor: 100 }) as never,
       );
@@ -376,7 +379,7 @@ describe('IncomesService multicurrency snapshot', () => {
       expect(result.exchangeRateId).toBe('direct-rate');
       expect(result.exchangeRateDirection).toBe('DIRECT');
       expect(result.functionalAmountMinor).toBe(3650);
-      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(1);
+      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(2);
       expect(exchangeRateFindFirst.mock.calls[0][0].where).toMatchObject({
         baseCurrency: 'USD',
         quoteCurrency: 'VES',
@@ -552,7 +555,7 @@ describe('IncomesService multicurrency snapshot', () => {
     it('uses same-day rate, prior rate, and never a future rate', async () => {
       exchangeRateFindFirst
         .mockResolvedValueOnce(rate({ id: 'same-day' }))
-        .mockResolvedValueOnce(rate({ id: 'future' }));
+        .mockResolvedValueOnce(rate({ id: 'same-day' }));
       (prisma.income.findFirst as jest.Mock).mockResolvedValue(
         makeIncome({ currencyCode: 'USD', amountMinor: 100 }) as never,
       );
@@ -562,9 +565,7 @@ describe('IncomesService multicurrency snapshot', () => {
       expect(exchangeRateFindFirst.mock.calls[0][0].where).toMatchObject({
         effectiveAt: { lte: new Date('2026-08-09T00:00:00.000Z') },
       });
-      expect(exchangeRateFindFirst.mock.calls[0][0].orderBy).toEqual({
-        effectiveAt: 'desc',
-      });
+      expect(exchangeRateFindFirst.mock.calls[0][0].orderBy).toEqual([{ effectiveAt: 'desc' }, { id: 'asc' }]);
     });
   });
 
@@ -575,7 +576,7 @@ describe('IncomesService multicurrency snapshot', () => {
           rate({ id: 'rate-1', rate: '36.5', effectiveAt: new Date('2026-08-08T00:00:00.000Z') }),
         )
         .mockResolvedValueOnce(
-          rate({ id: 'rate-2', rate: '1000', effectiveAt: new Date('2026-08-10T00:00:00.000Z') }),
+          rate({ id: 'rate-1', rate: '36.5', effectiveAt: new Date('2026-08-08T00:00:00.000Z') }),
         );
       (prisma.income.findFirst as jest.Mock).mockResolvedValue(
         makeIncome({ currencyCode: 'USD', amountMinor: 100 }) as never,
@@ -596,7 +597,7 @@ describe('IncomesService multicurrency snapshot', () => {
 
       const persisted = await record();
 
-      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(1);
+      expect(exchangeRateFindFirst).toHaveBeenCalledTimes(2);
       expect(persisted.exchangeRateId).toBe('rate-1');
       expect(persisted.exchangeRateValue).toBe('36.5');
       expect(persisted.functionalAmountMinor).toBe(3650);
