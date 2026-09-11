@@ -33,15 +33,12 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
   });
 
   afterEach(async () => {
-    for (const tenantId of tenantIds.splice(0)) {
-      await observer.tenant.delete({ where: { id: tenantId } }).catch(() => undefined);
-    }
-    for (const membershipId of membershipIds.splice(0)) {
-      await observer.membership.delete({ where: { id: membershipId } }).catch(() => undefined);
-    }
-    for (const userId of userIds.splice(0)) {
-      await observer.user.delete({ where: { id: userId } }).catch(() => undefined);
-    }
+    const tenants = tenantIds.splice(0);
+    const memberships = membershipIds.splice(0);
+    const users = userIds.splice(0);
+    if (tenants.length > 0) await observer.tenant.deleteMany({ where: { id: { in: tenants } } });
+    if (memberships.length > 0) await observer.membership.deleteMany({ where: { id: { in: memberships } } });
+    if (users.length > 0) await observer.user.deleteMany({ where: { id: { in: users } } });
   });
 
   afterAll(async () => {
@@ -85,9 +82,29 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     return { tenant, user, membership, building, category, rate };
   }
 
-  async function backendPid(client: PrismaClient): Promise<number> {
-    const [row] = await client.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+  async function backendPid(tx: Prisma.TransactionClient): Promise<number> {
+    const [row] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
     return row.pid;
+  }
+
+  function deferredPid(): { readonly promise: Promise<number>; readonly resolve: (pid: number) => void } {
+    let resolvePid!: (pid: number) => void;
+    const promise = new Promise<number>((resolve) => { resolvePid = resolve; });
+    return { promise, resolve: resolvePid };
+  }
+
+  function serviceWithObservedTransaction(
+    client: PrismaClient,
+    onPid: (pid: number) => void,
+  ): MulticurrencyService {
+    return new MulticurrencyService({
+      membership: client.membership,
+      exchangeRate: client.exchangeRate,
+      $transaction: (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) => client.$transaction(async (tx) => {
+        onPid(await backendPid(tx));
+        return callback(tx);
+      }),
+    } as unknown as PrismaService);
   }
 
   async function waitUntilBlocked(pid: number): Promise<void> {
@@ -147,7 +164,7 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     const snapshotMayCommit = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
     let snapshotLocked!: () => void;
     const snapshotHasLock = new Promise<void>((resolve) => { snapshotLocked = resolve; });
-    const updaterPid = await backendPid(secondClient);
+    const updaterPid = deferredPid();
 
     const snapshotTransaction = firstClient.$transaction(async (tx) => {
       const expense = await persistExpenseSnapshot(tx, ctx, 100);
@@ -157,10 +174,10 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     });
 
     await snapshotHasLock;
-    const update = new MulticurrencyService(secondClient as unknown as PrismaService)
+    const update = serviceWithObservedTransaction(secondClient, updaterPid.resolve)
       .update(ctx.tenant.id, ctx.rate.id, { rate: '40', effectiveAt: '2026-08-09' })
       .catch((error: unknown) => error);
-    await waitUntilBlocked(updaterPid);
+    await waitUntilBlocked(await updaterPid.promise);
     releaseSnapshot();
 
     const [expense, updateError] = await Promise.all([snapshotTransaction, update]);
@@ -175,7 +192,7 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     const updateMayCommit = new Promise<void>((resolve) => { releaseUpdate = resolve; });
     let updateLocked!: () => void;
     const updateHasLock = new Promise<void>((resolve) => { updateLocked = resolve; });
-    const snapshotPid = await backendPid(secondClient);
+    const snapshotPid = deferredPid();
 
     const updateTransaction = firstClient.$transaction(async (tx) => {
       await acquireExchangeRateLock(tx, ctx.tenant.id, ctx.rate.id);
@@ -185,8 +202,11 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     });
 
     await updateHasLock;
-    const snapshotTransaction = secondClient.$transaction(async (tx) => persistExpenseSnapshot(tx, ctx, 100));
-    await waitUntilBlocked(snapshotPid);
+    const snapshotTransaction = secondClient.$transaction(async (tx) => {
+      snapshotPid.resolve(await backendPid(tx));
+      return persistExpenseSnapshot(tx, ctx, 100);
+    });
+    await waitUntilBlocked(await snapshotPid.promise);
     releaseUpdate();
 
     const [, expense] = await Promise.all([updateTransaction, snapshotTransaction]);
@@ -244,7 +264,7 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     const snapshotMayCommit = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
     let snapshotSelected!: () => void;
     const snapshotHasSelected = new Promise<void>((resolve) => { snapshotSelected = resolve; });
-    const creatorPid = await backendPid(secondClient);
+    const creatorPid = deferredPid();
 
     const snapshotTransaction = firstClient.$transaction(async (tx) => {
       const expense = await persistExpenseSnapshot(tx, ctx, 100);
@@ -254,9 +274,9 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     });
 
     await snapshotHasSelected;
-    const createdDirectRate = new MulticurrencyService(secondClient as unknown as PrismaService)
+    const createdDirectRate = serviceWithObservedTransaction(secondClient, creatorPid.resolve)
       .create(ctx.tenant.id, undefined, { baseCurrency: 'USD', quoteCurrency: 'VES', rate: '40', effectiveAt: '2026-08-09' });
-    await waitUntilBlocked(creatorPid);
+    await waitUntilBlocked(await creatorPid.promise);
     releaseSnapshot();
 
     const [expense, directRate] = await Promise.all([snapshotTransaction, createdDirectRate]);
@@ -285,7 +305,7 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     const snapshotMayCommit = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
     let snapshotSelected!: () => void;
     const snapshotHasSelected = new Promise<void>((resolve) => { snapshotSelected = resolve; });
-    const updaterPid = await backendPid(secondClient);
+    const updaterPid = deferredPid();
 
     const snapshotTransaction = firstClient.$transaction(async (tx) => {
       const expense = await persistExpenseSnapshot(tx, ctx, 100);
@@ -295,9 +315,9 @@ describePostgres('ExchangeRate snapshot immutability PostgreSQL concurrency', ()
     });
 
     await snapshotHasSelected;
-    const updatedDirectRate = new MulticurrencyService(secondClient as unknown as PrismaService)
+    const updatedDirectRate = serviceWithObservedTransaction(secondClient, updaterPid.resolve)
       .update(ctx.tenant.id, ctx.rate.id, { rate: '36.5', effectiveAt: '2026-08-09' });
-    await waitUntilBlocked(updaterPid);
+    await waitUntilBlocked(await updaterPid.promise);
     releaseSnapshot();
 
     const [expense, directRate] = await Promise.all([snapshotTransaction, updatedDirectRate]);
