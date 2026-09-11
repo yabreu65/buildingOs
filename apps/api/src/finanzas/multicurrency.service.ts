@@ -61,6 +61,13 @@ export class MulticurrencyService {
       ...(dto.source !== undefined ? { source: dto.source.trim() || null } : {}),
     };
     return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.exchangeRate.findFirst({
+        where: { id, tenantId },
+        select: { id: true, baseCurrency: true, quoteCurrency: true },
+      });
+      if (!existing) throw new NotFoundException('Exchange rate not found');
+
+      await acquireExchangeRatePairLock(tx, tenantId, existing.baseCurrency, existing.quoteCurrency);
       await acquireExchangeRateLock(tx, tenantId, id);
       const result = await this.executeExchangeRateWrite(
         tx.exchangeRate.updateMany({

@@ -35,7 +35,10 @@ describe('MulticurrencyService', () => {
     expect(response).not.toHaveProperty('createdByMembershipId');
   }
 
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    exchangeRate.findFirst.mockResolvedValue({ id: 'rate-1', baseCurrency: 'USD', quoteCurrency: 'VES' });
+  });
 
   it('gets and updates functional currency in the requested tenant', async () => {
     tenant.findUniqueOrThrow.mockResolvedValue({ functionalCurrency: 'ARS' });
@@ -135,6 +138,7 @@ describe('MulticurrencyService', () => {
   });
 
   it('updates unused rates using both id and tenantId without changing the historical pair', async () => {
+    exchangeRate.findFirst.mockResolvedValue({ id: 'rate-1', baseCurrency: 'USD', quoteCurrency: 'VES' });
     exchangeRate.updateMany.mockResolvedValue({ count: 1 });
     exchangeRate.findFirstOrThrow.mockResolvedValue(record);
     const response = await service.update('tenant-1', 'rate-1', { rate: '40.25', effectiveAt: dto.effectiveAt, source: 'Market' });
@@ -158,6 +162,7 @@ describe('MulticurrencyService', () => {
     ['', null],
     ['   ', null],
   ])('maps PATCH source %p to %p without omission ambiguity', async (source, expectedSource) => {
+    exchangeRate.findFirst.mockResolvedValue({ id: 'rate-1', baseCurrency: 'USD', quoteCurrency: 'VES' });
     exchangeRate.updateMany.mockResolvedValue({ count: 1 });
     exchangeRate.findFirstOrThrow.mockResolvedValue(record);
 
@@ -176,7 +181,9 @@ describe('MulticurrencyService', () => {
     ['Payment', 'payments'],
   ] as const)('blocks updates when the rate is used by a %s snapshot', async (_source, relation) => {
     exchangeRate.updateMany.mockResolvedValue({ count: 0 });
-    exchangeRate.findFirst.mockResolvedValue({ id: 'rate-1' });
+    exchangeRate.findFirst
+      .mockResolvedValueOnce({ id: 'rate-1', baseCurrency: 'USD', quoteCurrency: 'VES' })
+      .mockResolvedValueOnce({ id: 'rate-1' });
 
     const error = await service.update('tenant-1', 'rate-1', { rate: '40', effectiveAt: dto.effectiveAt, source: 'Mutated' }).catch((caught: unknown) => caught);
 
@@ -201,7 +208,9 @@ describe('MulticurrencyService', () => {
       exchangeRateEffectiveAt: new Date('2026-08-09T00:00:00.000Z'),
     };
     exchangeRate.updateMany.mockResolvedValue({ count: 0 });
-    exchangeRate.findFirst.mockResolvedValue({ id: frozenSnapshot.exchangeRateId });
+    exchangeRate.findFirst
+      .mockResolvedValueOnce({ id: frozenSnapshot.exchangeRateId, baseCurrency: 'USD', quoteCurrency: 'VES' })
+      .mockResolvedValueOnce({ id: frozenSnapshot.exchangeRateId });
 
     await expect(
       service.update('tenant-1', frozenSnapshot.exchangeRateId, { rate: '99', effectiveAt: '2026-08-10', source: 'Override' }),
@@ -218,8 +227,11 @@ describe('MulticurrencyService', () => {
 
     await expect(service.update('tenant-2', 'rate-1', { rate: '40', effectiveAt: dto.effectiveAt })).rejects.toBeInstanceOf(NotFoundException);
 
-    expect(exchangeRate.updateMany.mock.calls[0][0].where).toMatchObject({ id: 'rate-1', tenantId: 'tenant-2' });
-    expect(exchangeRate.findFirst).toHaveBeenCalledWith({ where: { id: 'rate-1', tenantId: 'tenant-2' }, select: { id: true } });
+    expect(exchangeRate.updateMany).not.toHaveBeenCalled();
+    expect(exchangeRate.findFirst).toHaveBeenCalledWith({
+      where: { id: 'rate-1', tenantId: 'tenant-2' },
+      select: { id: true, baseCurrency: true, quoteCurrency: true },
+    });
   });
 
   it('has no ExchangeRate delete path in the current service contract', () => {

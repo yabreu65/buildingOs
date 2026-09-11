@@ -10,8 +10,8 @@ export type ExchangeRateLockClient = Pick<Prisma.TransactionClient, '$executeRaw
  *
  * Lock order for snapshot producers is: existing movement/entity lifecycle lock first,
  * then the currency-pair lock, then this ExchangeRate lock. ExchangeRate create paths
- * acquire only the currency-pair lock. ExchangeRate update/delete paths acquire only
- * this row-level ExchangeRate lock.
+ * acquire only the currency-pair lock. ExchangeRate update/delete paths acquire the
+ * currency-pair lock before this row-level ExchangeRate lock.
  */
 export function exchangeRateAdvisoryLockKey(tenantId: string, exchangeRateId: string): string {
   return `${EXCHANGE_RATE_LOCK_NAMESPACE}:${tenantId}:${exchangeRateId}`;
