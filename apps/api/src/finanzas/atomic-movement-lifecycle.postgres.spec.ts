@@ -25,11 +25,24 @@ function hasLocalDatabaseUrl(value: string | undefined): boolean {
   if (!value) return false;
   try {
     const url = new URL(value);
-    return ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    return ['127.0.0.1', 'localhost', '::1'].includes(hostname);
   } catch {
     return false;
   }
 }
+
+describe('hasLocalDatabaseUrl', () => {
+  it.each([
+    ['localhost', 'postgresql://user:pass@localhost:5432/test', true],
+    ['IPv4 loopback', 'postgresql://user:pass@127.0.0.1:5432/test', true],
+    ['bracketed IPv6 loopback', 'postgresql://user:pass@[::1]:5432/test', true],
+    ['non-loopback host', 'postgresql://user:pass@database.internal:5432/test', false],
+    ['malformed URL', 'not a URL', false],
+  ])('returns %s for %s', (_label, value, expected) => {
+    expect(hasLocalDatabaseUrl(value)).toBe(expected);
+  });
+});
 
 const enabled =
   process.env.RUN_POSTGRES_INTEGRATION === '1' &&
