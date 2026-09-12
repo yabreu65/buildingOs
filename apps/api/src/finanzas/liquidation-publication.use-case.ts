@@ -20,6 +20,10 @@ import {
   type PublishedIncomeOffsetSnapshot,
 } from './liquidation-publication-snapshot';
 import {
+  validateFrozenLiquidationDistributionSnapshot,
+  type LiquidationDistributionAllocation,
+} from './liquidation-distribution';
+import {
   type LiquidationResponseDto,
   type PublishLiquidationDto,
 } from './expense-ledger.dto';
@@ -162,6 +166,7 @@ type LiquidationRecord = {
   netDistributableAmountMinor: number | null;
   incomeOffsetSnapshot: unknown;
   incomeOffsetsByCurrency: unknown;
+  distributionSnapshot?: unknown;
 };
 
 type LiquidationResponseRecord = Omit<
@@ -189,6 +194,7 @@ export interface DraftLiquidationInput {
   readonly netDistributableAmountMinor?: number;
   readonly incomeOffsetSnapshot?: Prisma.InputJsonArray;
   readonly incomeOffsetsByCurrency?: Prisma.InputJsonObject;
+  readonly distributionSnapshot?: Prisma.InputJsonObject;
   readonly createIncomeOffsetReferences?: ReadonlyArray<{
     incomeApplicationId: string;
     buildingId: string;
@@ -419,6 +425,9 @@ export async function createLiquidationDraftRecord(
             incomeOffsetsByCurrency: (input.incomeOffsetsByCurrency ??
               {}) as Prisma.InputJsonObject,
           }
+        : {}),
+      ...(input.distributionSnapshot !== undefined
+        ? { distributionSnapshot: input.distributionSnapshot }
         : {}),
     },
   });
@@ -880,14 +889,54 @@ export class LiquidationPublicationUseCase {
             });
           }
 
-          const billableUnits = await tx.unit.findMany({
-            where: { tenantId, buildingId: current.buildingId, isBillable: true },
-            include: { unitCategory: { select: { coefficient: true, id: true } } },
-            orderBy: { code: 'asc' },
-          });
-
-          if (billableUnits.length === 0) {
-            throw new BadRequestException('No hay unidades facturables en este edificio');
+          const currentRecord = current as LiquidationRecord;
+          let distribution: readonly LiquidationDistributionAllocation[];
+          if (currentRecord.distributionSnapshot != null) {
+            const frozenDistribution = validateFrozenLiquidationDistributionSnapshot(
+              currentRecord.distributionSnapshot,
+              {
+                tenantId,
+                buildingId: current.buildingId,
+                totalAmountMinor: current.totalAmountMinor,
+              },
+            );
+            const snapshotUnitIds = frozenDistribution.allocations.map((allocation) => allocation.unitId);
+            const scopedUnits = await tx.unit.findMany({
+              where: {
+                tenantId,
+                buildingId: current.buildingId,
+                id: { in: snapshotUnitIds },
+              },
+              select: { id: true },
+            });
+            if (
+              scopedUnits.length !== snapshotUnitIds.length ||
+              new Set(scopedUnits.map((unit) => unit.id)).size !== snapshotUnitIds.length
+            ) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID',
+                message:
+                  'El snapshot de distribución contiene unidades fuera del tenant o edificio; no se publica',
+              });
+            }
+            distribution = frozenDistribution.allocations;
+          } else {
+            // Legacy pre-3D.1 drafts retain their established live distribution
+            // behavior. Every 3D.1 draft persists a snapshot and takes the branch above.
+            const billableUnits = await tx.unit.findMany({
+              where: { tenantId, buildingId: current.buildingId, isBillable: true },
+              include: { unitCategory: { select: { coefficient: true, id: true } } },
+              orderBy: { code: 'asc' },
+            });
+            if (billableUnits.length === 0) {
+              throw new BadRequestException('No hay unidades facturables en este edificio');
+            }
+            distribution = calculateDistribution(
+              billableUnits,
+              current.totalAmountMinor,
+              current.buildingId,
+            );
           }
 
           const now = new Date();
@@ -895,12 +944,6 @@ export class LiquidationPublicationUseCase {
           if (Number.isNaN(dueDate.getTime())) {
             throw new BadRequestException('dueDate must be a valid date');
           }
-
-          const distribution = calculateDistribution(
-            billableUnits,
-            current.totalAmountMinor,
-            current.buildingId,
-          );
 
           let publicationSnapshot: Prisma.InputJsonObject;
           let snapshotVersion: number;

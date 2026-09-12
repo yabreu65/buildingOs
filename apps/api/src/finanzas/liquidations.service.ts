@@ -45,6 +45,11 @@ import {
   parseIncomeOffsetsByCurrency,
   parseIncomeOffsetSnapshot,
 } from './liquidation-income-offset-snapshot';
+import {
+  buildLiquidationDistributionSnapshot,
+  distributeLiquidationMovements,
+  type LiquidationDistributionRecipientInput,
+} from './liquidation-distribution';
 import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 
 interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
@@ -66,6 +71,14 @@ interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   conversionDate?: string | null;
 }
 
+interface LiquidationDistributionUnitRow {
+  id: string;
+  code: string;
+  label: string | null;
+  m2: number | null;
+  unitCategory: { coefficient: number; id: string } | null;
+}
+
 interface LiquidationExpenseSnapshotRow {
   expenseId: string;
   categoryName: string;
@@ -83,6 +96,9 @@ interface LiquidationExpenseSnapshotRow {
   exchangeRateDirection: string | null;
   exchangeRateEffectiveAt: Date | null;
   conversionDate: Date | null;
+  scopeType: 'BUILDING' | 'UNIT_GROUP';
+  unitGroupId?: string | null;
+  groupRecipients?: readonly LiquidationDistributionUnitRow[];
 }
 
 interface CancelLiquidationOptions {
@@ -251,7 +267,97 @@ export class LiquidationsService {
         },
       });
 
-          const sharedExpenses = await tx.expense.findMany({
+          if (buildingExpenses.some((expense) => expense.unitGroupId != null)) {
+            throw new BadRequestException(
+              'BUILDING expenses must not reference unitGroupId',
+            );
+          }
+
+          const unitGroupExpenses = await tx.expense.findMany({
+        where: {
+          tenantId,
+          ...this.expenseAccountingPeriodWhere(dto.period),
+          status: 'VALIDATED',
+          scopeType: 'UNIT_GROUP',
+          OR: [
+            { buildingId: dto.buildingId },
+            { buildingId: null, unitGroup: { buildingId: dto.buildingId } },
+          ],
+        },
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+          unitGroup: {
+            select: {
+              id: true,
+              tenantId: true,
+              buildingId: true,
+              members: {
+                select: {
+                  tenantId: true,
+                  buildingId: true,
+                  unit: {
+                    select: {
+                      id: true,
+                      tenantId: true,
+                      buildingId: true,
+                      code: true,
+                      label: true,
+                      isBillable: true,
+                      m2: true,
+                      unitCategory: { select: { coefficient: true, id: true } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const groupRecipientByExpenseId = new Map<string, readonly LiquidationDistributionUnitRow[]>();
+      for (const expense of unitGroupExpenses) {
+        const group = expense.unitGroup;
+        if (
+          !expense.unitGroupId ||
+          !group ||
+          group.id !== expense.unitGroupId ||
+          (expense.buildingId != null && expense.buildingId !== dto.buildingId) ||
+          group.tenantId !== tenantId ||
+          group.buildingId !== dto.buildingId
+        ) {
+          throw new BadRequestException(
+            `UNIT_GROUP expense ${expense.id} must reference a group in the liquidation tenant and building`,
+          );
+        }
+        if (group.members.length === 0) {
+          throw new BadRequestException(`UNIT_GROUP expense ${expense.id} has no group members`);
+        }
+        const members = group.members.map((member) => member.unit);
+        if (
+          group.members.some(
+            (member) =>
+              member.tenantId !== tenantId ||
+              member.buildingId !== dto.buildingId ||
+              member.unit.tenantId !== tenantId ||
+              member.unit.buildingId !== dto.buildingId,
+          )
+        ) {
+          throw new BadRequestException(
+            `UNIT_GROUP expense ${expense.id} has a member outside the liquidation tenant or building`,
+          );
+        }
+        const billableMembers = members.filter((unit) => unit.isBillable);
+        if (billableMembers.length === 0) {
+          throw new BadRequestException(`UNIT_GROUP expense ${expense.id} has no billable group members`);
+        }
+        groupRecipientByExpenseId.set(
+          expense.id,
+          billableMembers.map(({ tenantId: _tenantId, buildingId: _buildingId, isBillable: _isBillable, ...unit }) => unit),
+        );
+      }
+
+      const sharedExpenses = await tx.expense.findMany({
             where: {
               tenantId,
               ...this.expenseAccountingPeriodWhere(dto.period),
@@ -300,7 +406,38 @@ export class LiquidationsService {
         exchangeRateDirection: expense.exchangeRateDirection,
         exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt,
         conversionDate: expense.conversionDate,
+        scopeType: 'BUILDING',
       }));
+
+      for (const expense of unitGroupExpenses) {
+        const groupRecipients = groupRecipientByExpenseId.get(expense.id);
+        if (!groupRecipients) {
+          throw new BadRequestException(`UNIT_GROUP expense ${expense.id} has invalid recipients`);
+        }
+        allExpenses.push({
+          expenseId: expense.id,
+          categoryName: expense.category.name,
+          vendorName: expense.vendor?.name ?? null,
+          amountMinor: expense.amountMinor,
+          currencyCode: expense.currencyCode,
+          invoiceDate: expense.invoiceDate,
+          description: expense.description,
+          type: 'EXPENSE',
+          functionalAmountMinor: expense.functionalAmountMinor,
+          functionalCurrencyCode: expense.functionalCurrencyCode,
+          exchangeRateId: expense.exchangeRateId,
+          exchangeRateValue:
+            expense.exchangeRateValue === null || expense.exchangeRateValue === undefined
+              ? null
+              : expense.exchangeRateValue.toString(),
+          exchangeRateDirection: expense.exchangeRateDirection,
+          exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt,
+          conversionDate: expense.conversionDate,
+          scopeType: 'UNIT_GROUP',
+          unitGroupId: expense.unitGroupId,
+          groupRecipients,
+        });
+      }
 
       for (const expense of allocatedSharedExpenses) {
         const allocation = expense.allocations[0];
@@ -325,6 +462,7 @@ export class LiquidationsService {
             exchangeRateDirection: expense.exchangeRateDirection,
             exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt,
             conversionDate: expense.conversionDate,
+            scopeType: 'BUILDING',
           });
         }
       }
@@ -487,11 +625,68 @@ export class LiquidationsService {
       }
 
       const totalAmountMinor = preIncomeAmountMinor - incomeOffsetAmountMinor;
-      const chargesPreview = this.calculateDistribution(
-        billableUnits,
+      const buildingRecipients: LiquidationDistributionRecipientInput[] = billableUnits.map((unit) => ({
+        unitId: unit.id,
+        unitCode: unit.code,
+        unitLabel: unit.label,
+        coefficient: unit.unitCategory?.coefficient ?? null,
+        m2: unit.m2 ?? null,
+      }));
+      const valuedAmountForDistribution = (source: {
+        readonly id: string;
+        readonly amountMinor: number;
+        readonly functionalAmountMinor: number | null;
+      }): number => {
+        if (valuationMode === 'LEGACY_NOMINAL') {
+          return source.amountMinor;
+        }
+        if (source.functionalAmountMinor === null) {
+          throw new UnprocessableEntityException({
+            statusCode: 422,
+            error: 'LIQUIDATION_FUNCTIONAL_SNAPSHOT_REQUIRED',
+            message: `El movimiento ${source.id} no tiene snapshot funcional para distribución`,
+          });
+        }
+        return source.functionalAmountMinor;
+      };
+      const distribution = distributeLiquidationMovements({
+        tenantId,
+        buildingId: dto.buildingId,
         totalAmountMinor,
-        dto.buildingId,
-      );
+        movements: [
+          ...allExpenses.map((expense) => ({
+            movementId: expense.expenseId,
+            scope: expense.scopeType,
+            unitGroupId: expense.scopeType === 'UNIT_GROUP' ? expense.unitGroupId : null,
+            amountMinor: valuedAmountForDistribution({
+              id: expense.expenseId,
+              amountMinor: expense.amountMinor,
+              functionalAmountMinor: expense.functionalAmountMinor,
+            }),
+            recipients:
+              expense.scopeType === 'UNIT_GROUP'
+                ? (expense.groupRecipients ?? []).map((unit) => ({
+                    unitId: unit.id,
+                    unitCode: unit.code,
+                    unitLabel: unit.label,
+                    coefficient: unit.unitCategory?.coefficient ?? null,
+                    m2: unit.m2 ?? null,
+                  }))
+                : buildingRecipients,
+          })),
+          ...adjustments.map((adjustment) => ({
+            movementId: `ADJ-${adjustment.id}`,
+            scope: 'ADJUSTMENT' as const,
+            amountMinor: valuedAmountForDistribution({
+              id: `ADJ-${adjustment.id}`,
+              amountMinor: adjustment.amountMinor,
+              functionalAmountMinor: adjustment.functionalAmountMinor,
+            }),
+            recipients: buildingRecipients,
+          })),
+        ],
+      });
+      const chargesPreview = Array.from(distribution.allocations);
 
       const created = await createLiquidationDraftRecord(tx, {
         createAuditLogRequired: (input, client) => this.auditService.createLogRequired(input, client),
@@ -513,6 +708,7 @@ export class LiquidationsService {
         netDistributableAmountMinor: totalAmountMinor,
         incomeOffsetSnapshot: incomeOffsets.items as IncomeOffsetSnapshotItem[],
         incomeOffsetsByCurrency: incomeOffsets.incomeOffsetsByCurrency,
+        distributionSnapshot: buildLiquidationDistributionSnapshot(distribution),
         createIncomeOffsetReferences: incomeOffsets.references,
       });
 

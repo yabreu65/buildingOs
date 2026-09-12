@@ -2298,6 +2298,7 @@ model Liquidation {
   totalsByCurrency         Json              // Snapshot: { "ARS": 150000, "USD": 5000 }
   expenseSnapshot          Json              // Array de { expenseId, amountMinor, currencyCode, type: "EXPENSE"|"ADJUSTMENT" }
   publicationSnapshot      Json?             // Immutable snapshot persisted when published
+  distributionSnapshot     Json?             // Phase 3D.1 versioned frozen draft distribution (null = historical draft)
   unitCount                Int               // Unidades billables al momento de draft
   generatedByMembershipId  String
   generatedAt              DateTime          @default(now())
