@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { FinanzasValidators } from './finanzas.validators';
 import { CurrencyConversionService } from './currency-conversion.service';
+import { acquireAdjustmentLock } from './movement-locks';
 import {
   CreateAdjustmentDto,
   AdjustmentResponseDto,
@@ -110,6 +111,8 @@ export class AdjustmentsService {
 
     let auditMetadata: { sourcePeriod: string; targetPeriod: string } | null = null;
     const updated = await this.prisma.$transaction(async (tx) => {
+      await acquireAdjustmentLock(tx, tenantId, adjustmentId);
+
       const adjustment = await tx.adjustment.findFirst({
         where: { id: adjustmentId, tenantId },
         include: { category: { select: { name: true } } },

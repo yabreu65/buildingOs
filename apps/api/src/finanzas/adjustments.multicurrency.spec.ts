@@ -45,6 +45,16 @@ const makeAdjustment = (overrides: Record<string, unknown> = {}) => ({
 const validatedAdjustment = (snapshot: Record<string, unknown>) =>
   makeAdjustment({ status: 'VALIDATED', ...snapshot });
 
+const conversionResult = () => ({
+  functionalAmount: 36500,
+  functionalCurrency: 'VES',
+  sourceExchangeRateId: 'rate-1',
+  appliedRate: '36.5',
+  direction: 'DIRECT',
+  sourceEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+  conversionDate: new Date('2026-08-09T00:00:00.000Z'),
+});
+
 const createDto: CreateAdjustmentDto = {
   buildingId: 'building-1',
   sourceInvoiceDate: '2026-08-09',
@@ -233,13 +243,167 @@ describe('AdjustmentsService multicurrency snapshot', () => {
       expect(result.functionalAmountMinor).toBe(36500);
     });
 
-    it('rejects validating an adjustment that is not DRAFT', async () => {
+    it('rejects a retry against a legacy validated adjustment without repairing its null snapshot', async () => {
       (prisma.adjustment.findFirst as jest.Mock).mockResolvedValue(
         validatedAdjustment({}),
       );
 
       await expect(validate()).rejects.toThrow(BadRequestException);
       expect(prisma.adjustment.update).not.toHaveBeenCalled();
+      expect(exchangeRateFindFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('LIFECYCLE LOCK', () => {
+    it('acquires the tenant-scoped Adjustment lock before its read and uses that transaction for conversion', async () => {
+      const events: string[] = [];
+      const adjustment = makeAdjustment();
+      const tx = {
+        $executeRaw: jest.fn(async () => {
+          events.push('lock');
+          return 1;
+        }),
+        adjustment: {
+          findFirst: jest.fn(async () => {
+            events.push('read');
+            return adjustment;
+          }),
+          update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+            Object.assign(adjustment, data);
+            return validatedAdjustment({
+              functionalAmountMinor: 36500,
+              functionalCurrencyCode: 'VES',
+              exchangeRateId: 'rate-1',
+              exchangeRateValue: new Prisma.Decimal('36.5'),
+              exchangeRateDirection: 'DIRECT',
+              exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+              conversionDate: new Date('2026-08-09T00:00:00.000Z'),
+            });
+          }),
+        },
+        tenant: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'tenant-1',
+            functionalCurrency: 'VES',
+          }),
+        },
+      } as unknown as Prisma.TransactionClient;
+      const rootPrisma = {
+        $transaction: jest.fn(async (callback: (client: Prisma.TransactionClient) => Promise<unknown>) =>
+          callback(tx),
+        ),
+      } as unknown as PrismaService;
+      const conversionService = {
+        convert: jest.fn().mockResolvedValue(conversionResult()),
+      } as unknown as CurrencyConversionService;
+      const lifecycleService = new AdjustmentsService(
+        rootPrisma,
+        { isAdminOrOperator: jest.fn().mockReturnValue(true) } as unknown as FinanzasValidators,
+        { createLog: jest.fn() } as unknown as AuditService,
+        conversionService,
+      );
+
+      await lifecycleService.validateAdjustment(
+        'tenant-1',
+        'adjustment-1',
+        'member-1',
+        ['TENANT_ADMIN'],
+      );
+
+      expect(events).toEqual(['lock', 'read']);
+      const lockStatement = (tx.$executeRaw as jest.Mock).mock.calls[0][0] as Prisma.Sql;
+      expect(lockStatement.strings.join('')).toContain('pg_advisory_xact_lock');
+      expect(lockStatement.values).toContain(
+        'buildingos:adjustment-movement:v1:tenant-1:adjustment-1',
+      );
+      expect((conversionService.convert as jest.Mock).mock.calls[0][1]).toBe(tx);
+      expect(tx.adjustment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'VALIDATED',
+            functionalAmountMinor: 36500,
+            functionalCurrencyCode: 'VES',
+            exchangeRateId: 'rate-1',
+            exchangeRateValue: '36.5',
+            exchangeRateDirection: 'DIRECT',
+            exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+            conversionDate: new Date('2026-08-09T00:00:00.000Z'),
+          }),
+        }),
+      );
+      const snapshotBeforeRetry = {
+        functionalAmountMinor: adjustment.functionalAmountMinor,
+        functionalCurrencyCode: adjustment.functionalCurrencyCode,
+        exchangeRateId: adjustment.exchangeRateId,
+        exchangeRateValue: adjustment.exchangeRateValue,
+        exchangeRateDirection: adjustment.exchangeRateDirection,
+        exchangeRateEffectiveAt: adjustment.exchangeRateEffectiveAt,
+        conversionDate: adjustment.conversionDate,
+      };
+
+      await expect(
+        lifecycleService.validateAdjustment('tenant-1', 'adjustment-1', 'member-1', ['TENANT_ADMIN']),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(conversionService.convert).toHaveBeenCalledTimes(1);
+      expect(tx.adjustment.update).toHaveBeenCalledTimes(1);
+      expect(adjustment).toMatchObject(snapshotBeforeRetry);
+    });
+
+    it('rolls back the complete state-and-snapshot write when final persistence fails', async () => {
+      const durableAdjustment = makeAdjustment();
+      let transactionAdjustment = durableAdjustment;
+      const tx = {
+        $executeRaw: jest.fn().mockResolvedValue(1),
+        adjustment: {
+          findFirst: jest.fn(() => transactionAdjustment),
+          update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+            transactionAdjustment = { ...transactionAdjustment, ...data };
+            throw new Error('final adjustment write failed');
+          }),
+        },
+        tenant: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'tenant-1',
+            functionalCurrency: 'VES',
+          }),
+        },
+      } as unknown as Prisma.TransactionClient;
+      const rootPrisma = {
+        $transaction: jest.fn(async (callback: (client: Prisma.TransactionClient) => Promise<unknown>) => {
+          transactionAdjustment = { ...durableAdjustment };
+          try {
+            const result = await callback(tx);
+            Object.assign(durableAdjustment, transactionAdjustment);
+            return result;
+          } finally {
+            transactionAdjustment = durableAdjustment;
+          }
+        }),
+      } as unknown as PrismaService;
+      const conversionService = {
+        convert: jest.fn().mockResolvedValue(conversionResult()),
+      } as unknown as CurrencyConversionService;
+      const lifecycleService = new AdjustmentsService(
+        rootPrisma,
+        { isAdminOrOperator: jest.fn().mockReturnValue(true) } as unknown as FinanzasValidators,
+        { createLog: jest.fn() } as unknown as AuditService,
+        conversionService,
+      );
+
+      await expect(
+        lifecycleService.validateAdjustment('tenant-1', 'adjustment-1', 'member-1', ['TENANT_ADMIN']),
+      ).rejects.toThrow('final adjustment write failed');
+
+      expect(durableAdjustment.status).toBe('DRAFT');
+      expect(durableAdjustment.functionalAmountMinor).toBeNull();
+      expect(durableAdjustment.functionalCurrencyCode).toBeNull();
+      expect(durableAdjustment.exchangeRateId).toBeNull();
+      expect(durableAdjustment.exchangeRateValue).toBeNull();
+      expect(durableAdjustment.exchangeRateDirection).toBeNull();
+      expect(durableAdjustment.exchangeRateEffectiveAt).toBeNull();
+      expect(durableAdjustment.conversionDate).toBeNull();
+      expect((conversionService.convert as jest.Mock).mock.calls[0][1]).toBe(tx);
     });
   });
 

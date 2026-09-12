@@ -471,8 +471,77 @@ describe('ExpensesService multicurrency snapshot', () => {
     });
   });
 
-  describe('immutability', () => {
-    it('stores the snapshot as a value: later ExchangeRate edits do not change the persisted snapshot', async () => {
+  describe('atomic snapshot durability and immutability', () => {
+    it('rolls back the complete validation snapshot when the final write fails', async () => {
+        const durableExpense = makeExpense({ currencyCode: 'USD', amountMinor: 100 });
+        const stagedExpense = { ...durableExpense };
+        const tx = {
+          ...prisma,
+          expense: {
+            ...prisma.expense,
+            findFirst: jest.fn().mockResolvedValue(stagedExpense),
+            update: jest.fn().mockImplementation(async ({ data }) => {
+              Object.assign(stagedExpense, data);
+              throw new Error('final expense write failed');
+            }),
+          },
+        };
+        exchangeRateFindFirst.mockResolvedValue(rate({ rate: '2' }));
+        (prisma.$transaction as jest.Mock).mockImplementation(async (callback) => {
+          await callback(tx);
+          Object.assign(durableExpense, stagedExpense);
+        });
+
+        await expect(validate()).rejects.toThrow('final expense write failed');
+
+        expect(tx.expense.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              status: 'VALIDATED',
+              functionalAmountMinor: 200,
+              functionalCurrencyCode: 'VES',
+              exchangeRateId: 'rate-1',
+              exchangeRateValue: '2',
+              exchangeRateDirection: 'DIRECT',
+              exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+              conversionDate: new Date('2026-08-09T00:00:00.000Z'),
+            }),
+          }),
+        );
+        expect(durableExpense).toMatchObject({
+          status: 'DRAFT',
+          functionalAmountMinor: null,
+          functionalCurrencyCode: null,
+          exchangeRateId: null,
+          exchangeRateValue: null,
+          exchangeRateDirection: null,
+          exchangeRateEffectiveAt: null,
+          conversionDate: null,
+        });
+      });
+
+      it('rejects retrying a legacy effective Expense without conversion, update, or synthetic repair', async () => {
+        const legacySnapshot = {
+          functionalAmountMinor: null,
+          functionalCurrencyCode: null,
+          exchangeRateId: null,
+          exchangeRateValue: null,
+          exchangeRateDirection: null,
+          exchangeRateEffectiveAt: null,
+          conversionDate: null,
+        };
+        const legacyExpense = makeExpense({ status: 'VALIDATED', ...legacySnapshot });
+        (prisma.expense.findFirst as jest.Mock).mockResolvedValue(legacyExpense as never);
+
+        await expect(validateFromBulk()).rejects.toThrow(BadRequestException);
+
+        expect(prisma.tenant.findFirst).not.toHaveBeenCalled();
+        expect(exchangeRateFindFirst).not.toHaveBeenCalled();
+        expect(prisma.expense.update).not.toHaveBeenCalled();
+        expect(legacyExpense).toMatchObject({ status: 'VALIDATED', ...legacySnapshot });
+      });
+
+      it('stores the snapshot as a value: later ExchangeRate edits do not change the persisted snapshot', async () => {
       exchangeRateFindFirst
         .mockResolvedValueOnce(
           rate({ id: 'rate-1', rate: '36.5', effectiveAt: new Date('2026-08-08T00:00:00.000Z') }),
