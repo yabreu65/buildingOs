@@ -12,14 +12,30 @@ import { CurrencyConversionService } from './currency-conversion.service';
 import { MovementAllocationService } from './movement-allocation.service';
 import { ExpensesService } from './expenses.service';
 import { IncomesService } from './incomes.service';
+import { AdjustmentsService } from './adjustments.service';
 import { CreateExpenseDto, CreateIncomeDto } from './expense-ledger.dto';
 
-const ACCEPTANCE_DATABASES = new Set(['buildingos_fin02a_acceptance']);
+const ACCEPTANCE_DATABASES = new Set([
+  'buildingos_fin02a_acceptance',
+  'buildingos_local_v2_test',
+]);
 const expectedDatabaseName = process.env.POSTGRES_TEST_DB_NAME;
+
+function hasLocalDatabaseUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return ['127.0.0.1', 'localhost', '::1'].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 const enabled =
   process.env.RUN_POSTGRES_INTEGRATION === '1' &&
   expectedDatabaseName !== undefined &&
-  ACCEPTANCE_DATABASES.has(expectedDatabaseName);
+  ACCEPTANCE_DATABASES.has(expectedDatabaseName) &&
+  hasLocalDatabaseUrl(process.env.DATABASE_URL);
 const describePostgres = enabled ? describe : describe.skip;
 const TEST_BARRIER_KEY = 'buildingos:finance:fin02a:test-barrier:v1';
 
@@ -46,6 +62,7 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
   });
 
   afterEach(async () => {
+    await removeRaceBarrier();
     for (const membershipId of membershipIds.splice(0)) {
       await observer.membership.delete({ where: { id: membershipId } }).catch(() => undefined);
     }
@@ -165,7 +182,49 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
     };
   }
 
-  async function installRaceBarrier(): Promise<void> {
+  function observeTransaction(
+      tx: Prisma.TransactionClient,
+      lockKeys: string[],
+    ): Prisma.TransactionClient {
+      return new Proxy(tx, {
+        get(target, property) {
+          if (property === '$executeRaw') {
+            return async (query: Prisma.Sql) => {
+              const lockKey = query.values.find(
+                (value): value is string => typeof value === 'string',
+              );
+              if (lockKey?.startsWith('buildingos:')) lockKeys.push(lockKey);
+              return target.$executeRaw(query);
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }) as Prisma.TransactionClient;
+    }
+
+    function adjustmentsWithObservedLocks(
+      client: PrismaClient,
+      lockKeys: string[],
+    ): AdjustmentsService {
+      const prisma = {
+        $transaction: (callback: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          client.$transaction((tx) => callback(observeTransaction(tx, lockKeys))),
+      } as unknown as PrismaService;
+      const audit = { createLog: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService;
+      const validators = new FinanzasValidators(
+        prisma,
+        new ResidentAccessService(prisma),
+      );
+      return new AdjustmentsService(
+        prisma,
+        validators,
+        audit,
+        new CurrencyConversionService(prisma),
+      );
+    }
+
+    async function installRaceBarrier(): Promise<void> {
     await observer.$executeRaw(Prisma.sql`
       CREATE OR REPLACE FUNCTION "fin02a_block_update"()
       RETURNS trigger
@@ -186,6 +245,9 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
       DROP TRIGGER IF EXISTS "fin02a_block_update" ON "Income"
     `);
     await observer.$executeRaw(Prisma.sql`
+      DROP TRIGGER IF EXISTS "fin02a_block_update" ON "Adjustment"
+    `);
+    await observer.$executeRaw(Prisma.sql`
       CREATE TRIGGER "fin02a_block_update"
       BEFORE UPDATE ON "Expense"
       FOR EACH ROW EXECUTE FUNCTION "fin02a_block_update"()
@@ -193,6 +255,11 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
     await observer.$executeRaw(Prisma.sql`
       CREATE TRIGGER "fin02a_block_update"
       BEFORE UPDATE ON "Income"
+      FOR EACH ROW EXECUTE FUNCTION "fin02a_block_update"()
+    `);
+    await observer.$executeRaw(Prisma.sql`
+      CREATE TRIGGER "fin02a_block_update"
+      BEFORE UPDATE ON "Adjustment"
       FOR EACH ROW EXECUTE FUNCTION "fin02a_block_update"()
     `);
   }
@@ -203,6 +270,9 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
     `);
     await observer.$executeRaw(Prisma.sql`
       DROP TRIGGER IF EXISTS "fin02a_block_update" ON "Income"
+    `);
+    await observer.$executeRaw(Prisma.sql`
+      DROP TRIGGER IF EXISTS "fin02a_block_update" ON "Adjustment"
     `);
     await observer.$executeRaw(Prisma.sql`
       DROP FUNCTION IF EXISTS "fin02a_block_update"()
@@ -513,6 +583,68 @@ describePostgres('Atomic movement lifecycle PostgreSQL', () => {
     expect(await observer.expense.findUniqueOrThrow({ where: { id: draft.id } })).toMatchObject({
       status: 'VOID',
     });
+  });
+
+  it('serializes concurrent Adjustment validation with one immutable non-identity snapshot', async () => {
+    const ctx = await fixture('adjustment-validate-race');
+    await observer.tenant.update({ where: { id: ctx.tenant.id }, data: { functionalCurrency: 'VES' } });
+    const sourceInvoiceDate = new Date('2026-08-09T23:30:00.000Z');
+    const rate = await observer.exchangeRate.create({
+      data: {
+        tenantId: ctx.tenant.id,
+        baseCurrency: 'USD',
+        quoteCurrency: 'VES',
+        rate: new Prisma.Decimal('36.5'),
+        effectiveAt: new Date('2026-08-09T00:00:00.000Z'),
+        createdByMembershipId: ctx.membership.id,
+      },
+    });
+    const draft = await observer.adjustment.create({
+      data: {
+        tenantId: ctx.tenant.id,
+        buildingId: ctx.building.id,
+        sourceInvoiceDate,
+        sourcePeriod: '2026-08',
+        targetPeriod: '2026-09',
+        categoryId: ctx.expenseCategory.id,
+        amountMinor: 1000,
+        currencyCode: 'USD',
+        reason: 'Concurrent validation proof',
+        createdByMembershipId: ctx.membership.id,
+      },
+    });
+    const lockKeys: string[] = [];
+    const adjustmentsA = adjustmentsWithObservedLocks(clientA, lockKeys);
+    const adjustmentsB = adjustmentsWithObservedLocks(clientB, lockKeys);
+    const results = await runControlledRace(
+      () => adjustmentsA.validateAdjustment(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+      () => adjustmentsB.validateAdjustment(ctx.tenant.id, draft.id, ctx.membership.id, ['TENANT_ADMIN']),
+    );
+
+    expect(results[0]?.status).toBe('fulfilled');
+    expect(results[1]?.status).toBe('rejected');
+    expect(results[1]?.reason).toBeInstanceOf(BadRequestException);
+    expect(lockKeys.slice(0, 3)).toEqual([
+      `buildingos:adjustment-movement:v1:${ctx.tenant.id}:${draft.id}`,
+      `buildingos:exchange-rate-pair:v1:${ctx.tenant.id}:USD:VES`,
+      `buildingos:exchange-rate:v1:${ctx.tenant.id}:${rate.id}`,
+    ]);
+    expect(lockKeys).toHaveLength(4);
+    expect(lockKeys[3]).toBe(`buildingos:adjustment-movement:v1:${ctx.tenant.id}:${draft.id}`);
+
+    const validated = await observer.adjustment.findUniqueOrThrow({ where: { id: draft.id } });
+    expect(validated).toMatchObject({
+      status: 'VALIDATED',
+      validatedByMembershipId: ctx.membership.id,
+      functionalAmountMinor: 36500,
+      functionalCurrencyCode: 'VES',
+      exchangeRateId: rate.id,
+      exchangeRateValue: new Prisma.Decimal('36.5'),
+      exchangeRateDirection: 'DIRECT',
+      exchangeRateEffectiveAt: rate.effectiveAt,
+      conversionDate: new Date('2026-08-09T00:00:00.000Z'),
+    });
+    expect(validated.validatedAt).toBeInstanceOf(Date);
   });
 
   it('serializes an Income update against recording with a consistent snapshot', async () => {

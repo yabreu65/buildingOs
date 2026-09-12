@@ -137,10 +137,52 @@ describe('IncomesService multicurrency snapshot', () => {
   };
 
   describe('lifecycle', () => {
-    it('creates incomes as DRAFT without any snapshot', async () => {
-      expect(makeIncome().functionalAmountMinor).toBeNull();
-      expect(makeIncome().exchangeRateId).toBeNull();
-      expect(makeIncome().exchangeRateDirection).toBeNull();
+    it('records a DRAFT income through the production lifecycle with one complete direct snapshot update', async () => {
+      exchangeRateFindFirst.mockResolvedValue(rate({ rate: '2' }));
+      (prisma.income.findFirst as jest.Mock).mockResolvedValue(
+        makeIncome({ currencyCode: 'USD', amountMinor: 100 }) as never,
+      );
+      (prisma.income.update as jest.Mock).mockResolvedValue(
+        recordedIncome({
+          currencyCode: 'USD',
+          amountMinor: 100,
+          functionalAmountMinor: 200,
+          functionalCurrencyCode: 'VES',
+          exchangeRateId: 'rate-1',
+          exchangeRateValue: '2',
+          exchangeRateDirection: 'DIRECT',
+          exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+          conversionDate: new Date('2026-08-09T00:00:00.000Z'),
+        }) as never,
+      );
+
+      const result = await record();
+
+      expect(result).toMatchObject({
+        status: 'RECORDED',
+        amountMinor: 100,
+        currencyCode: 'USD',
+        functionalAmountMinor: 200,
+        functionalCurrencyCode: 'VES',
+        exchangeRateId: 'rate-1',
+        exchangeRateValue: '2',
+        exchangeRateDirection: 'DIRECT',
+        exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+        conversionDate: new Date('2026-08-09T00:00:00.000Z'),
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.income.update).toHaveBeenCalledTimes(1);
+      expect(lastUpdateData()).toMatchObject({
+        status: 'RECORDED',
+        recordedByMembershipId: 'member-1',
+        functionalAmountMinor: 200,
+        functionalCurrencyCode: 'VES',
+        exchangeRateId: 'rate-1',
+        exchangeRateValue: '2',
+        exchangeRateDirection: 'DIRECT',
+        exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+        conversionDate: new Date('2026-08-09T00:00:00.000Z'),
+      });
     });
 
     it('writes the full snapshot in the SAME update that records, never a second update', async () => {
@@ -569,8 +611,77 @@ describe('IncomesService multicurrency snapshot', () => {
     });
   });
 
-  describe('immutability', () => {
-    it('stores the snapshot as a value: later ExchangeRate edits do not change the persisted snapshot', async () => {
+  describe('atomic snapshot durability and immutability', () => {
+    it('rolls back the complete recording snapshot when the final write fails', async () => {
+        const durableIncome = makeIncome({ currencyCode: 'USD', amountMinor: 100 });
+        const stagedIncome = { ...durableIncome };
+        const tx = {
+          ...prisma,
+          income: {
+            ...prisma.income,
+            findFirst: jest.fn().mockResolvedValue(stagedIncome),
+            update: jest.fn().mockImplementation(async ({ data }) => {
+              Object.assign(stagedIncome, data);
+              throw new Error('final income write failed');
+            }),
+          },
+        };
+        exchangeRateFindFirst.mockResolvedValue(rate({ rate: '2' }));
+        (prisma.$transaction as jest.Mock).mockImplementation(async (callback) => {
+          await callback(tx);
+          Object.assign(durableIncome, stagedIncome);
+        });
+
+        await expect(record()).rejects.toThrow('final income write failed');
+
+        expect(tx.income.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              status: 'RECORDED',
+              functionalAmountMinor: 200,
+              functionalCurrencyCode: 'VES',
+              exchangeRateId: 'rate-1',
+              exchangeRateValue: '2',
+              exchangeRateDirection: 'DIRECT',
+              exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'),
+              conversionDate: new Date('2026-08-09T00:00:00.000Z'),
+            }),
+          }),
+        );
+        expect(durableIncome).toMatchObject({
+          status: 'DRAFT',
+          functionalAmountMinor: null,
+          functionalCurrencyCode: null,
+          exchangeRateId: null,
+          exchangeRateValue: null,
+          exchangeRateDirection: null,
+          exchangeRateEffectiveAt: null,
+          conversionDate: null,
+        });
+      });
+
+      it('rejects retrying a legacy recorded Income without conversion, update, or synthetic repair', async () => {
+        const legacySnapshot = {
+          functionalAmountMinor: null,
+          functionalCurrencyCode: null,
+          exchangeRateId: null,
+          exchangeRateValue: null,
+          exchangeRateDirection: null,
+          exchangeRateEffectiveAt: null,
+          conversionDate: null,
+        };
+        const legacyIncome = makeIncome({ status: 'RECORDED', ...legacySnapshot });
+        (prisma.income.findFirst as jest.Mock).mockResolvedValue(legacyIncome as never);
+
+        await expect(record()).rejects.toThrow(BadRequestException);
+
+        expect(prisma.tenant.findFirst).not.toHaveBeenCalled();
+        expect(exchangeRateFindFirst).not.toHaveBeenCalled();
+        expect(prisma.income.update).not.toHaveBeenCalled();
+        expect(legacyIncome).toMatchObject({ status: 'RECORDED', ...legacySnapshot });
+      });
+
+      it('stores the snapshot as a value: later ExchangeRate edits do not change the persisted snapshot', async () => {
       exchangeRateFindFirst
         .mockResolvedValueOnce(
           rate({ id: 'rate-1', rate: '36.5', effectiveAt: new Date('2026-08-08T00:00:00.000Z') }),
