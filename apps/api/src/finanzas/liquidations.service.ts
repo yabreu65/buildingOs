@@ -61,6 +61,8 @@ interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   invoiceDate: string;
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
+  scopeType?: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
+  unitGroupId?: string | null;
   sourcePeriod?: string;
   functionalAmountMinor?: number | null;
   functionalCurrencyCode?: string | null;
@@ -88,6 +90,8 @@ interface LiquidationExpenseSnapshotRow {
   invoiceDate: Date;
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
+  scopeType: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
+  unitGroupId: string | null;
   sourcePeriod?: string;
   functionalAmountMinor: number | null;
   functionalCurrencyCode: string | null;
@@ -96,8 +100,6 @@ interface LiquidationExpenseSnapshotRow {
   exchangeRateDirection: string | null;
   exchangeRateEffectiveAt: Date | null;
   conversionDate: Date | null;
-  scopeType: 'BUILDING' | 'UNIT_GROUP';
-  unitGroupId?: string | null;
   groupRecipients?: readonly LiquidationDistributionUnitRow[];
 }
 
@@ -423,6 +425,7 @@ export class LiquidationsService {
         exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt,
         conversionDate: expense.conversionDate,
         scopeType: 'BUILDING',
+        unitGroupId: null,
       }));
 
       for (const expense of unitGroupExpenses) {
@@ -479,6 +482,7 @@ export class LiquidationsService {
             exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt,
             conversionDate: expense.conversionDate,
             scopeType: 'BUILDING',
+            unitGroupId: null,
           });
         }
       }
@@ -499,6 +503,8 @@ export class LiquidationsService {
         exchangeRateDirection: expense.exchangeRateDirection,
         exchangeRateEffectiveAt: expense.exchangeRateEffectiveAt?.toISOString() ?? null,
         conversionDate: expense.conversionDate?.toISOString() ?? null,
+        scopeType: expense.scopeType,
+        unitGroupId: expense.unitGroupId,
       }));
 
       const totalsByCurrency: Record<string, number> = {};
@@ -520,6 +526,8 @@ export class LiquidationsService {
           invoiceDate: adjustment.sourceInvoiceDate.toISOString(),
           description: `Ajuste retroactivo: ${adjustment.reason}`,
           type: 'ADJUSTMENT',
+          scopeType: 'ADJUSTMENT',
+          unitGroupId: null,
           sourcePeriod: adjustment.sourcePeriod,
           functionalAmountMinor: adjustment.functionalAmountMinor,
           functionalCurrencyCode: adjustment.functionalCurrencyCode,

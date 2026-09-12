@@ -22,6 +22,7 @@ import {
 import {
   validateFrozenLiquidationDistributionSnapshot,
   type LiquidationDistributionAllocation,
+  type LiquidationDistributionSnapshotV1,
 } from './liquidation-distribution';
 import {
   type LiquidationResponseDto,
@@ -72,6 +73,8 @@ export interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   invoiceDate: string;
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
+  scopeType: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
+  unitGroupId: string | null;
   sourcePeriod?: string;
 }
 
@@ -900,6 +903,10 @@ export class LiquidationPublicationUseCase {
                 totalAmountMinor: current.totalAmountMinor,
               },
             );
+            assertFrozenDistributionMatchesExpenseSources(
+              frozenDistribution,
+              parseExpenseSnapshot(current.expenseSnapshot),
+            );
             const snapshotUnitIds = frozenDistribution.allocations.map((allocation) => allocation.unitId);
             const scopedUnits = await tx.unit.findMany({
               where: {
@@ -1288,6 +1295,8 @@ interface ParsedLiquidationExpenseItem {
   invoiceDate: string;
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
+  scopeType?: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
+  unitGroupId?: string | null;
   sourcePeriod?: string;
   functionalAmountMinor?: number;
   functionalCurrencyCode?: string;
@@ -1317,6 +1326,8 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
     const invoiceDate = snapshot.invoiceDate;
     const description = snapshot.description;
     const type = snapshot.type;
+    const scopeType = snapshot.scopeType;
+    const unitGroupId = snapshot.unitGroupId;
     const sourcePeriod = snapshot.sourcePeriod;
     const functionalAmountMinor = snapshot.functionalAmountMinor;
     const functionalCurrencyCode = snapshot.functionalCurrencyCode;
@@ -1349,6 +1360,23 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
     }
     if (type !== 'EXPENSE' && type !== 'ADJUSTMENT') {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid type`);
+    }
+    if (
+      scopeType !== undefined &&
+      scopeType !== 'BUILDING' &&
+      scopeType !== 'UNIT_GROUP' &&
+      scopeType !== 'ADJUSTMENT'
+    ) {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid scopeType`);
+    }
+    if (unitGroupId !== undefined && unitGroupId !== null && typeof unitGroupId !== 'string') {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid unitGroupId`);
+    }
+    if (scopeType === 'UNIT_GROUP' && typeof unitGroupId !== 'string') {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid UNIT_GROUP evidence`);
+    }
+    if (scopeType !== undefined && scopeType !== 'UNIT_GROUP' && unitGroupId !== undefined && unitGroupId !== null) {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has unexpected unitGroupId`);
     }
     if (sourcePeriod !== undefined && sourcePeriod !== null && typeof sourcePeriod !== 'string') {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid sourcePeriod`);
@@ -1418,6 +1446,8 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
       invoiceDate: parsedInvoiceDate.toISOString(),
       description,
       type,
+      scopeType,
+      unitGroupId: unitGroupId === undefined ? undefined : unitGroupId,
       sourcePeriod: sourcePeriod ?? undefined,
       functionalAmountMinor: parsedFunctionalAmountMinor,
       functionalCurrencyCode: parsedFunctionalCurrencyCode,
@@ -1537,6 +1567,37 @@ function parseIncomeOffsetSnapshotItems(value: unknown): PublishedIncomeOffsetSn
       period: requiredString('period'),
     };
   });
+}
+
+function assertFrozenDistributionMatchesExpenseSources(
+  distribution: LiquidationDistributionSnapshotV1,
+  sources: readonly ParsedLiquidationExpenseItem[],
+): void {
+  const sourceById = new Map(sources.map((source) => [source.expenseId, source]));
+  if (sourceById.size !== sources.length || sourceById.size !== distribution.movements.length) {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID',
+      message: 'El snapshot de distribución no corresponde a sus fuentes congeladas; no se publica',
+    });
+  }
+
+  for (const movement of distribution.movements) {
+    const source = sourceById.get(movement.movementId);
+    if (
+      !source ||
+      source.scopeType === undefined ||
+      source.scopeType !== movement.scope ||
+      (source.unitGroupId ?? null) !== movement.unitGroupId ||
+      source.amountMinor !== movement.amountMinor
+    ) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID',
+        message: 'El snapshot de distribución no corresponde a sus fuentes congeladas; no se publica',
+      });
+    }
+  }
 }
 
 function getPublicationSnapshotExpenses(

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
@@ -31,6 +32,8 @@ const baseLiquidation = {
       invoiceDate: '2026-05-01T00:00:00.000Z',
       description: null,
       type: 'EXPENSE',
+      scopeType: 'BUILDING',
+      unitGroupId: null,
     },
   ],
   unitCount: 2,
@@ -175,7 +178,7 @@ describe('LiquidationPublicationUseCase', () => {
     buildingId: 'building-1',
     totalAmountMinor: 101,
     movements: [{
-      movementId: 'expense-1',
+      movementId: 'exp-1',
       scope: 'BUILDING',
       amountMinor: 101,
       recipients: [
@@ -211,7 +214,7 @@ it('fails closed when frozen allocations reconcile globally but disagree with fr
     buildingId: 'building-1',
     totalAmountMinor: 101,
     movements: [{
-      movementId: 'expense-1',
+      movementId: 'exp-1',
       scope: 'BUILDING',
       amountMinor: 101,
       recipients: [
@@ -238,6 +241,46 @@ it('fails closed when frozen allocations reconcile globally but disagree with fr
   await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
     dueDate: '2026-06-10',
   })).rejects.toThrow(BadRequestException);
+  expect(tx.charge.createMany).not.toHaveBeenCalled();
+});
+
+it('fails closed when a frozen UNIT_GROUP movement is retagged as BUILDING', async () => {
+  const groupDistribution = distributeLiquidationMovements({
+    tenantId: 'tenant-1',
+    buildingId: 'building-1',
+    totalAmountMinor: 101,
+    movements: [{
+      movementId: 'exp-1',
+      scope: 'UNIT_GROUP',
+      unitGroupId: 'group-1',
+      amountMinor: 101,
+      recipients: [
+        { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: 1, m2: 40 },
+      ],
+    }],
+  });
+  const movement = groupDistribution.movements[0]!;
+  const tamperedSnapshot = {
+    ...groupDistribution,
+    movements: [{
+      ...movement,
+      scope: 'BUILDING' as const,
+      unitGroupId: null,
+    }],
+  };
+  tx.liquidation.findFirst.mockReset().mockResolvedValueOnce({
+    ...baseLiquidation,
+    expenseSnapshot: [{
+      ...baseLiquidation.expenseSnapshot[0],
+      scopeType: 'UNIT_GROUP',
+      unitGroupId: 'group-1',
+    }],
+    distributionSnapshot: tamperedSnapshot,
+  });
+
+  await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+    dueDate: '2026-06-10',
+  })).rejects.toThrow(UnprocessableEntityException);
   expect(tx.charge.createMany).not.toHaveBeenCalled();
 });
 
@@ -627,6 +670,8 @@ it('rejects publication when status is not REVIEWED', async () => {
           invoiceDate: '2026-08-05T00:00:00.000Z',
           description: null,
           type: 'EXPENSE',
+          scopeType: 'BUILDING',
+          unitGroupId: null,
         },
       ],
       grossExpenseAmountMinor: 10000,
