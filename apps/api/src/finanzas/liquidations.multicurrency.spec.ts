@@ -277,7 +277,7 @@ describe('LiquidationsService multicurrency valuation', () => {
 
     it('keeps original totals by currency and functional total in the snapshot items', async () => {
       tx.expense.findMany
-        .mockResolvedValueOnce([functionalExpense(), identityExpense()])
+        .mockResolvedValueOnce([functionalExpense(), identityExpense({ id: 'exp-2' })])
         .mockResolvedValueOnce([]);
 
       await createDraft();
