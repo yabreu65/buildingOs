@@ -8,6 +8,7 @@ import {
   sendChargePublishedNotifications,
   type LiquidationWorkflowDependencies,
 } from './liquidation-publication.use-case';
+import { distributeLiquidationMovements } from './liquidation-distribution';
 
 const baseLiquidation = {
   id: 'liq-1',
@@ -168,7 +169,63 @@ describe('LiquidationPublicationUseCase', () => {
     );
   });
 
-  it('rejects publication when status is not REVIEWED', async () => {
+  it('publishes charges from the frozen draft distribution after live weights change', async () => {
+  const frozenDistribution = distributeLiquidationMovements({
+    tenantId: 'tenant-1',
+    buildingId: 'building-1',
+    totalAmountMinor: 101,
+    movements: [{
+      movementId: 'expense-1',
+      scope: 'BUILDING',
+      amountMinor: 101,
+      recipients: [
+        { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: 4, m2: 40 },
+        { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', coefficient: 6, m2: 60 },
+      ],
+    }],
+  });
+  tx.liquidation.findFirst.mockReset()
+    .mockResolvedValueOnce({ ...baseLiquidation, distributionSnapshot: frozenDistribution })
+    .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce({ ...baseLiquidation, status: 'PUBLISHED' });
+  // Unit lookup proves identity only: allocation inputs remain frozen in the draft.
+  tx.unit.findMany.mockResolvedValueOnce([{ id: 'unit-1' }, { id: 'unit-2' }]);
+
+  await useCase.execute('tenant-1', 'liq-1', 'member-1', { dueDate: '2026-06-10' });
+
+  expect(tx.unit.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    select: { id: true },
+    where: expect.objectContaining({ id: { in: ['unit-1', 'unit-2'] } }),
+  }));
+  expect(tx.charge.createMany).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.arrayContaining([
+      expect.objectContaining({ unitId: 'unit-1', amount: 40 }),
+      expect.objectContaining({ unitId: 'unit-2', amount: 61 }),
+    ]),
+  }));
+});
+
+it('fails closed before charge creation when the frozen snapshot does not reconcile', async () => {
+  const invalidSnapshot = {
+    version: 1,
+    tenantId: 'tenant-1',
+    buildingId: 'building-1',
+    totalAmountMinor: 100,
+    movements: [],
+    allocations: [],
+  };
+  tx.liquidation.findFirst.mockReset().mockResolvedValueOnce({
+    ...baseLiquidation,
+    distributionSnapshot: invalidSnapshot,
+  });
+
+  await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+    dueDate: '2026-06-10',
+  })).rejects.toThrow(BadRequestException);
+  expect(tx.charge.createMany).not.toHaveBeenCalled();
+});
+
+it('rejects publication when status is not REVIEWED', async () => {
     tx.liquidation.findFirst.mockReset().mockResolvedValue({
       ...baseLiquidation,
       status: 'DRAFT',
