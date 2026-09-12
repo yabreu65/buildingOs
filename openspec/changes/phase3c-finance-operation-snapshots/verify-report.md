@@ -55,7 +55,7 @@ Independent re-verification confirms the remediation. No implementation task che
 | Command | Exit | Result |
 |---|---:|---|
 | `npm run test -w apps/api -- --runInBand finanzas/adjustments.multicurrency.spec.ts finanzas/expenses.multicurrency.spec.ts finanzas/incomes.multicurrency.spec.ts finanzas/atomic-movement-lifecycle.spec.ts` | 0 | 4 suites, 85/85 tests passed. |
-| `DATABASE_URL="$(node -e "require('dotenv').config({path:'apps/api/.env'}); const u=new URL(process.env.DATABASE_URL); u.pathname='/buildingos_local_v2_test'; process.stdout.write(u.toString())")" RUN_POSTGRES_INTEGRATION=1 POSTGRES_TEST_DB_NAME=buildingos_local_v2_test npm run test -w apps/api -- --runInBand finanzas/atomic-movement-lifecycle.postgres.spec.ts` | 0 | Local loopback allowlisted PostgreSQL: 1 suite, 12/12 tests passed, including the Adjustment race. |
+| `RUN_POSTGRES_INTEGRATION=1 POSTGRES_TEST_DB_NAME=buildingos_local_v2_test DATABASE_URL='postgresql://buildingos:buildingos@127.0.0.1:5434/buildingos_local_v2_test?schema=public' npm run test -w apps/api -- --runInBand finanzas/atomic-movement-lifecycle.postgres.spec.ts` | 0 | Local loopback allowlisted PostgreSQL: 1 suite, 17/17 tests passed, including the five URL-guard cases and Adjustment race. |
 | `npm run lint:ci -w apps/api` | 0 | Passed. |
 | `npm run test:forbid-only -w apps/api` | 0 | Passed; scanned 227 API test files. |
 | `rtk tsc --noEmit -p apps/api/tsconfig.json` | 2 | 76 diagnostics in 5 unrelated files; no Phase 3C path. |
@@ -72,7 +72,7 @@ Build was not run because it was not authorized by the user or repository policy
 | Test files and GREEN state cross-checked | ✅ | 11/11 evidence rows map to current test files; focused unit and PostgreSQL suites remain green. |
 | Characterization evidence | ✅ | PR 2 and PR 3 explicitly avoid fabricated baseline RED claims. |
 | Assertion quality | ✅ | The four changed test files contain no tautology, ghost loop, smoke-only, type-only-alone, or CSS-detail assertion. The Income remediation executes production code before its persistence assertions. |
-| Test layers | ✅ | Unit: 69 tests across 3 changed multicurrency files; integration: 12 tests across 1 local PostgreSQL file; E2E: 0. |
+| Test layers | ✅ | Unit: 69 tests across 3 changed multicurrency files; integration: 17 tests across 1 local PostgreSQL file; E2E: 0. |
 
 **TDD compliance: 5/5 checks passed.** Coverage was not collected because it was not part of the specified verification command set.
 
