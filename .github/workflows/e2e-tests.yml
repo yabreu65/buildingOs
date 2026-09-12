@@ -93,7 +93,7 @@ jobs:
             -e MINIO_ROOT_USER="$S3_ACCESS_KEY" \
             -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
             -e MINIO_API_CORS_ALLOW_ORIGIN="http://localhost:3000" \
-            minio/minio:latest \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z \
             server /data --address :9000 --console-address :9001
 
           for i in {1..30}; do
@@ -114,7 +114,7 @@ jobs:
             -e S3_ACCESS_KEY="$S3_ACCESS_KEY" \
             -e S3_SECRET_KEY="$S3_SECRET_KEY" \
             -e S3_BUCKET="$S3_BUCKET" \
-            minio/mc:latest \
+            quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z \
             -lc 'mc alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" && mc mb --ignore-existing "local/$S3_BUCKET" && mc version enable "local/$S3_BUCKET" && version_info="$(mc version info --json "local/$S3_BUCKET")" && printf "%s\\n" "$version_info" && case "$version_info" in *"Enabled"*) echo "MinIO versioning is enabled" ;; *) echo "MinIO versioning is not enabled" >&2; exit 1 ;; esac'
 
           cors_response="$(curl -sS -D - -o /dev/null \
