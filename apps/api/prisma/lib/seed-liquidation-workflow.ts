@@ -81,6 +81,18 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(normalizeJson(left)) === JSON.stringify(normalizeJson(right));
 }
 
+function stripDistributionSourceEvidence(snapshot: Prisma.InputJsonArray): Prisma.InputJsonArray {
+  return snapshot.map((item) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      return item;
+    }
+
+    const itemRecord = item as Record<string, Prisma.InputJsonValue>;
+    const { scopeType: _scopeType, unitGroupId: _unitGroupId, ...publishedItem } = itemRecord;
+    return publishedItem;
+  }) as Prisma.InputJsonArray;
+}
+
 function isP2002(error: unknown): error is Prisma.PrismaClientKnownRequestError {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
@@ -150,6 +162,7 @@ export async function ensureSeedPublishedLiquidation(
     }) as Promise<ActiveLiquidationRecord | null>;
 
   const expectedDraftExpenseSnapshot = input.expenseSnapshot;
+  const expectedPublishedExpenses = stripDistributionSourceEvidence(expectedDraftExpenseSnapshot);
   const expectedPublishedSnapshotBase = {
     version: 1,
     liquidationId: '',
@@ -159,7 +172,7 @@ export async function ensureSeedPublishedLiquidation(
     baseCurrency: input.baseCurrency,
     totalAmountMinor: input.totalAmountMinor,
     totalsByCurrency: input.totalsByCurrency,
-    expenses: expectedDraftExpenseSnapshot,
+    expenses: expectedPublishedExpenses,
     allocations: undefined,
     dueDate: input.dueDate.toISOString(),
   };
