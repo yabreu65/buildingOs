@@ -129,14 +129,16 @@ export function distributeLiquidationMovements(
     throw invalid('total exceeds the valued source movements');
   }
 
-  const movementAmounts = allocateMinorByDecimalWeights(
-    movementWeights.map((movement) => ({
-      id: movement.movement.movementId,
-      weight: movement.amount,
-    })),
-    input.totalAmountMinor,
-    'movements',
-  );
+  const movementAmounts = sourceTotal.isZero() && requestedTotal.isZero()
+    ? new Map(movementWeights.map((movement) => [movement.movement.movementId, 0]))
+    : allocateMinorByDecimalWeights(
+      movementWeights.map((movement) => ({
+        id: movement.movement.movementId,
+        weight: movement.amount,
+      })),
+      input.totalAmountMinor,
+      'movements',
+    );
 
   const allocationsByUnitId = new Map<string, LiquidationDistributionAllocation>();
   const movements = movementWeights.map(({ movement }) => {
@@ -273,16 +275,20 @@ export function parseLiquidationDistributionSnapshot(
   }
 
   const recalculatedAllocations = new Map<string, number>();
+  const allocationIdentityByUnitId = new Map<string, LiquidationDistributionSnapshotRecipient>();
   for (const movement of movements) {
     const recipientIds = movement.recipients.map((recipient) => recipient.unitId).sort();
     if (recipientIds.join('|') !== [...movement.recipientUnitIds].sort().join('|')) {
       throw invalid(`snapshot movement ${movement.movementId} recipient population is inconsistent`);
     }
 
-    const frozenWeights = movement.recipients.map((recipient) => ({
-      id: recipient.unitId,
-      weight: new Prisma.Decimal(recipient.weight),
-    }));
+    const recipientById = new Map(movement.recipients.map((recipient) => [recipient.unitId, recipient]));
+    const frozenWeights = deriveFrozenRecipientWeights(movement.recipients, movement.weightSource);
+    for (const { recipient, weight } of frozenWeights) {
+      if (!weight.eq(recipient.weight)) {
+        throw invalid(`snapshot movement ${movement.movementId} recipient weight is inconsistent`);
+      }
+    }
     const calculatedTotalWeight = frozenWeights.reduce(
       (sum, recipient) => sum.plus(recipient.weight),
       new Prisma.Decimal(0),
@@ -292,12 +298,31 @@ export function parseLiquidationDistributionSnapshot(
     }
 
     const expectedAllocations = allocateMinorByDecimalWeights(
-      frozenWeights,
+      frozenWeights.map(({ recipient, weight }) => ({ id: recipient.unitId, weight })),
       movement.amountMinor,
       `snapshot movement ${movement.movementId}`,
     );
     const persistedAllocations = new Map(
-      movement.allocations.map((allocation) => [allocation.unitId, allocation.amountMinor]),
+      movement.allocations.map((allocation) => {
+        const recipient = recipientById.get(allocation.unitId);
+        if (
+          !recipient ||
+          allocation.unitCode !== recipient.unitCode ||
+          allocation.unitLabel !== recipient.unitLabel
+        ) {
+          throw invalid(`snapshot movement ${movement.movementId} allocation identity is inconsistent`);
+        }
+        const frozenIdentity = allocationIdentityByUnitId.get(allocation.unitId);
+        if (
+          frozenIdentity &&
+          (frozenIdentity.unitCode !== recipient.unitCode ||
+            frozenIdentity.unitLabel !== recipient.unitLabel)
+        ) {
+          throw invalid(`snapshot allocation identity for ${allocation.unitId} is inconsistent`);
+        }
+        allocationIdentityByUnitId.set(allocation.unitId, recipient);
+        return [allocation.unitId, allocation.amountMinor];
+      }),
     );
     if (
       expectedAllocations.size !== persistedAllocations.size ||
@@ -319,9 +344,15 @@ export function parseLiquidationDistributionSnapshot(
   const allocationsById = new Map(allocations.map((allocation) => [allocation.unitId, allocation]));
   if (
     recalculatedAllocations.size !== allocationsById.size ||
-    ![...recalculatedAllocations].every(([unitId, amountMinor]) =>
-      allocationsById.get(unitId)?.amountMinor === amountMinor,
-    )
+    ![...recalculatedAllocations].every(([unitId, amountMinor]) => {
+      const allocation = allocationsById.get(unitId);
+      const recipient = allocationIdentityByUnitId.get(unitId);
+      return (
+        allocation?.amountMinor === amountMinor &&
+        allocation?.unitCode === recipient?.unitCode &&
+        allocation?.unitLabel === recipient?.unitLabel
+      );
+    })
   ) {
     throw invalid('snapshot final allocations do not match movement allocations');
   }
@@ -439,6 +470,36 @@ function resolveRecipientWeights(recipients: readonly NormalizedRecipient[]): {
     weightSource: 'EQUAL',
     weights: recipients.map((recipient) => ({ recipient, weight: new Prisma.Decimal(1) })),
   };
+}
+
+function deriveFrozenRecipientWeights(
+  recipients: readonly LiquidationDistributionSnapshotRecipient[],
+  weightSource: LiquidationDistributionWeightSource,
+): Array<{ readonly recipient: LiquidationDistributionSnapshotRecipient; readonly weight: Prisma.Decimal }> {
+  if (weightSource === 'EQUAL') {
+    return recipients.map((recipient) => ({ recipient, weight: new Prisma.Decimal(1) }));
+  }
+
+  const evidenceField = weightSource === 'COEFFICIENT' ? 'coefficient' : 'm2';
+  const evidenceWeights = recipients.map((recipient) => {
+    const evidence = recipient[evidenceField];
+    return {
+      recipient,
+      evidence: evidence === null ? new Prisma.Decimal(0) : new Prisma.Decimal(evidence),
+    };
+  });
+
+  if (weightSource === 'COEFFICIENT') {
+    if (!evidenceWeights.some(({ evidence }) => evidence.greaterThan(0))) {
+      throw invalid('snapshot COEFFICIENT weights lack positive coefficient evidence');
+    }
+    return evidenceWeights.map(({ recipient, evidence }) => ({
+      recipient,
+      weight: evidence.greaterThan(0) ? evidence : new Prisma.Decimal(1),
+    }));
+  }
+
+  return evidenceWeights.map(({ recipient, evidence }) => ({ recipient, weight: evidence }));
 }
 
 function normalizeRecipient(value: LiquidationDistributionRecipientInput): NormalizedRecipient {

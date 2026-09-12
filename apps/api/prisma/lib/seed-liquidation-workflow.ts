@@ -3,6 +3,11 @@ import { AuditService } from '../../src/audit/audit.service';
 import { FinanzasValidators } from '../../src/finanzas/finanzas.validators';
 import { ResidentAccessService } from '../../src/resident-access/resident-access.service';
 import {
+  buildLiquidationDistributionSnapshot,
+  distributeLiquidationMovements,
+  type LiquidationDistributionRecipientInput,
+} from '../../src/finanzas/liquidation-distribution';
+import {
   createLiquidationDraftRecord,
   LiquidationPublicationUseCase,
   requireFinanceMembership,
@@ -15,6 +20,8 @@ interface WorkflowUnitRecord {
   readonly id: string;
   readonly code: string;
   readonly label: string | null;
+  readonly coefficient?: number | null;
+  readonly m2?: number | null;
 }
 
 interface SeedLiquidationWorkflowInput {
@@ -107,6 +114,68 @@ function normalizeSnapshotForComparison(snapshot: unknown): Record<string, unkno
   return cloned;
 }
 
+async function loadDistributionRecipients(input: SeedLiquidationWorkflowInput): Promise<LiquidationDistributionRecipientInput[]> {
+  if (input.units.every((unit) => unit.coefficient !== undefined && unit.m2 !== undefined)) {
+    return input.units.map((unit) => ({
+      unitId: unit.id,
+      unitCode: unit.code,
+      unitLabel: unit.label,
+      coefficient: unit.coefficient ?? null,
+      m2: unit.m2 ?? null,
+    }));
+  }
+
+  const unitRows = await input.prisma.unit.findMany({
+    where: {
+      tenantId: input.tenantId,
+      buildingId: input.buildingId,
+      id: { in: input.units.map((unit) => unit.id) },
+    },
+    include: { unitCategory: { select: { coefficient: true } } },
+  });
+  const rowById = new Map(unitRows.map((unit) => [unit.id, unit]));
+
+  return input.units.map((unit) => {
+    const row = rowById.get(unit.id);
+    if (!row) {
+      throw new Error(`Seed liquidation unit ${unit.id} is not billable in building ${input.buildingId}`);
+    }
+
+    return {
+      unitId: unit.id,
+      unitCode: unit.code,
+      unitLabel: unit.label,
+      coefficient: row.unitCategory?.coefficient ?? null,
+      m2: row.m2 ?? null,
+    };
+  });
+}
+
+async function loadUnitGroupDistributionRecipients(
+  input: SeedLiquidationWorkflowInput,
+  unitGroupId: string,
+): Promise<LiquidationDistributionRecipientInput[]> {
+  const members = await input.prisma.unitGroupMember.findMany({
+    where: {
+      tenantId: input.tenantId,
+      buildingId: input.buildingId,
+      unitGroupId,
+    },
+    include: { unit: { include: { unitCategory: { select: { coefficient: true } } } } },
+  });
+  if (members.length === 0) {
+    throw new Error(`Seed liquidation unit group ${unitGroupId} has no members in building ${input.buildingId}`);
+  }
+
+  return members.map((member) => ({
+    unitId: member.unit.id,
+    unitCode: member.unit.code,
+    unitLabel: member.unit.label,
+    coefficient: member.unit.unitCategory?.coefficient ?? null,
+    m2: member.unit.m2 ?? null,
+  }));
+}
+
 export async function ensureSeedPublishedLiquidation(
   input: SeedLiquidationWorkflowInput,
 ): Promise<SeedWorkflowResult> {
@@ -162,6 +231,50 @@ export async function ensureSeedPublishedLiquidation(
     }) as Promise<ActiveLiquidationRecord | null>;
 
   const expectedDraftExpenseSnapshot = input.expenseSnapshot;
+  const buildFrozenDistribution = async () => {
+    const buildingRecipients = await loadDistributionRecipients(input);
+    const groupRecipients = new Map<string, LiquidationDistributionRecipientInput[]>();
+    return distributeLiquidationMovements({
+      tenantId: input.tenantId,
+      buildingId: input.buildingId,
+      totalAmountMinor: input.totalAmountMinor,
+      movements: await Promise.all(expectedDraftExpenseSnapshot.map(async (item, index) => {
+        if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+          throw new Error(`Seed liquidation expense snapshot item ${index} is invalid`);
+        }
+        const snapshot = item as Record<string, Prisma.InputJsonValue>;
+        const movementId = snapshot.expenseId;
+        const amountMinor = snapshot.amountMinor;
+        const scope = snapshot.scopeType;
+        const unitGroupId = snapshot.unitGroupId;
+        if (
+          typeof movementId !== 'string' ||
+          typeof amountMinor !== 'number' ||
+          !Number.isSafeInteger(amountMinor) ||
+          amountMinor < 0 ||
+          (scope !== 'BUILDING' && scope !== 'UNIT_GROUP' && scope !== 'ADJUSTMENT') ||
+          (scope === 'UNIT_GROUP' && typeof unitGroupId !== 'string') ||
+          (scope !== 'UNIT_GROUP' && unitGroupId !== null)
+        ) {
+          throw new Error(`Seed liquidation expense snapshot item ${index} is invalid`);
+        }
+
+        let recipients = buildingRecipients;
+        if (scope === 'UNIT_GROUP') {
+          recipients = groupRecipients.get(unitGroupId) ?? await loadUnitGroupDistributionRecipients(input, unitGroupId);
+          groupRecipients.set(unitGroupId, recipients);
+        }
+
+        return {
+          movementId,
+          scope,
+          unitGroupId: scope === 'UNIT_GROUP' ? unitGroupId : null,
+          amountMinor,
+          recipients,
+        };
+      })),
+    });
+  };
   const expectedPublishedExpenses = stripDistributionSourceEvidence(expectedDraftExpenseSnapshot);
   const expectedPublishedSnapshotBase = {
     version: 1,
@@ -282,6 +395,7 @@ export async function ensureSeedPublishedLiquidation(
   let created = false;
 
   if (!liquidation) {
+    const frozenDistribution = await buildFrozenDistribution();
     try {
       liquidation = await input.prisma.$transaction((tx) =>
         createLiquidationDraftRecord(tx, {
@@ -297,6 +411,7 @@ export async function ensureSeedPublishedLiquidation(
           expenseSnapshot: expectedDraftExpenseSnapshot,
           unitCount: input.units.length,
           generatedByMembershipId: membership.id,
+          distributionSnapshot: buildLiquidationDistributionSnapshot(frozenDistribution),
         }),
       ) as unknown as ActiveLiquidationRecord;
       created = true;

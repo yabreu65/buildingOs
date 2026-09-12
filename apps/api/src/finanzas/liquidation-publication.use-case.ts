@@ -20,6 +20,7 @@ import {
   type PublishedIncomeOffsetSnapshot,
 } from './liquidation-publication-snapshot';
 import {
+  distributeLiquidationMovements,
   validateFrozenLiquidationDistributionSnapshot,
   type LiquidationDistributionAllocation,
   type LiquidationDistributionSnapshotV1,
@@ -906,6 +907,8 @@ export class LiquidationPublicationUseCase {
             assertFrozenDistributionMatchesExpenseSources(
               frozenDistribution,
               parseExpenseSnapshot(current.expenseSnapshot),
+              valuationMode,
+              current.totalAmountMinor,
             );
             const snapshotUnitIds = frozenDistribution.allocations.map((allocation) => allocation.unitId);
             const scopedUnits = await tx.unit.findMany({
@@ -1572,30 +1575,67 @@ function parseIncomeOffsetSnapshotItems(value: unknown): PublishedIncomeOffsetSn
 function assertFrozenDistributionMatchesExpenseSources(
   distribution: LiquidationDistributionSnapshotV1,
   sources: readonly ParsedLiquidationExpenseItem[],
+  valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL',
+  totalAmountMinor: number,
 ): void {
-  const sourceById = new Map(sources.map((source) => [source.expenseId, source]));
-  if (sourceById.size !== sources.length || sourceById.size !== distribution.movements.length) {
+  const invalidFrozenSource = (): never => {
     throw new UnprocessableEntityException({
       statusCode: 422,
       error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID',
       message: 'El snapshot de distribución no corresponde a sus fuentes congeladas; no se publica',
     });
+  };
+  const sourceById = new Map(sources.map((source) => [source.expenseId, source]));
+  if (sourceById.size !== sources.length || sourceById.size !== distribution.movements.length) {
+    invalidFrozenSource();
   }
+
+  const expectedDistribution = distributeLiquidationMovements({
+    tenantId: distribution.tenantId,
+    buildingId: distribution.buildingId,
+    totalAmountMinor,
+    movements: sources.map((source) => {
+      const amountMinor =
+        valuationMode === 'FUNCTIONAL' ? source.functionalAmountMinor : source.amountMinor;
+      if (
+        source.expenseId.trim().length === 0 ||
+        source.scopeType === undefined ||
+        amountMinor === undefined ||
+        (source.scopeType === 'UNIT_GROUP' && (source.unitGroupId ?? '').trim().length === 0)
+      ) {
+        return invalidFrozenSource();
+      }
+
+      return {
+        movementId: source.expenseId,
+        scope: source.scopeType,
+        unitGroupId: source.unitGroupId ?? null,
+        amountMinor,
+        recipients: [{
+          unitId: `frozen-source-${source.expenseId}`,
+          unitCode: 'FROZEN_SOURCE',
+          unitLabel: null,
+          coefficient: 1,
+          m2: null,
+        }],
+      };
+    }),
+  });
+  const expectedMovementById = new Map(
+    expectedDistribution.movements.map((movement) => [movement.movementId, movement]),
+  );
 
   for (const movement of distribution.movements) {
     const source = sourceById.get(movement.movementId);
+    const expectedMovement = expectedMovementById.get(movement.movementId);
     if (
       !source ||
       source.scopeType === undefined ||
       source.scopeType !== movement.scope ||
       (source.unitGroupId ?? null) !== movement.unitGroupId ||
-      source.amountMinor !== movement.amountMinor
+      expectedMovement?.amountMinor !== movement.amountMinor
     ) {
-      throw new UnprocessableEntityException({
-        statusCode: 422,
-        error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID',
-        message: 'El snapshot de distribución no corresponde a sus fuentes congeladas; no se publica',
-      });
+      invalidFrozenSource();
     }
   }
 }

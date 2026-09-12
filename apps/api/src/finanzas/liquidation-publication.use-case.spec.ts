@@ -516,6 +516,8 @@ it('rejects publication when status is not REVIEWED', async () => {
           invoiceDate: '2026-08-05T00:00:00.000Z',
           description: null,
           type: 'EXPENSE',
+          scopeType: 'BUILDING',
+          unitGroupId: null,
           functionalAmountMinor: 36500,
           functionalCurrencyCode: 'VES',
           exchangeRateId: 'rate-1',
@@ -533,6 +535,8 @@ it('rejects publication when status is not REVIEWED', async () => {
           invoiceDate: '2026-08-01T00:00:00.000Z',
           description: 'Ajuste retroactivo: correction',
           type: 'ADJUSTMENT',
+          scopeType: 'ADJUSTMENT',
+          unitGroupId: null,
           sourcePeriod: '2026-08',
           functionalAmountMinor: 125,
           functionalCurrencyCode: 'VES',
@@ -614,6 +618,58 @@ it('rejects publication when status is not REVIEWED', async () => {
       );
       expect(totalCharges).toBe(36625);
       expect(chargeCreate[0].data.every((charge) => charge.currency === 'VES')).toBe(true);
+    });
+
+    it('publishes a frozen distribution using FUNCTIONAL source amounts', async () => {
+      const frozenDistribution = distributeLiquidationMovements({
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        totalAmountMinor: 36625,
+        movements: [
+          {
+            movementId: 'exp-1',
+            scope: 'BUILDING',
+            amountMinor: 36500,
+            recipients: [
+              { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: 1, m2: null },
+            ],
+          },
+          {
+            movementId: 'ADJ-adj-1',
+            scope: 'ADJUSTMENT',
+            amountMinor: 125,
+            recipients: [
+              { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: 1, m2: null },
+            ],
+          },
+        ],
+      });
+      tx.liquidation.findFirst
+        .mockReset()
+        .mockResolvedValueOnce({ ...functionalLiquidation, distributionSnapshot: frozenDistribution })
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          ...functionalLiquidation,
+          status: 'PUBLISHED',
+          publishedAt: new Date('2026-08-10T00:00:00.000Z'),
+        });
+      tx.unit.findMany.mockResolvedValue([
+        { id: 'unit-1', code: '1A', label: '1A', unitCategory: null },
+      ]);
+      tx.charge.findMany.mockResolvedValue([]);
+
+      await expect(
+        useCase.execute(
+          'tenant-1',
+          'liq-1',
+          'member-1',
+          { dueDate: '2026-09-10' },
+          'post-commit',
+        ),
+      ).resolves.toMatchObject({ status: 'PUBLISHED' });
+      expect(tx.charge.createMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: [expect.objectContaining({ amount: 36625, unitId: 'unit-1' })],
+      }));
     });
 
     it('blocks publication when the source snapshot drifts from the total', async () => {
@@ -768,6 +824,97 @@ it('rejects publication when status is not REVIEWED', async () => {
           expect.objectContaining({ amount: 1500, unitId: 'unit-1', liquidationId: 'liq-1' }),
         ]),
       });
+    });
+
+    it('publishes a frozen income-offset distribution after deterministic movement apportionment', async () => {
+      const frozenDistribution = distributeLiquidationMovements({
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        totalAmountMinor: 100,
+        movements: [
+          {
+            movementId: 'exp-1',
+            scope: 'BUILDING',
+            amountMinor: 50,
+            recipients: [
+              { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: 1, m2: null },
+            ],
+          },
+          {
+            movementId: 'exp-2',
+            scope: 'BUILDING',
+            amountMinor: 51,
+            recipients: [
+              { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', coefficient: 1, m2: null },
+            ],
+          },
+        ],
+      });
+      expect(frozenDistribution.movements.map((movement) => movement.amountMinor)).toEqual([50, 50]);
+      const apportionedLiquidation = {
+        ...incomeOffsetLiquidation,
+        totalAmountMinor: 100,
+        totalsByCurrency: { ARS: 101 },
+        expenseSnapshot: [
+          {
+            ...incomeOffsetLiquidation.expenseSnapshot[0],
+            amountMinor: 50,
+            scopeType: 'BUILDING',
+            unitGroupId: null,
+          },
+          {
+            expenseId: 'exp-2',
+            categoryName: 'Gas',
+            vendorName: null,
+            amountMinor: 51,
+            currencyCode: 'ARS',
+            invoiceDate: '2026-08-05T00:00:00.000Z',
+            description: null,
+            type: 'EXPENSE',
+            scopeType: 'BUILDING',
+            unitGroupId: null,
+          },
+        ],
+        grossExpenseAmountMinor: 101,
+        preIncomeAmountMinor: 101,
+        incomeOffsetAmountMinor: 1,
+        netDistributableAmountMinor: 100,
+        incomeOffsetSnapshot: [
+          {
+            ...incomeOffsetLiquidation.incomeOffsetSnapshot[0],
+            applicationAmountMinor: 1,
+            buildingAmountMinor: 1,
+            valuedAmountMinor: 1,
+          },
+        ],
+        incomeOffsetsByCurrency: { ARS: 1 },
+        distributionSnapshot: frozenDistribution,
+      };
+      tx.liquidation.findFirst.mockReset()
+        .mockResolvedValueOnce(apportionedLiquidation)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          ...apportionedLiquidation,
+          status: 'PUBLISHED',
+          publishedAt: new Date('2026-08-16T00:00:00.000Z'),
+        });
+      tx.liquidationIncomeOffset.count.mockResolvedValueOnce(1);
+      tx.liquidationIncomeOffset.findMany.mockResolvedValueOnce([
+        { ...validReference, originalAmountMinor: 1, valuedAmountMinor: 1 },
+      ]);
+      tx.incomeApplication.findMany.mockResolvedValueOnce([
+        { ...validApplication, amountMinor: 1 },
+      ]);
+
+      await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+        dueDate: '2026-09-10',
+      })).resolves.toMatchObject({ status: 'PUBLISHED' });
+      expect(tx.charge.createMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ amount: 50, unitId: 'unit-1' }),
+          expect.objectContaining({ amount: 50, unitId: 'unit-2' }),
+        ]),
+      }));
     });
 
     it('publishes a zero-net liquidation without creating positive charges', async () => {

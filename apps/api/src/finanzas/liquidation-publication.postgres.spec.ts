@@ -122,6 +122,8 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
       invoiceDate: `${period}-01T00:00:00.000Z`,
       description: 'Integration expense snapshot',
       type: 'EXPENSE',
+      scopeType: 'BUILDING',
+      unitGroupId: null,
     },
   ];
 

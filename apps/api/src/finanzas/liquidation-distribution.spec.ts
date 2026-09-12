@@ -234,4 +234,134 @@ describe('liquidation distribution', () => {
     expect(result.allocations.map((allocation) => allocation.amountMinor)).toEqual([33, 67]);
     expect(Prisma.Decimal).toBeDefined();
   });
+
+  it('freezes zero movement and final allocations when source and requested totals are zero', () => {
+    const distribution = distributeLiquidationMovements({
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      totalAmountMinor: 0,
+      movements: [{
+        movementId: 'expense-1',
+        scope: 'BUILDING',
+        amountMinor: 0,
+        recipients: [
+          { unitId: 'unit-1', unitCode: '1', unitLabel: null, coefficient: 0, m2: 0 },
+          { unitId: 'unit-2', unitCode: '2', unitLabel: null, coefficient: null, m2: null },
+        ],
+      }],
+    });
+
+    expect(distribution.movements[0]).toMatchObject({
+      amountMinor: 0,
+      allocations: [
+        { unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 0 },
+        { unitId: 'unit-2', unitCode: '2', unitLabel: null, amountMinor: 0 },
+      ],
+    });
+    expect(distribution.allocations).toEqual([
+      { unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 0 },
+      { unitId: 'unit-2', unitCode: '2', unitLabel: null, amountMinor: 0 },
+    ]);
+    expect(parseLiquidationDistributionSnapshot(distribution)).toEqual(distribution);
+  });
+
+  it('rejects frozen recipient weights that differ from coefficient or M2 evidence', () => {
+    const distribution = distributeLiquidationMovements({
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      totalAmountMinor: 100,
+      movements: [{
+        movementId: 'expense-1',
+        scope: 'BUILDING',
+        amountMinor: 100,
+        recipients: [
+          { unitId: 'unit-4', unitCode: '4', unitLabel: null, coefficient: 4, m2: 4 },
+          { unitId: 'unit-6', unitCode: '6', unitLabel: null, coefficient: 6, m2: 6 },
+        ],
+      }],
+    });
+    const movement = distribution.movements[0]!;
+    const alteredWeight = {
+      ...distribution,
+      movements: [{
+        ...movement,
+        recipients: movement.recipients.map((recipient) => (
+          recipient.unitId === 'unit-4' ? { ...recipient, weight: '5' } : recipient
+        )),
+      }],
+    };
+    const alteredCoefficientEvidence = {
+      ...distribution,
+      movements: [{
+        ...movement,
+        recipients: movement.recipients.map((recipient) => (
+          recipient.unitId === 'unit-4' ? { ...recipient, coefficient: '5' } : recipient
+        )),
+      }],
+    };
+    const m2Snapshot = {
+      ...distribution,
+      movements: [{
+        ...movement,
+        weightSource: 'M2' as const,
+      }],
+    };
+    const alteredM2Evidence = {
+      ...m2Snapshot,
+      movements: [{
+        ...m2Snapshot.movements[0]!,
+        recipients: m2Snapshot.movements[0]!.recipients.map((recipient) => (
+          recipient.unitId === 'unit-4' ? { ...recipient, m2: '5' } : recipient
+        )),
+      }],
+    };
+
+    expect(() => parseLiquidationDistributionSnapshot(alteredWeight)).toThrow(
+      'recipient weight is inconsistent',
+    );
+    expect(() => parseLiquidationDistributionSnapshot(alteredCoefficientEvidence)).toThrow(
+      'recipient weight is inconsistent',
+    );
+    expect(parseLiquidationDistributionSnapshot(m2Snapshot)).toEqual(m2Snapshot);
+    expect(() => parseLiquidationDistributionSnapshot(alteredM2Evidence)).toThrow(
+      'recipient weight is inconsistent',
+    );
+  });
+
+  it('rejects movement and final allocation display identities altered from frozen recipients', () => {
+    const distribution = distributeLiquidationMovements({
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      totalAmountMinor: 10,
+      movements: [{
+        movementId: 'expense-1',
+        scope: 'BUILDING',
+        amountMinor: 10,
+        recipients: buildingRecipients,
+      }],
+    });
+    const movement = distribution.movements[0]!;
+    const alteredMovementIdentity = {
+      ...distribution,
+      movements: [{
+        ...movement,
+        allocations: movement.allocations.map((allocation) => (
+          allocation.unitId === 'unit-a' ? { ...allocation, unitCode: 'altered' } : allocation
+        )),
+      }],
+    };
+    const alteredFinalIdentity = {
+      ...distribution,
+      allocations: distribution.allocations.map((allocation) => (
+        allocation.unitId === 'unit-a' ? { ...allocation, unitLabel: 'altered' } : allocation
+      )),
+    };
+
+    expect(() => parseLiquidationDistributionSnapshot(alteredMovementIdentity)).toThrow(
+      'allocation identity is inconsistent',
+    );
+    expect(() => parseLiquidationDistributionSnapshot(alteredFinalIdentity)).toThrow(
+      'final allocations do not match movement allocations',
+    );
+  });
 });
