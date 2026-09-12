@@ -786,6 +786,7 @@ describe('LiquidationsService', () => {
     description: null,
     category: { name: 'Garage' },
     vendor: null,
+    allocations: [],
     unitGroup: {
       id: 'group-1',
       tenantId: 'tenant-1',
@@ -833,6 +834,40 @@ describe('LiquidationsService', () => {
         }),
       }),
     }));
+  });
+
+  it('accepts same-building UNIT_GROUP allocations without double-counting the expense', async () => {
+    useOnlyGroupExpense(groupExpense({
+      allocations: [{ tenantId: 'tenant-1', buildingId: 'building-1' }],
+    }));
+    tx.unit.findMany.mockResolvedValueOnce([
+      { id: 'unit-1', code: '1A', label: '1A', unitCategory: null },
+      { id: 'unit-2', code: '2A', label: '2A', unitCategory: null },
+    ]);
+
+    const draft = await service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    });
+
+    expect(draft.chargesPreview).toEqual([
+      expect.objectContaining({ unitId: 'unit-2', amountMinor: 100 }),
+    ]);
+    expect(draft.chargesPreview).toHaveLength(1);
+  });
+
+  it.each([
+    ['one cross-building allocation', [{ tenantId: 'tenant-1', buildingId: 'building-2' }]],
+    ['allocations spanning multiple buildings', [
+      { tenantId: 'tenant-1', buildingId: 'building-1' },
+      { tenantId: 'tenant-1', buildingId: 'building-2' },
+    ]],
+  ])('fails closed for %s', async (_name, allocations) => {
+    useOnlyGroupExpense(groupExpense({ allocations }));
+
+    await expect(service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    })).rejects.toThrow('allocations outside its group building');
+    expect(tx.liquidation.create).not.toHaveBeenCalled();
   });
 
   it.each([

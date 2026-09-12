@@ -278,20 +278,40 @@ export function parseLiquidationDistributionSnapshot(
     if (recipientIds.join('|') !== [...movement.recipientUnitIds].sort().join('|')) {
       throw invalid(`snapshot movement ${movement.movementId} recipient population is inconsistent`);
     }
-    const movementAllocationTotal = movement.allocations.reduce(
-      (sum, allocation) => safeAdd(sum, allocation.amountMinor, 'snapshot movement allocation total'),
-      0,
+
+    const frozenWeights = movement.recipients.map((recipient) => ({
+      id: recipient.unitId,
+      weight: new Prisma.Decimal(recipient.weight),
+    }));
+    const calculatedTotalWeight = frozenWeights.reduce(
+      (sum, recipient) => sum.plus(recipient.weight),
+      new Prisma.Decimal(0),
     );
-    if (movementAllocationTotal !== movement.amountMinor) {
-      throw invalid(`snapshot movement ${movement.movementId} allocations are inconsistent`);
+    if (calculatedTotalWeight.isZero() || !calculatedTotalWeight.eq(movement.totalWeight)) {
+      throw invalid(`snapshot movement ${movement.movementId} totalWeight is inconsistent`);
     }
-    for (const allocation of movement.allocations) {
-      if (!recipientIds.includes(allocation.unitId)) {
-        throw invalid(`snapshot movement ${movement.movementId} allocation recipient is invalid`);
-      }
+
+    const expectedAllocations = allocateMinorByDecimalWeights(
+      frozenWeights,
+      movement.amountMinor,
+      `snapshot movement ${movement.movementId}`,
+    );
+    const persistedAllocations = new Map(
+      movement.allocations.map((allocation) => [allocation.unitId, allocation.amountMinor]),
+    );
+    if (
+      expectedAllocations.size !== persistedAllocations.size ||
+      ![...expectedAllocations].every(([unitId, amountMinor]) =>
+        persistedAllocations.get(unitId) === amountMinor,
+      )
+    ) {
+      throw invalid(`snapshot movement ${movement.movementId} allocations do not match frozen weights`);
+    }
+
+    for (const [unitId, amountMinor] of expectedAllocations) {
       recalculatedAllocations.set(
-        allocation.unitId,
-        safeAdd(recalculatedAllocations.get(allocation.unitId) ?? 0, allocation.amountMinor, 'snapshot allocation total'),
+        unitId,
+        safeAdd(recalculatedAllocations.get(unitId) ?? 0, amountMinor, 'snapshot allocation total'),
       );
     }
   }

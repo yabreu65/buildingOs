@@ -101,6 +101,64 @@ describe('liquidation distribution', () => {
     );
   });
 
+  it('recomputes frozen allocations from persisted weights before accepting a snapshot', () => {
+    const distribution = distributeLiquidationMovements({
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      totalAmountMinor: 100,
+      movements: [{
+        movementId: 'expense-1',
+        scope: 'BUILDING',
+        amountMinor: 100,
+        recipients: [
+          { unitId: 'unit-4', unitCode: '4', unitLabel: null, coefficient: 4, m2: null },
+          { unitId: 'unit-6', unitCode: '6', unitLabel: null, coefficient: 6, m2: null },
+        ],
+      }],
+    });
+    expect(parseLiquidationDistributionSnapshot(distribution)).toEqual(distribution);
+
+    const movement = distribution.movements[0]!;
+    const tamperedAllocations = movement.allocations.map((allocation) => ({
+      ...allocation,
+      amountMinor: allocation.unitId === 'unit-4' ? 1 : 99,
+    }));
+    const tampered = {
+      ...distribution,
+      movements: [{ ...movement, allocations: tamperedAllocations }],
+      allocations: tamperedAllocations,
+    };
+
+    expect(() => parseLiquidationDistributionSnapshot(tampered)).toThrow(
+      'allocations do not match frozen weights',
+    );
+  });
+
+  it('rejects a tampered movement totalWeight even when allocations still reconcile', () => {
+    const distribution = distributeLiquidationMovements({
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      totalAmountMinor: 100,
+      movements: [{
+        movementId: 'expense-1',
+        scope: 'BUILDING',
+        amountMinor: 100,
+        recipients: [
+          { unitId: 'unit-4', unitCode: '4', unitLabel: null, coefficient: 4, m2: null },
+          { unitId: 'unit-6', unitCode: '6', unitLabel: null, coefficient: 6, m2: null },
+        ],
+      }],
+    });
+    const tampered = {
+      ...distribution,
+      movements: [{ ...distribution.movements[0]!, totalWeight: '9' }],
+    };
+
+    expect(() => parseLiquidationDistributionSnapshot(tampered)).toThrow(
+      'totalWeight is inconsistent',
+    );
+  });
+
   it('fails closed on duplicate or non-reconciling frozen snapshot allocations', () => {
     const distribution = distributeLiquidationMovements({
       tenantId: 'tenant-1', buildingId: 'building-1', totalAmountMinor: 10,

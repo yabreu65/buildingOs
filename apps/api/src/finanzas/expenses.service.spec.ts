@@ -255,7 +255,7 @@ describe('ExpensesService', () => {
       jest.spyOn(prisma.vendor, 'findFirst').mockResolvedValue({ id: 'vendor-1' } as any);
       jest.spyOn(prisma.liquidation, 'findFirst').mockResolvedValue(null);
       jest.spyOn(prisma.unitGroup, 'findFirst').mockResolvedValue({
-        id: 'ug-1', tenantId: 'tenant-1',
+        id: 'ug-1', tenantId: 'tenant-1', buildingId: 'building-1',
       } as any);
       jest.spyOn(prisma.expense, 'create').mockResolvedValue(
         makeExpense({
@@ -289,6 +289,31 @@ describe('ExpensesService', () => {
           }),
         }),
       );
+    });
+
+    it('rejects UNIT_GROUP allocations outside the group building', async () => {
+      jest.spyOn(prisma.expenseLedgerCategory, 'findFirst').mockResolvedValue({
+        id: 'cat-1', name: 'Group Expense', catalogScope: 'BUILDING',
+      } as any);
+      jest.spyOn(prisma.unitGroup, 'findFirst').mockResolvedValue({
+        id: 'ug-1', tenantId: 'tenant-1', buildingId: 'building-1',
+      } as any);
+      const allocations = [
+        { buildingId: 'building-1', percentage: 50, currencyCode: 'ARS' },
+        { buildingId: 'building-2', percentage: 50, currencyCode: 'ARS' },
+      ];
+
+      await expect(service.createExpense(
+        'tenant-1', 'member-1', ['TENANT_ADMIN'],
+        {
+          ...defaultCreateDto,
+          buildingId: undefined,
+          scopeType: 'UNIT_GROUP',
+          unitGroupId: 'ug-1',
+          allocations,
+        },
+      )).rejects.toThrow('UNIT_GROUP allocations must belong exclusively to the group building');
+      expect(prisma.expense.create).not.toHaveBeenCalled();
     });
 
     it('rejects non-admin/operator roles', async () => {

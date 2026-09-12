@@ -287,6 +287,12 @@ export class LiquidationsService {
         include: {
           category: { select: { name: true } },
           vendor: { select: { name: true } },
+          allocations: {
+            select: {
+              tenantId: true,
+              buildingId: true,
+            },
+          },
           unitGroup: {
             select: {
               id: true,
@@ -328,6 +334,16 @@ export class LiquidationsService {
         ) {
           throw new BadRequestException(
             `UNIT_GROUP expense ${expense.id} must reference a group in the liquidation tenant and building`,
+          );
+        }
+        if (
+          (expense.allocations ?? []).some(
+            (allocation) =>
+              allocation.tenantId !== tenantId || allocation.buildingId !== group.buildingId,
+          )
+        ) {
+          throw new BadRequestException(
+            `UNIT_GROUP expense ${expense.id} has allocations outside its group building`,
           );
         }
         if (group.members.length === 0) {

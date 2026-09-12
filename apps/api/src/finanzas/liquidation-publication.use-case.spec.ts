@@ -205,6 +205,42 @@ describe('LiquidationPublicationUseCase', () => {
   }));
 });
 
+it('fails closed when frozen allocations reconcile globally but disagree with frozen weights', async () => {
+  const frozenDistribution = distributeLiquidationMovements({
+    tenantId: 'tenant-1',
+    buildingId: 'building-1',
+    totalAmountMinor: 101,
+    movements: [{
+      movementId: 'expense-1',
+      scope: 'BUILDING',
+      amountMinor: 101,
+      recipients: [
+        { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: 4, m2: 40 },
+        { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', coefficient: 6, m2: 60 },
+      ],
+    }],
+  });
+  const movement = frozenDistribution.movements[0]!;
+  const tamperedAllocations = movement.allocations.map((allocation) => ({
+    ...allocation,
+    amountMinor: allocation.unitId === 'unit-1' ? 1 : 100,
+  }));
+  const tamperedSnapshot = {
+    ...frozenDistribution,
+    movements: [{ ...movement, allocations: tamperedAllocations }],
+    allocations: tamperedAllocations,
+  };
+  tx.liquidation.findFirst.mockReset().mockResolvedValueOnce({
+    ...baseLiquidation,
+    distributionSnapshot: tamperedSnapshot,
+  });
+
+  await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+    dueDate: '2026-06-10',
+  })).rejects.toThrow(BadRequestException);
+  expect(tx.charge.createMany).not.toHaveBeenCalled();
+});
+
 it('fails closed before charge creation when the frozen snapshot does not reconcile', async () => {
   const invalidSnapshot = {
     version: 1,
