@@ -247,28 +247,34 @@ export async function ensureSeedPublishedLiquidation(
         const amountMinor = snapshot.amountMinor;
         const scope = snapshot.scopeType;
         const unitGroupId = snapshot.unitGroupId;
+        const normalizedUnitGroupId = typeof unitGroupId === 'string' ? unitGroupId : null;
         if (
           typeof movementId !== 'string' ||
           typeof amountMinor !== 'number' ||
           !Number.isSafeInteger(amountMinor) ||
           amountMinor < 0 ||
           (scope !== 'BUILDING' && scope !== 'UNIT_GROUP' && scope !== 'ADJUSTMENT') ||
-          (scope === 'UNIT_GROUP' && typeof unitGroupId !== 'string') ||
-          (scope !== 'UNIT_GROUP' && unitGroupId !== null)
+          (unitGroupId !== null && unitGroupId !== undefined && typeof unitGroupId !== 'string') ||
+          (scope === 'UNIT_GROUP' && normalizedUnitGroupId === null) ||
+          (scope !== 'UNIT_GROUP' && normalizedUnitGroupId !== null)
         ) {
           throw new Error(`Seed liquidation expense snapshot item ${index} is invalid`);
         }
 
         let recipients = buildingRecipients;
         if (scope === 'UNIT_GROUP') {
-          recipients = groupRecipients.get(unitGroupId) ?? await loadUnitGroupDistributionRecipients(input, unitGroupId);
-          groupRecipients.set(unitGroupId, recipients);
+          if (normalizedUnitGroupId === null) {
+            throw new Error(`Seed liquidation expense snapshot item ${index} is invalid`);
+          }
+          recipients = groupRecipients.get(normalizedUnitGroupId) ??
+            await loadUnitGroupDistributionRecipients(input, normalizedUnitGroupId);
+          groupRecipients.set(normalizedUnitGroupId, recipients);
         }
 
         return {
           movementId,
           scope,
-          unitGroupId: scope === 'UNIT_GROUP' ? unitGroupId : null,
+          unitGroupId: normalizedUnitGroupId,
           amountMinor,
           recipients,
         };
