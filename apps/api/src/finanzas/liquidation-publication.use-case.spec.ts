@@ -284,7 +284,81 @@ it('fails closed when a frozen UNIT_GROUP movement is retagged as BUILDING', asy
   expect(tx.charge.createMany).not.toHaveBeenCalled();
 });
 
-it('fails closed before charge creation when the frozen snapshot does not reconcile', async () => {
+it('publishes a legacy UNIT_GROUP distribution without source recipient evidence', async () => {
+      const frozenDistribution = distributeLiquidationMovements({
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        totalAmountMinor: 101,
+        movements: [{
+          movementId: 'exp-1',
+          scope: 'UNIT_GROUP',
+          unitGroupId: 'group-1',
+          amountMinor: 101,
+          recipients: [
+            { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: 1, m2: 40 },
+          ],
+        }],
+      });
+      tx.liquidation.findFirst.mockReset()
+        .mockResolvedValueOnce({
+          ...baseLiquidation,
+          expenseSnapshot: [{
+            ...baseLiquidation.expenseSnapshot[0],
+            scopeType: 'UNIT_GROUP',
+            unitGroupId: 'group-1',
+          }],
+          distributionSnapshot: frozenDistribution,
+        })
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ ...baseLiquidation, status: 'PUBLISHED' });
+      tx.unit.findMany.mockResolvedValueOnce([{ id: 'unit-1' }]);
+
+      const result = await useCase.execute('tenant-1', 'liq-1', 'member-1', {
+        dueDate: '2026-06-10',
+      });
+
+      expect(result.status).toBe('PUBLISHED');
+      expect(tx.charge.createMany).toHaveBeenCalledWith(expect.objectContaining({
+        data: [expect.objectContaining({ unitId: 'unit-1', amount: 101 })],
+      }));
+    });
+
+it('rejects same-building UNIT_GROUP recipient substitutions against frozen source evidence', async () => {
+      const substitutedDistribution = distributeLiquidationMovements({
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        totalAmountMinor: 101,
+        movements: [{
+          movementId: 'exp-1',
+          scope: 'UNIT_GROUP',
+          unitGroupId: 'group-1',
+          amountMinor: 101,
+          recipients: [
+            { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', coefficient: 1, m2: 40 },
+          ],
+        }],
+      });
+      tx.liquidation.findFirst.mockReset().mockResolvedValueOnce({
+        ...baseLiquidation,
+        expenseSnapshot: [{
+          ...baseLiquidation.expenseSnapshot[0],
+          scopeType: 'UNIT_GROUP',
+          unitGroupId: 'group-1',
+          recipientUnitIds: ['unit-1'],
+        }],
+        distributionSnapshot: substitutedDistribution,
+      });
+      tx.unit.findMany.mockResolvedValueOnce([{ id: 'unit-2' }]);
+
+      await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+        dueDate: '2026-06-10',
+      })).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID' },
+      });
+      expect(tx.charge.createMany).not.toHaveBeenCalled();
+    });
+
+    it('fails closed before charge creation when the frozen snapshot does not reconcile', async () => {
   const invalidSnapshot = {
     version: 1,
     tenantId: 'tenant-1',

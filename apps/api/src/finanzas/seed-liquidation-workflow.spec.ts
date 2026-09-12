@@ -179,6 +179,68 @@ describe('ensureSeedPublishedLiquidation', () => {
     expect(prisma.unitGroupMember.findMany).not.toHaveBeenCalled();
   });
 
+  it('reuses a published group-only liquidation using its allocation identities', async () => {
+    const prisma = createPrismaMock();
+    const groupExpenseSnapshot = [{
+      ...expenseSnapshot[0],
+      scopeType: 'UNIT_GROUP' as const,
+      unitGroupId: 'group-1',
+    }];
+    prisma.__setActive({
+      ...baseLiquidation,
+      expenseSnapshot: groupExpenseSnapshot,
+      publicationSnapshot: {
+        ...baseLiquidation.publicationSnapshot,
+        allocations: [
+          { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', amountMinor: 200 },
+        ],
+      },
+    });
+    prisma.unitGroupMember.findMany.mockResolvedValue([
+      {
+        unit: {
+          id: 'unit-2',
+          code: '1B',
+          label: '1B',
+          m2: 60,
+          unitCategory: { coefficient: 1 },
+        },
+      },
+    ]);
+    prisma.charge.findMany.mockResolvedValue([
+      {
+        id: 'charge-2',
+        unitId: 'unit-2',
+        amount: 200,
+        currency: 'ARS',
+        concept: 'Expensas comunes 2026-05',
+        dueDate: new Date('2026-06-10T00:00:00.000Z'),
+        period: '2026-05',
+        buildingId: 'building-1',
+        liquidationId: 'liq-1',
+      },
+    ]);
+
+    const result = await ensureSeedPublishedLiquidation({
+      prisma: prisma as never,
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      membershipId: 'member-1',
+      period: '2026-05',
+      chargePeriod: '2026-06',
+      baseCurrency: 'ARS',
+      totalAmountMinor: 200,
+      totalsByCurrency: { ARS: 200 },
+      expenseSnapshot: groupExpenseSnapshot,
+      units,
+      dueDate: new Date('2026-06-10T00:00:00.000Z'),
+      notificationPolicy: 'disabled',
+    });
+
+    expect(result).toEqual({ id: 'liq-1', created: false, status: 'PUBLISHED' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('fails when an active liquidation is incompatible', async () => {
     const prisma = createPrismaMock();
     prisma.__setActive({
@@ -344,6 +406,7 @@ describe('ensureSeedPublishedLiquidation', () => {
         tenantId: 'tenant-1',
         buildingId: 'building-1',
         unitGroupId: 'group-1',
+        unit: { isBillable: true },
       },
       include: { unit: { include: { unitCategory: { select: { coefficient: true } } } } },
     });
@@ -368,6 +431,48 @@ describe('ensureSeedPublishedLiquidation', () => {
     expect(distributionSnapshot.allocations).toEqual([
       { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', amountMinor: 200 },
     ]);
+    expect(prisma.__liquidationCreate.mock.calls[0][0].data.expenseSnapshot).toEqual([
+      expect.objectContaining({
+        expenseId: 'expense-group-1',
+        recipientUnitIds: ['unit-2'],
+      }),
+    ]);
+  });
+
+  it('fails closed when a unit group has no billable members', async () => {
+    const prisma = createPrismaMock();
+    prisma.__setActive(null);
+    const groupExpenseSnapshot = [{
+      ...expenseSnapshot[0],
+      scopeType: 'UNIT_GROUP' as const,
+      unitGroupId: 'group-1',
+    }];
+
+    await expect(
+      ensureSeedPublishedLiquidation({
+        prisma: prisma as never,
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        membershipId: 'member-1',
+        period: '2026-05',
+        chargePeriod: '2026-06',
+        baseCurrency: 'ARS',
+        totalAmountMinor: 200,
+        totalsByCurrency: { ARS: 200 },
+        expenseSnapshot: groupExpenseSnapshot,
+        units,
+        dueDate: new Date('2026-06-10T00:00:00.000Z'),
+      }),
+    ).rejects.toThrow('has no billable members');
+    expect(prisma.unitGroupMember.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        unitGroupId: 'group-1',
+        unit: { isBillable: true },
+      },
+      include: { unit: { include: { unitCategory: { select: { coefficient: true } } } } },
+    });
   });
 
   it('publishes a reviewed liquidation from its frozen distribution after source inputs change', async () => {

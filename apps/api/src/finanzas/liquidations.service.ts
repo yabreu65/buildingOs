@@ -63,6 +63,7 @@ interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   type: 'EXPENSE' | 'ADJUSTMENT';
   scopeType?: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
   unitGroupId?: string | null;
+  recipientUnitIds?: string[];
   sourcePeriod?: string;
   functionalAmountMinor?: number | null;
   functionalCurrencyCode?: string | null;
@@ -505,6 +506,9 @@ export class LiquidationsService {
         conversionDate: expense.conversionDate?.toISOString() ?? null,
         scopeType: expense.scopeType,
         unitGroupId: expense.unitGroupId,
+        ...(expense.scopeType === 'UNIT_GROUP'
+          ? { recipientUnitIds: (expense.groupRecipients ?? []).map((unit) => unit.id).sort() }
+          : {}),
       }));
 
       const totalsByCurrency: Record<string, number> = {};

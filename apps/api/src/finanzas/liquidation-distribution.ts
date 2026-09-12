@@ -283,7 +283,14 @@ export function parseLiquidationDistributionSnapshot(
     }
 
     const recipientById = new Map(movement.recipients.map((recipient) => [recipient.unitId, recipient]));
-    const frozenWeights = deriveFrozenRecipientWeights(movement.recipients, movement.weightSource);
+    const canonicalWeightSource = resolveCanonicalWeightSource(movement.recipients);
+    if (movement.weightSource !== canonicalWeightSource) {
+      throw invalid(`snapshot movement ${movement.movementId} weightSource is inconsistent`);
+    }
+    const frozenWeights = deriveFrozenRecipientWeights(
+      movement.recipients,
+      canonicalWeightSource,
+    );
     for (const { recipient, weight } of frozenWeights) {
       if (!weight.eq(recipient.weight)) {
         throw invalid(`snapshot movement ${movement.movementId} recipient weight is inconsistent`);
@@ -466,10 +473,39 @@ function resolveRecipientWeights(recipients: readonly NormalizedRecipient[]): {
     };
   }
 
+  const positiveM2 = recipients.filter(
+    (recipient) => recipient.m2Decimal?.greaterThan(0) === true,
+  );
+  if (positiveM2.length > 0) {
+    return {
+      weightSource: 'M2',
+      weights: recipients.map((recipient) => ({
+        recipient,
+        weight: recipient.m2Decimal ?? new Prisma.Decimal(0),
+      })),
+    };
+  }
+
   return {
     weightSource: 'EQUAL',
     weights: recipients.map((recipient) => ({ recipient, weight: new Prisma.Decimal(1) })),
   };
+}
+
+function resolveCanonicalWeightSource(
+  recipients: readonly Pick<LiquidationDistributionSnapshotRecipient, 'coefficient' | 'm2'>[],
+): LiquidationDistributionWeightSource {
+  if (recipients.some((recipient) =>
+    recipient.coefficient !== null && new Prisma.Decimal(recipient.coefficient).greaterThan(0),
+  )) {
+    return 'COEFFICIENT';
+  }
+  if (recipients.some((recipient) =>
+    recipient.m2 !== null && new Prisma.Decimal(recipient.m2).greaterThan(0),
+  )) {
+    return 'M2';
+  }
+  return 'EQUAL';
 }
 
 function deriveFrozenRecipientWeights(
@@ -505,15 +541,16 @@ function deriveFrozenRecipientWeights(
 function normalizeRecipient(value: LiquidationDistributionRecipientInput): NormalizedRecipient {
   assertNonEmptyString(value.unitId, 'recipient unitId');
   assertNonEmptyString(value.unitCode, 'recipient unitCode');
-  if (value.unitLabel !== null && (typeof value.unitLabel !== 'string' || value.unitLabel.trim() === '')) {
+  if (value.unitLabel !== null && typeof value.unitLabel !== 'string') {
     throw invalid('recipient unitLabel is invalid');
   }
+  const unitLabel = value.unitLabel?.trim() === '' ? null : value.unitLabel;
   const coefficientDecimal = normalizeFloatDecimal(value.coefficient, 'recipient coefficient');
   const m2Decimal = normalizeFloatDecimal(value.m2, 'recipient m2');
   return {
     unitId: value.unitId,
     unitCode: value.unitCode,
-    unitLabel: value.unitLabel,
+    unitLabel,
     coefficient: coefficientDecimal?.toString() ?? null,
     m2: m2Decimal?.toString() ?? null,
     weight: '',
@@ -640,7 +677,8 @@ function requiredString(value: unknown, field: string): string {
 
 function nullableString(value: unknown, field: string): string | null {
   if (value === null) return null;
-  return requiredString(value, field);
+  if (typeof value !== 'string') throw invalid(`${field} is invalid`);
+  return value.trim() === '' ? null : value;
 }
 
 function requiredMinor(value: unknown, field: string): number {

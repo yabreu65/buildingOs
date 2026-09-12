@@ -88,6 +88,41 @@ function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(normalizeJson(left)) === JSON.stringify(normalizeJson(right));
 }
 
+function sameExpenseSnapshotWithLegacyRecipientEvidence(
+  actual: unknown,
+  expected: Prisma.InputJsonArray,
+): boolean {
+  if (sameJson(actual, expected)) {
+    return true;
+  }
+
+  if (!Array.isArray(actual) || actual.length !== expected.length) {
+    return false;
+  }
+
+  return actual.every((actualItem, index) => {
+    const expectedItem = expected[index];
+    if (
+      actualItem === null ||
+      typeof actualItem !== 'object' ||
+      Array.isArray(actualItem) ||
+      expectedItem === null ||
+      typeof expectedItem !== 'object' ||
+      Array.isArray(expectedItem)
+    ) {
+      return sameJson(actualItem, expectedItem);
+    }
+
+    const actualRecord = actualItem as Record<string, unknown>;
+    const expectedRecord = expectedItem as Record<string, Prisma.InputJsonValue>;
+    if (expectedRecord.recipientUnitIds === undefined) {
+      const { recipientUnitIds: _recipientUnitIds, ...actualWithoutRecipientEvidence } = actualRecord;
+      return sameJson(actualWithoutRecipientEvidence, expectedRecord);
+    }
+    return sameJson(actualRecord, expectedRecord);
+  });
+}
+
 function stripDistributionSourceEvidence(snapshot: Prisma.InputJsonArray): Prisma.InputJsonArray {
   return snapshot.map((item) => {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) {
@@ -95,7 +130,12 @@ function stripDistributionSourceEvidence(snapshot: Prisma.InputJsonArray): Prism
     }
 
     const itemRecord = item as Record<string, Prisma.InputJsonValue>;
-    const { scopeType: _scopeType, unitGroupId: _unitGroupId, ...publishedItem } = itemRecord;
+    const {
+      scopeType: _scopeType,
+      unitGroupId: _unitGroupId,
+      recipientUnitIds: _recipientUnitIds,
+      ...publishedItem
+    } = itemRecord;
     return publishedItem;
   }) as Prisma.InputJsonArray;
 }
@@ -160,11 +200,12 @@ async function loadUnitGroupDistributionRecipients(
       tenantId: input.tenantId,
       buildingId: input.buildingId,
       unitGroupId,
+        unit: { isBillable: true },
     },
     include: { unit: { include: { unitCategory: { select: { coefficient: true } } } } },
   });
   if (members.length === 0) {
-    throw new Error(`Seed liquidation unit group ${unitGroupId} has no members in building ${input.buildingId}`);
+    throw new Error(`Seed liquidation unit group ${unitGroupId} has no billable members in building ${input.buildingId}`);
   }
 
   return members.map((member) => ({
@@ -230,7 +271,6 @@ export async function ensureSeedPublishedLiquidation(
       },
     }) as Promise<ActiveLiquidationRecord | null>;
 
-  const expectedDraftExpenseSnapshot = input.expenseSnapshot;
   const buildFrozenDistribution = async () => {
     const buildingRecipients = await loadDistributionRecipients(input);
     const groupRecipients = new Map<string, LiquidationDistributionRecipientInput[]>();
@@ -238,7 +278,7 @@ export async function ensureSeedPublishedLiquidation(
       tenantId: input.tenantId,
       buildingId: input.buildingId,
       totalAmountMinor: input.totalAmountMinor,
-      movements: await Promise.all(expectedDraftExpenseSnapshot.map(async (item, index) => {
+      movements: await Promise.all(input.expenseSnapshot.map(async (item, index) => {
         if (item === null || typeof item !== 'object' || Array.isArray(item)) {
           throw new Error(`Seed liquidation expense snapshot item ${index} is invalid`);
         }
@@ -281,8 +321,46 @@ export async function ensureSeedPublishedLiquidation(
       })),
     });
   };
-  const expectedPublishedExpenses = stripDistributionSourceEvidence(expectedDraftExpenseSnapshot);
-  const expectedPublishedSnapshotBase = {
+  const bindUnitGroupRecipientEvidence = (
+    frozenDistribution: Awaited<ReturnType<typeof buildFrozenDistribution>>,
+  ): Prisma.InputJsonArray => {
+    const recipientUnitIdsByMovementId = new Map(
+      frozenDistribution.movements
+        .filter((movement) => movement.scope === 'UNIT_GROUP')
+        .map((movement) => [movement.movementId, movement.recipientUnitIds]),
+    );
+
+    return input.expenseSnapshot.map((item, index) => {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error(`Seed liquidation expense snapshot item ${index} is invalid`);
+      }
+
+      const snapshot = item as Record<string, Prisma.InputJsonValue>;
+      if (snapshot.scopeType !== 'UNIT_GROUP') {
+        return snapshot as Prisma.InputJsonObject;
+      }
+      if (
+        typeof snapshot.expenseId !== 'string' ||
+        typeof snapshot.unitGroupId !== 'string' ||
+        snapshot.unitGroupId.trim().length === 0
+      ) {
+        throw new Error(`Seed liquidation expense snapshot item ${index} is invalid`);
+      }
+
+      const recipientUnitIds = recipientUnitIdsByMovementId.get(snapshot.expenseId);
+      if (!recipientUnitIds) {
+        throw new Error(`Seed liquidation expense snapshot item ${index} is invalid`);
+      }
+
+      return {
+        ...snapshot,
+        recipientUnitIds: [...recipientUnitIds].sort(),
+      } as Prisma.InputJsonObject;
+    }) as Prisma.InputJsonArray;
+  };
+
+  let expectedDraftExpenseSnapshot = input.expenseSnapshot;
+  const expectedPublishedSnapshotBase = (): Record<string, unknown> => ({
     version: 1,
     liquidationId: '',
     tenantId: input.tenantId,
@@ -291,10 +369,10 @@ export async function ensureSeedPublishedLiquidation(
     baseCurrency: input.baseCurrency,
     totalAmountMinor: input.totalAmountMinor,
     totalsByCurrency: input.totalsByCurrency,
-    expenses: expectedPublishedExpenses,
+    expenses: stripDistributionSourceEvidence(expectedDraftExpenseSnapshot),
     allocations: undefined,
     dueDate: input.dueDate.toISOString(),
-  };
+  });
 
   const validateCompatible = async (liquidation: ActiveLiquidationRecord): Promise<void> => {
     if (
@@ -303,7 +381,10 @@ export async function ensureSeedPublishedLiquidation(
       liquidation.unitCount !== input.units.length ||
       liquidation.chargePeriod !== (input.chargePeriod ?? null) ||
       !sameJson(liquidation.totalsByCurrency, input.totalsByCurrency) ||
-      !sameJson(liquidation.expenseSnapshot, expectedDraftExpenseSnapshot)
+      !sameExpenseSnapshotWithLegacyRecipientEvidence(
+        liquidation.expenseSnapshot,
+        expectedDraftExpenseSnapshot,
+      )
     ) {
       throw new Error(
         `Seed liquidation ${liquidation.id} exists but does not match expected invariants`,
@@ -334,26 +415,20 @@ export async function ensureSeedPublishedLiquidation(
       },
     });
 
-    if (charges.length !== input.units.length) {
-      throw new Error(
-        `Seed liquidation ${liquidation.id} has ${charges.length} charges but ${input.units.length} were expected`,
-      );
-    }
-
     const publicationSnapshot = normalizeSnapshotForComparison(liquidation.publicationSnapshot);
     if (!publicationSnapshot) {
       throw new Error(`Seed liquidation ${liquidation.id} is missing publicationSnapshot`);
     }
 
     if (
-      publicationSnapshot.tenantId !== expectedPublishedSnapshotBase.tenantId ||
-      publicationSnapshot.buildingId !== expectedPublishedSnapshotBase.buildingId ||
-      publicationSnapshot.period !== expectedPublishedSnapshotBase.period ||
-      publicationSnapshot.baseCurrency !== expectedPublishedSnapshotBase.baseCurrency ||
-      publicationSnapshot.totalAmountMinor !== expectedPublishedSnapshotBase.totalAmountMinor ||
-      !sameJson(publicationSnapshot.totalsByCurrency, expectedPublishedSnapshotBase.totalsByCurrency) ||
-      !sameJson(publicationSnapshot.expenses, expectedPublishedSnapshotBase.expenses) ||
-      publicationSnapshot.dueDate !== expectedPublishedSnapshotBase.dueDate
+      publicationSnapshot.tenantId !== expectedPublishedSnapshotBase().tenantId ||
+      publicationSnapshot.buildingId !== expectedPublishedSnapshotBase().buildingId ||
+      publicationSnapshot.period !== expectedPublishedSnapshotBase().period ||
+      publicationSnapshot.baseCurrency !== expectedPublishedSnapshotBase().baseCurrency ||
+      publicationSnapshot.totalAmountMinor !== expectedPublishedSnapshotBase().totalAmountMinor ||
+      !sameJson(publicationSnapshot.totalsByCurrency, expectedPublishedSnapshotBase().totalsByCurrency) ||
+      !sameJson(publicationSnapshot.expenses, expectedPublishedSnapshotBase().expenses) ||
+      publicationSnapshot.dueDate !== expectedPublishedSnapshotBase().dueDate
     ) {
       throw new Error(
         `Seed liquidation ${liquidation.id} publication snapshot does not match expected invariants`,
@@ -366,22 +441,35 @@ export async function ensureSeedPublishedLiquidation(
 
     if (!allocations || allocations.length !== charges.length) {
       throw new Error(
-        `Seed liquidation ${liquidation.id} publication snapshot allocations do not match expected charges`,
+        `Seed liquidation ${liquidation.id} has ${charges.length} charges but ${allocations?.length ?? 0} published allocations were expected`,
       );
     }
 
-    const expectedByUnit = new Map(
-      allocations.map((allocation) => {
-        const row = allocation as {
-          unitId?: string;
-          amountMinor?: number;
-        };
-        return [row.unitId, row.amountMinor];
-      }),
-    );
+    const expectedByUnit = new Map<string, number>();
+    for (const allocation of allocations) {
+      const row = allocation as {
+        unitId?: unknown;
+        amountMinor?: unknown;
+      };
+      if (
+        typeof row.unitId !== 'string' ||
+        row.unitId.trim().length === 0 ||
+        typeof row.amountMinor !== 'number' ||
+        !Number.isSafeInteger(row.amountMinor) ||
+        row.amountMinor < 0 ||
+        expectedByUnit.has(row.unitId)
+      ) {
+        throw new Error(
+          `Seed liquidation ${liquidation.id} publication snapshot allocations are invalid`,
+        );
+      }
+      expectedByUnit.set(row.unitId, row.amountMinor);
+    }
 
+    const chargeUnitIds = new Set<string>();
     for (const charge of charges) {
       if (
+        chargeUnitIds.has(charge.unitId) ||
         charge.currency !== input.baseCurrency ||
         charge.buildingId !== input.buildingId ||
         charge.period !== input.period ||
@@ -394,6 +482,7 @@ export async function ensureSeedPublishedLiquidation(
           `Seed liquidation ${liquidation.id} has charges that do not match the published snapshot`,
         );
       }
+      chargeUnitIds.add(charge.unitId);
     }
   };
 
@@ -402,6 +491,7 @@ export async function ensureSeedPublishedLiquidation(
 
   if (!liquidation) {
     const frozenDistribution = await buildFrozenDistribution();
+    expectedDraftExpenseSnapshot = bindUnitGroupRecipientEvidence(frozenDistribution);
     try {
       liquidation = await input.prisma.$transaction((tx) =>
         createLiquidationDraftRecord(tx, {

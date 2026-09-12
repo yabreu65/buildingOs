@@ -265,8 +265,8 @@ describe('liquidation distribution', () => {
     expect(parseLiquidationDistributionSnapshot(distribution)).toEqual(distribution);
   });
 
-  it('rejects frozen recipient weights that differ from coefficient or M2 evidence', () => {
-    const distribution = distributeLiquidationMovements({
+  it('derives the weight source and weights from frozen coefficient or M2 evidence', () => {
+    const coefficientDistribution = distributeLiquidationMovements({
       tenantId: 'tenant-1',
       buildingId: 'building-1',
       totalAmountMinor: 100,
@@ -280,55 +280,102 @@ describe('liquidation distribution', () => {
         ],
       }],
     });
-    const movement = distribution.movements[0]!;
-    const alteredWeight = {
-      ...distribution,
+    const coefficientMovement = coefficientDistribution.movements[0]!;
+    const m2Distribution = distributeLiquidationMovements({
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      totalAmountMinor: 100,
       movements: [{
-        ...movement,
-        recipients: movement.recipients.map((recipient) => (
+        movementId: 'expense-1',
+        scope: 'BUILDING',
+        amountMinor: 100,
+        recipients: [
+          { unitId: 'unit-4', unitCode: '4', unitLabel: null, coefficient: null, m2: 4 },
+          { unitId: 'unit-6', unitCode: '6', unitLabel: null, coefficient: null, m2: 6 },
+        ],
+      }],
+    });
+    const m2Movement = m2Distribution.movements[0]!;
+
+    const alteredWeight = {
+      ...coefficientDistribution,
+      movements: [{
+        ...coefficientMovement,
+        recipients: coefficientMovement.recipients.map((recipient) => (
           recipient.unitId === 'unit-4' ? { ...recipient, weight: '5' } : recipient
         )),
       }],
     };
     const alteredCoefficientEvidence = {
-      ...distribution,
+      ...coefficientDistribution,
       movements: [{
-        ...movement,
-        recipients: movement.recipients.map((recipient) => (
+        ...coefficientMovement,
+        recipients: coefficientMovement.recipients.map((recipient) => (
           recipient.unitId === 'unit-4' ? { ...recipient, coefficient: '5' } : recipient
         )),
       }],
     };
-    const m2Snapshot = {
-      ...distribution,
-      movements: [{
-        ...movement,
-        weightSource: 'M2' as const,
-      }],
+    const alteredWeightSource = {
+      ...coefficientDistribution,
+      movements: [{ ...coefficientMovement, weightSource: 'M2' as const }],
     };
     const alteredM2Evidence = {
-      ...m2Snapshot,
+      ...m2Distribution,
       movements: [{
-        ...m2Snapshot.movements[0]!,
-        recipients: m2Snapshot.movements[0]!.recipients.map((recipient) => (
+        ...m2Movement,
+        recipients: m2Movement.recipients.map((recipient) => (
           recipient.unitId === 'unit-4' ? { ...recipient, m2: '5' } : recipient
         )),
       }],
     };
 
+    expect(parseLiquidationDistributionSnapshot(m2Distribution)).toEqual(m2Distribution);
     expect(() => parseLiquidationDistributionSnapshot(alteredWeight)).toThrow(
       'recipient weight is inconsistent',
     );
     expect(() => parseLiquidationDistributionSnapshot(alteredCoefficientEvidence)).toThrow(
       'recipient weight is inconsistent',
     );
-    expect(parseLiquidationDistributionSnapshot(m2Snapshot)).toEqual(m2Snapshot);
+    expect(() => parseLiquidationDistributionSnapshot(alteredWeightSource)).toThrow(
+      'weightSource is inconsistent',
+    );
     expect(() => parseLiquidationDistributionSnapshot(alteredM2Evidence)).toThrow(
       'recipient weight is inconsistent',
     );
   });
 
-  it('rejects movement and final allocation display identities altered from frozen recipients', () => {
+  it('normalizes blank optional unit labels without weakening frozen identities', () => {
+      const distribution = distributeLiquidationMovements({
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        totalAmountMinor: 10,
+        movements: [{
+          movementId: 'expense-1',
+          scope: 'BUILDING',
+          amountMinor: 10,
+          recipients: [
+            { unitId: 'unit-1', unitCode: '1', unitLabel: '  ', coefficient: 1, m2: null },
+          ],
+        }],
+      });
+      const movement = distribution.movements[0]!;
+      const blankLabelSnapshot = {
+        ...distribution,
+        movements: [{
+          ...movement,
+          recipients: movement.recipients.map((recipient) => ({ ...recipient, unitLabel: '' })),
+          allocations: movement.allocations.map((allocation) => ({ ...allocation, unitLabel: '' })),
+        }],
+        allocations: distribution.allocations.map((allocation) => ({ ...allocation, unitLabel: '' })),
+      };
+
+      expect(distribution.allocations[0]?.unitLabel).toBeNull();
+      expect(parseLiquidationDistributionSnapshot(blankLabelSnapshot)).toMatchObject({
+        allocations: [expect.objectContaining({ unitId: 'unit-1', unitLabel: null })],
+      });
+    });
+
+    it('rejects movement and final allocation display identities altered from frozen recipients', () => {
     const distribution = distributeLiquidationMovements({
       tenantId: 'tenant-1',
       buildingId: 'building-1',

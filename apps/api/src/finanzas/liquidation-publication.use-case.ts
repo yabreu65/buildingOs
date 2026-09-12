@@ -76,6 +76,7 @@ export interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   type: 'EXPENSE' | 'ADJUSTMENT';
   scopeType: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
   unitGroupId: string | null;
+  recipientUnitIds?: string[];
   sourcePeriod?: string;
 }
 
@@ -1300,6 +1301,7 @@ interface ParsedLiquidationExpenseItem {
   type: 'EXPENSE' | 'ADJUSTMENT';
   scopeType?: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
   unitGroupId?: string | null;
+  recipientUnitIds?: string[];
   sourcePeriod?: string;
   functionalAmountMinor?: number;
   functionalCurrencyCode?: string;
@@ -1331,6 +1333,7 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
     const type = snapshot.type;
     const scopeType = snapshot.scopeType;
     const unitGroupId = snapshot.unitGroupId;
+    const recipientUnitIds = snapshot.recipientUnitIds;
     const sourcePeriod = snapshot.sourcePeriod;
     const functionalAmountMinor = snapshot.functionalAmountMinor;
     const functionalCurrencyCode = snapshot.functionalCurrencyCode;
@@ -1380,6 +1383,17 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
     }
     if (scopeType !== undefined && scopeType !== 'UNIT_GROUP' && unitGroupId !== undefined && unitGroupId !== null) {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has unexpected unitGroupId`);
+    }
+    if (
+      recipientUnitIds !== undefined &&
+      (!Array.isArray(recipientUnitIds) ||
+        recipientUnitIds.some((unitId) => typeof unitId !== 'string' || unitId.trim().length === 0) ||
+        new Set(recipientUnitIds).size !== recipientUnitIds.length)
+    ) {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid recipientUnitIds`);
+    }
+    if (scopeType !== 'UNIT_GROUP' && recipientUnitIds !== undefined) {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has unexpected recipientUnitIds`);
     }
     if (sourcePeriod !== undefined && sourcePeriod !== null && typeof sourcePeriod !== 'string') {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid sourcePeriod`);
@@ -1451,6 +1465,7 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
       type,
       scopeType,
       unitGroupId: unitGroupId === undefined ? undefined : unitGroupId,
+      recipientUnitIds: recipientUnitIds === undefined ? undefined : [...recipientUnitIds].sort(),
       sourcePeriod: sourcePeriod ?? undefined,
       functionalAmountMinor: parsedFunctionalAmountMinor,
       functionalCurrencyCode: parsedFunctionalCurrencyCode,
@@ -1633,6 +1648,9 @@ function assertFrozenDistributionMatchesExpenseSources(
       source.scopeType === undefined ||
       source.scopeType !== movement.scope ||
       (source.unitGroupId ?? null) !== movement.unitGroupId ||
+      (source.scopeType === 'UNIT_GROUP' &&
+        source.recipientUnitIds !== undefined &&
+        source.recipientUnitIds.join('|') !== [...movement.recipientUnitIds].sort().join('|')) ||
       expectedMovement?.amountMinor !== movement.amountMinor
     ) {
       invalidFrozenSource();

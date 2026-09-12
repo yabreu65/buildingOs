@@ -826,10 +826,15 @@ describe('LiquidationsService', () => {
     ]);
     expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
-        distributionSnapshot: expect.objectContaining({
+        expenseSnapshot: [expect.objectContaining({
+              scopeType: 'UNIT_GROUP',
+              recipientUnitIds: ['unit-2'],
+            })],
+            distributionSnapshot: expect.objectContaining({
           version: 1,
           movements: [expect.objectContaining({
             scope: 'UNIT_GROUP', recipientUnitIds: ['unit-2'],
+                recipients: [expect.objectContaining({ unitId: 'unit-2' })],
           })],
         }),
       }),
