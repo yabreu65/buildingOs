@@ -1392,7 +1392,11 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
     ) {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid recipientUnitIds`);
     }
-    if (scopeType !== 'UNIT_GROUP' && recipientUnitIds !== undefined) {
+    if (
+      scopeType !== 'UNIT_GROUP' &&
+      scopeType !== 'BUILDING' &&
+      recipientUnitIds !== undefined
+    ) {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has unexpected recipientUnitIds`);
     }
     if (sourcePeriod !== undefined && sourcePeriod !== null && typeof sourcePeriod !== 'string') {
@@ -1648,7 +1652,7 @@ function assertFrozenDistributionMatchesExpenseSources(
       source.scopeType === undefined ||
       source.scopeType !== movement.scope ||
       (source.unitGroupId ?? null) !== movement.unitGroupId ||
-      (source.scopeType === 'UNIT_GROUP' &&
+      ((source.scopeType === 'UNIT_GROUP' || source.scopeType === 'BUILDING') &&
         source.recipientUnitIds !== undefined &&
         source.recipientUnitIds.join('|') !== [...movement.recipientUnitIds].sort().join('|')) ||
       expectedMovement?.amountMinor !== movement.amountMinor

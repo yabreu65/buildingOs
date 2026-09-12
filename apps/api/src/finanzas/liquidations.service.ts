@@ -660,6 +660,12 @@ export class LiquidationsService {
         coefficient: unit.unitCategory?.coefficient ?? null,
         m2: unit.m2 ?? null,
       }));
+      const buildingRecipientUnitIds = buildingRecipients.map((unit) => unit.unitId).sort();
+      for (const expenseSnapshotItem of expenseSnapshotItems) {
+        if (expenseSnapshotItem.scopeType === 'BUILDING') {
+          expenseSnapshotItem.recipientUnitIds = buildingRecipientUnitIds;
+        }
+      }
       const valuedAmountForDistribution = (source: {
         readonly id: string;
         readonly amountMinor: number;

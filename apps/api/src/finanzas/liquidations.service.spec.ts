@@ -776,6 +776,37 @@ describe('LiquidationsService', () => {
     expect(auditService.createLogRequired).not.toHaveBeenCalled();
   });
 
+  it('freezes BUILDING expenses to the draft-time billable recipients', async () => {
+    tx.expense.findMany.mockImplementation((args: { where?: { scopeType?: string } }) => {
+      if (args.where?.scopeType === 'BUILDING') {
+        return Promise.resolve([{
+          id: 'building-expense-1',
+          amountMinor: 100,
+          currencyCode: 'ARS',
+          invoiceDate: new Date('2026-05-01T00:00:00.000Z'),
+          description: null,
+          category: { name: 'Water' },
+          vendor: { name: 'Vendor' },
+        }]);
+      }
+      return Promise.resolve([]);
+    });
+
+    await service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    });
+
+    expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        expenseSnapshot: [expect.objectContaining({
+          expenseId: 'building-expense-1',
+          scopeType: 'BUILDING',
+          recipientUnitIds: ['unit-1', 'unit-2'],
+        })],
+      }),
+    }));
+  });
+
   describe('UNIT_GROUP draft distribution', () => {
   const groupExpense = (overrides: Record<string, unknown> = {}) => ({
     id: 'group-expense-1',

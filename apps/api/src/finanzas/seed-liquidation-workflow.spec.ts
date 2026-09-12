@@ -91,7 +91,11 @@ describe('ensureSeedPublishedLiquidation', () => {
         findFirst: jest.fn(async () => active),
       },
       unit: {
-        findMany: jest.fn().mockResolvedValue([]),
+        findMany: jest.fn().mockResolvedValue(units.map((unit) => ({
+          id: unit.id,
+          m2: unit.m2,
+          unitCategory: { coefficient: unit.coefficient },
+        }))),
       },
       unitGroupMember: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -345,6 +349,51 @@ describe('ensureSeedPublishedLiquidation', () => {
         { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', amountMinor: 150 },
       ],
     });
+    expect(prisma.__liquidationCreate.mock.calls[0][0].data.expenseSnapshot).toEqual([
+      expect.objectContaining({
+        expenseId: 'expense-1',
+        scopeType: 'BUILDING',
+        recipientUnitIds: ['unit-1', 'unit-2'],
+      }),
+    ]);
+  });
+
+  it('rejects a non-billable building recipient before it can be frozen', async () => {
+    const prisma = createPrismaMock();
+    prisma.__setActive(null);
+    prisma.unit.findMany.mockResolvedValueOnce([{
+      id: 'unit-1',
+      m2: 40,
+      unitCategory: { coefficient: 1 },
+    }]);
+
+    await expect(
+      ensureSeedPublishedLiquidation({
+        prisma: prisma as never,
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        membershipId: 'member-1',
+        period: '2026-05',
+        chargePeriod: '2026-06',
+        baseCurrency: 'ARS',
+        totalAmountMinor: 200,
+        totalsByCurrency: { ARS: 200 },
+        expenseSnapshot,
+        units,
+        dueDate: new Date('2026-06-10T00:00:00.000Z'),
+        notificationPolicy: 'disabled',
+      }),
+    ).rejects.toThrow('Seed liquidation unit unit-2 is not billable in building building-1');
+    expect(prisma.unit.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        isBillable: true,
+        id: { in: ['unit-1', 'unit-2'] },
+      },
+      include: { unitCategory: { select: { coefficient: true } } },
+    });
+    expect(prisma.__liquidationCreate).not.toHaveBeenCalled();
   });
 
   it('keeps the captured draft allocation frozen after coefficient and m2 changes', async () => {
