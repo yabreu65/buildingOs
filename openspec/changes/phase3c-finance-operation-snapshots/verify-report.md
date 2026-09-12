@@ -9,9 +9,9 @@ scenarios: 14/14
 test_command: npm run test -w apps/api -- --runInBand finanzas/adjustments.multicurrency.spec.ts finanzas/expenses.multicurrency.spec.ts finanzas/incomes.multicurrency.spec.ts finanzas/atomic-movement-lifecycle.spec.ts
 test_exit_code: 0
 test_output_hash: sha256:f628dc6fdaec61979e82a5f7276635bee99497e006858add1399fec3d1c783a6
-build_command: NOT RUN: build not authorized by user or repository policy.
-build_exit_code: 0
-build_output_hash: sha256:9e2ff09101fa9211d4f6d7503fed48e1f1bbe3d84201000fa9d1ae9b6cd2f6cd
+build_command: null
+build_exit_code: null
+build_output_hash: null
 ```
 
 # Verification Report — phase3c-finance-operation-snapshots remediation
