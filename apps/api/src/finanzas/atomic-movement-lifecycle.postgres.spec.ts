@@ -32,7 +32,15 @@ function hasLocalDatabaseUrl(value: string | undefined): boolean {
   }
 }
 
-describe('hasLocalDatabaseUrl', () => {
+const enabled =
+  process.env.RUN_POSTGRES_INTEGRATION === '1' &&
+  expectedDatabaseName !== undefined &&
+  ACCEPTANCE_DATABASES.has(expectedDatabaseName) &&
+  hasLocalDatabaseUrl(process.env.DATABASE_URL);
+const describePostgres = enabled ? describe : describe.skip;
+const TEST_BARRIER_KEY = 'buildingos:finance:fin02a:test-barrier:v1';
+
+describePostgres('hasLocalDatabaseUrl', () => {
   it.each([
     ['localhost', 'postgresql://user:pass@localhost:5432/test', true],
     ['IPv4 loopback', 'postgresql://user:pass@127.0.0.1:5432/test', true],
@@ -43,14 +51,6 @@ describe('hasLocalDatabaseUrl', () => {
     expect(hasLocalDatabaseUrl(value)).toBe(expected);
   });
 });
-
-const enabled =
-  process.env.RUN_POSTGRES_INTEGRATION === '1' &&
-  expectedDatabaseName !== undefined &&
-  ACCEPTANCE_DATABASES.has(expectedDatabaseName) &&
-  hasLocalDatabaseUrl(process.env.DATABASE_URL);
-const describePostgres = enabled ? describe : describe.skip;
-const TEST_BARRIER_KEY = 'buildingos:finance:fin02a:test-barrier:v1';
 
 describePostgres('Atomic movement lifecycle PostgreSQL', () => {
   let observer: PrismaClient;
