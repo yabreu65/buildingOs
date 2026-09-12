@@ -358,6 +358,8 @@ export function buildSeedExpenseSnapshotItem(input: {
   readonly invoiceDate: Date;
   readonly description?: string | null;
   readonly type?: 'EXPENSE' | 'ADJUSTMENT';
+  readonly scopeType?: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
+  readonly unitGroupId?: string | null;
   readonly sourcePeriod?: string;
 }): LiquidationExpenseSnapshotItem {
   return {
@@ -369,6 +371,8 @@ export function buildSeedExpenseSnapshotItem(input: {
     invoiceDate: input.invoiceDate.toISOString(),
     description: input.description ?? null,
     type: input.type ?? 'EXPENSE',
+    scopeType: input.scopeType ?? (input.type === 'ADJUSTMENT' ? 'ADJUSTMENT' : 'BUILDING'),
+    unitGroupId: input.unitGroupId ?? null,
     ...(input.sourcePeriod ? { sourcePeriod: input.sourcePeriod } : {}),
   };
 }
