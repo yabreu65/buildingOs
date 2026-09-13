@@ -28,7 +28,10 @@ import {
   LiquidationPublicationUseCase,
 } from './liquidation-publication.use-case';
 
-const ACCEPTANCE_DATABASES = new Set(['buildingos_fin06_acceptance']);
+const ACCEPTANCE_DATABASES = new Set([
+  'buildingos_fin06_acceptance',
+  'buildingos_local_v2_test',
+]);
 const expectedDatabaseName = process.env.POSTGRES_TEST_DB_NAME;
 const fixturePhase = 'fin06';
 const enabled =

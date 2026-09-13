@@ -140,6 +140,14 @@ export class IncomesService {
       if (!unitGroup) {
         throw new NotFoundException(`Grupo de unidades no encontrado: ${dto.unitGroupId}`);
       }
+      if (
+        (dto.buildingId != null && dto.buildingId !== unitGroup.buildingId) ||
+        dto.allocations.some((allocation) => allocation.buildingId !== unitGroup.buildingId)
+      ) {
+        throw new BadRequestException(
+          'UNIT_GROUP allocations must belong exclusively to the group building',
+        );
+      }
     }
 
     if ((scopeType === 'TENANT_SHARED' || scopeType === 'UNIT_GROUP') && dto.allocations) {

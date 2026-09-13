@@ -20,6 +20,12 @@ import {
   type PublishedIncomeOffsetSnapshot,
 } from './liquidation-publication-snapshot';
 import {
+  distributeLiquidationMovements,
+  validateFrozenLiquidationDistributionSnapshot,
+  type LiquidationDistributionAllocation,
+  type LiquidationDistributionSnapshotV1,
+} from './liquidation-distribution';
+import {
   type LiquidationResponseDto,
   type PublishLiquidationDto,
 } from './expense-ledger.dto';
@@ -68,6 +74,9 @@ export interface LiquidationExpenseSnapshotItem extends Prisma.InputJsonObject {
   invoiceDate: string;
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
+  scopeType: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
+  unitGroupId: string | null;
+  recipientUnitIds?: string[];
   sourcePeriod?: string;
 }
 
@@ -162,6 +171,7 @@ type LiquidationRecord = {
   netDistributableAmountMinor: number | null;
   incomeOffsetSnapshot: unknown;
   incomeOffsetsByCurrency: unknown;
+  distributionSnapshot?: unknown;
 };
 
 type LiquidationResponseRecord = Omit<
@@ -189,6 +199,7 @@ export interface DraftLiquidationInput {
   readonly netDistributableAmountMinor?: number;
   readonly incomeOffsetSnapshot?: Prisma.InputJsonArray;
   readonly incomeOffsetsByCurrency?: Prisma.InputJsonObject;
+  readonly distributionSnapshot?: Prisma.InputJsonObject;
   readonly createIncomeOffsetReferences?: ReadonlyArray<{
     incomeApplicationId: string;
     buildingId: string;
@@ -419,6 +430,9 @@ export async function createLiquidationDraftRecord(
             incomeOffsetsByCurrency: (input.incomeOffsetsByCurrency ??
               {}) as Prisma.InputJsonObject,
           }
+        : {}),
+      ...(input.distributionSnapshot !== undefined
+        ? { distributionSnapshot: input.distributionSnapshot }
         : {}),
     },
   });
@@ -880,14 +894,60 @@ export class LiquidationPublicationUseCase {
             });
           }
 
-          const billableUnits = await tx.unit.findMany({
-            where: { tenantId, buildingId: current.buildingId, isBillable: true },
-            include: { unitCategory: { select: { coefficient: true, id: true } } },
-            orderBy: { code: 'asc' },
-          });
-
-          if (billableUnits.length === 0) {
-            throw new BadRequestException('No hay unidades facturables en este edificio');
+          const currentRecord = current as LiquidationRecord;
+          let distribution: readonly LiquidationDistributionAllocation[];
+          if (currentRecord.distributionSnapshot != null) {
+            const frozenDistribution = validateFrozenLiquidationDistributionSnapshot(
+              currentRecord.distributionSnapshot,
+              {
+                tenantId,
+                buildingId: current.buildingId,
+                totalAmountMinor: current.totalAmountMinor,
+              },
+            );
+            assertFrozenDistributionMatchesExpenseSources(
+              frozenDistribution,
+              parseExpenseSnapshot(current.expenseSnapshot),
+              valuationMode,
+              current.totalAmountMinor,
+            );
+            const snapshotUnitIds = frozenDistribution.allocations.map((allocation) => allocation.unitId);
+            const scopedUnits = await tx.unit.findMany({
+              where: {
+                tenantId,
+                buildingId: current.buildingId,
+                id: { in: snapshotUnitIds },
+              },
+              select: { id: true },
+            });
+            if (
+              scopedUnits.length !== snapshotUnitIds.length ||
+              new Set(scopedUnits.map((unit) => unit.id)).size !== snapshotUnitIds.length
+            ) {
+              throw new UnprocessableEntityException({
+                statusCode: 422,
+                error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID',
+                message:
+                  'El snapshot de distribución contiene unidades fuera del tenant o edificio; no se publica',
+              });
+            }
+            distribution = frozenDistribution.allocations;
+          } else {
+            // Legacy pre-3D.1 drafts retain their established live distribution
+            // behavior. Every 3D.1 draft persists a snapshot and takes the branch above.
+            const billableUnits = await tx.unit.findMany({
+              where: { tenantId, buildingId: current.buildingId, isBillable: true },
+              include: { unitCategory: { select: { coefficient: true, id: true } } },
+              orderBy: { code: 'asc' },
+            });
+            if (billableUnits.length === 0) {
+              throw new BadRequestException('No hay unidades facturables en este edificio');
+            }
+            distribution = calculateDistribution(
+              billableUnits,
+              current.totalAmountMinor,
+              current.buildingId,
+            );
           }
 
           const now = new Date();
@@ -895,12 +955,6 @@ export class LiquidationPublicationUseCase {
           if (Number.isNaN(dueDate.getTime())) {
             throw new BadRequestException('dueDate must be a valid date');
           }
-
-          const distribution = calculateDistribution(
-            billableUnits,
-            current.totalAmountMinor,
-            current.buildingId,
-          );
 
           let publicationSnapshot: Prisma.InputJsonObject;
           let snapshotVersion: number;
@@ -977,10 +1031,11 @@ export class LiquidationPublicationUseCase {
           }
 
           const concept = `Expensas comunes ${current.period}`;
+          const payableAllocations = distribution.filter((item) => item.amountMinor > 0);
           const expectedCharges =
-            current.totalAmountMinor === 0
+            current.totalAmountMinor === 0 || payableAllocations.length === 0
               ? []
-              : distribution.map((distributionItem) => ({
+              : payableAllocations.map((distributionItem) => ({
                   tenantId,
                   buildingId: current.buildingId,
                   unitId: distributionItem.unitId,
@@ -1245,6 +1300,9 @@ interface ParsedLiquidationExpenseItem {
   invoiceDate: string;
   description: string | null;
   type: 'EXPENSE' | 'ADJUSTMENT';
+  scopeType?: 'BUILDING' | 'UNIT_GROUP' | 'ADJUSTMENT';
+  unitGroupId?: string | null;
+  recipientUnitIds?: string[];
   sourcePeriod?: string;
   functionalAmountMinor?: number;
   functionalCurrencyCode?: string;
@@ -1274,6 +1332,9 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
     const invoiceDate = snapshot.invoiceDate;
     const description = snapshot.description;
     const type = snapshot.type;
+    const scopeType = snapshot.scopeType;
+    const unitGroupId = snapshot.unitGroupId;
+    const recipientUnitIds = snapshot.recipientUnitIds;
     const sourcePeriod = snapshot.sourcePeriod;
     const functionalAmountMinor = snapshot.functionalAmountMinor;
     const functionalCurrencyCode = snapshot.functionalCurrencyCode;
@@ -1306,6 +1367,39 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
     }
     if (type !== 'EXPENSE' && type !== 'ADJUSTMENT') {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid type`);
+    }
+    if (
+      scopeType !== undefined &&
+      scopeType !== 'BUILDING' &&
+      scopeType !== 'UNIT_GROUP' &&
+      scopeType !== 'ADJUSTMENT'
+    ) {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid scopeType`);
+    }
+    if (unitGroupId !== undefined && unitGroupId !== null && typeof unitGroupId !== 'string') {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid unitGroupId`);
+    }
+    if (scopeType === 'UNIT_GROUP' && typeof unitGroupId !== 'string') {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid UNIT_GROUP evidence`);
+    }
+    if (scopeType !== undefined && scopeType !== 'UNIT_GROUP' && unitGroupId !== undefined && unitGroupId !== null) {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has unexpected unitGroupId`);
+    }
+    if (
+      recipientUnitIds !== undefined &&
+      (!Array.isArray(recipientUnitIds) ||
+        recipientUnitIds.some((unitId) => typeof unitId !== 'string' || unitId.trim().length === 0) ||
+        new Set(recipientUnitIds).size !== recipientUnitIds.length)
+    ) {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid recipientUnitIds`);
+    }
+    if (
+      scopeType !== 'UNIT_GROUP' &&
+      scopeType !== 'BUILDING' &&
+      scopeType !== 'ADJUSTMENT' &&
+      recipientUnitIds !== undefined
+    ) {
+      throw new BadRequestException(`Liquidation expense snapshot item ${index} has unexpected recipientUnitIds`);
     }
     if (sourcePeriod !== undefined && sourcePeriod !== null && typeof sourcePeriod !== 'string') {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has invalid sourcePeriod`);
@@ -1375,6 +1469,9 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
       invoiceDate: parsedInvoiceDate.toISOString(),
       description,
       type,
+      scopeType,
+      unitGroupId: unitGroupId === undefined ? undefined : unitGroupId,
+      recipientUnitIds: recipientUnitIds === undefined ? undefined : [...recipientUnitIds].sort(),
       sourcePeriod: sourcePeriod ?? undefined,
       functionalAmountMinor: parsedFunctionalAmountMinor,
       functionalCurrencyCode: parsedFunctionalCurrencyCode,
@@ -1494,6 +1591,77 @@ function parseIncomeOffsetSnapshotItems(value: unknown): PublishedIncomeOffsetSn
       period: requiredString('period'),
     };
   });
+}
+
+function assertFrozenDistributionMatchesExpenseSources(
+  distribution: LiquidationDistributionSnapshotV1,
+  sources: readonly ParsedLiquidationExpenseItem[],
+  valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL',
+  totalAmountMinor: number,
+): void {
+  const invalidFrozenSource = (): never => {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID',
+      message: 'El snapshot de distribución no corresponde a sus fuentes congeladas; no se publica',
+    });
+  };
+  const sourceById = new Map(sources.map((source) => [source.expenseId, source]));
+  if (sourceById.size !== sources.length || sourceById.size !== distribution.movements.length) {
+    invalidFrozenSource();
+  }
+
+  const expectedDistribution = distributeLiquidationMovements({
+    tenantId: distribution.tenantId,
+    buildingId: distribution.buildingId,
+    totalAmountMinor,
+    movements: sources.map((source) => {
+      const amountMinor =
+        valuationMode === 'FUNCTIONAL' ? source.functionalAmountMinor : source.amountMinor;
+      if (
+        source.expenseId.trim().length === 0 ||
+        source.scopeType === undefined ||
+        amountMinor === undefined ||
+        (source.scopeType === 'UNIT_GROUP' && (source.unitGroupId ?? '').trim().length === 0)
+      ) {
+        return invalidFrozenSource();
+      }
+
+      return {
+        movementId: source.expenseId,
+        scope: source.scopeType,
+        unitGroupId: source.unitGroupId ?? null,
+        amountMinor,
+        recipients: [{
+          unitId: `frozen-source-${source.expenseId}`,
+          unitCode: 'FROZEN_SOURCE',
+          unitLabel: null,
+          coefficient: 1,
+          m2: null,
+        }],
+      };
+    }),
+  });
+  const expectedMovementById = new Map(
+    expectedDistribution.movements.map((movement) => [movement.movementId, movement]),
+  );
+
+  for (const movement of distribution.movements) {
+    const source = sourceById.get(movement.movementId);
+    const expectedMovement = expectedMovementById.get(movement.movementId);
+    if (
+      !source ||
+      source.scopeType === undefined ||
+      source.scopeType !== movement.scope ||
+      (source.unitGroupId ?? null) !== movement.unitGroupId ||
+      ((source.scopeType === 'UNIT_GROUP' || source.scopeType === 'BUILDING' || source.scopeType === 'ADJUSTMENT') &&
+        (source.recipientUnitIds === undefined ||
+          source.recipientUnitIds.join('|') !== [...movement.recipientUnitIds].sort().join('|'))) ||
+      expectedMovement?.amountMinor !== movement.amountMinor
+    ) {
+      invalidFrozenSource();
+    }
+  }
 }
 
 function getPublicationSnapshotExpenses(

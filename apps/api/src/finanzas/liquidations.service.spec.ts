@@ -776,7 +776,167 @@ describe('LiquidationsService', () => {
     expect(auditService.createLogRequired).not.toHaveBeenCalled();
   });
 
-  it('guards included adjustments and preserves the existing empty behavior', async () => {
+  it('freezes BUILDING expenses to the draft-time billable recipients', async () => {
+    tx.expense.findMany.mockImplementation((args: { where?: { scopeType?: string } }) => {
+      if (args.where?.scopeType === 'BUILDING') {
+        return Promise.resolve([{
+          id: 'building-expense-1',
+          amountMinor: 100,
+          currencyCode: 'ARS',
+          invoiceDate: new Date('2026-05-01T00:00:00.000Z'),
+          description: null,
+          category: { name: 'Water' },
+          vendor: { name: 'Vendor' },
+        }]);
+      }
+      return Promise.resolve([]);
+    });
+
+    await service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    });
+
+    expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        expenseSnapshot: [expect.objectContaining({
+          expenseId: 'building-expense-1',
+          scopeType: 'BUILDING',
+          recipientUnitIds: ['unit-1', 'unit-2'],
+        })],
+      }),
+    }));
+  });
+
+  describe('UNIT_GROUP draft distribution', () => {
+  const groupExpense = (overrides: Record<string, unknown> = {}) => ({
+    id: 'group-expense-1',
+    unitGroupId: 'group-1',
+    amountMinor: 100,
+    currencyCode: 'ARS',
+    invoiceDate: new Date('2026-05-01T00:00:00.000Z'),
+    description: null,
+    category: { name: 'Garage' },
+    vendor: null,
+    allocations: [],
+    unitGroup: {
+      id: 'group-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      members: [{
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        unit: {
+          id: 'unit-2', tenantId: 'tenant-1', buildingId: 'building-1',
+          code: '2A', label: '2A', isBillable: true, m2: 50, unitCategory: null,
+        },
+      }],
+    },
+    ...overrides,
+  });
+
+  const useOnlyGroupExpense = (expense: Record<string, unknown>) => {
+    tx.expense.findMany.mockImplementation((args: { where?: { scopeType?: string } }) => {
+      if (args.where?.scopeType === 'UNIT_GROUP') return Promise.resolve([expense]);
+      return Promise.resolve([]);
+    });
+  };
+
+  it('freezes a UNIT_GROUP expense to its same-tenant, same-building billable members', async () => {
+    useOnlyGroupExpense(groupExpense());
+    tx.unit.findMany.mockResolvedValueOnce([
+      { id: 'unit-1', code: '1A', label: '1A', unitCategory: null },
+      { id: 'unit-2', code: '2A', label: '2A', unitCategory: null },
+    ]);
+
+    const draft = await service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    });
+
+    expect(draft.chargesPreview).toEqual([
+      expect.objectContaining({ unitId: 'unit-2', amountMinor: 100 }),
+    ]);
+    expect(tx.expense.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: [
+          { OR: [{ liquidationPeriod: '2026-05' }, { liquidationPeriod: null, period: '2026-05' }] },
+          {
+            OR: [
+              { buildingId: 'building-1' },
+              { buildingId: null, unitGroup: { buildingId: 'building-1' } },
+            ],
+          },
+        ],
+      }),
+    }));
+    expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        expenseSnapshot: [expect.objectContaining({
+              scopeType: 'UNIT_GROUP',
+              recipientUnitIds: ['unit-2'],
+            })],
+            distributionSnapshot: expect.objectContaining({
+          version: 1,
+          movements: [expect.objectContaining({
+            scope: 'UNIT_GROUP', recipientUnitIds: ['unit-2'],
+                recipients: [expect.objectContaining({ unitId: 'unit-2' })],
+          })],
+        }),
+      }),
+    }));
+  });
+
+  it('accepts same-building UNIT_GROUP allocations without double-counting the expense', async () => {
+    useOnlyGroupExpense(groupExpense({
+      allocations: [{ tenantId: 'tenant-1', buildingId: 'building-1' }],
+    }));
+    tx.unit.findMany.mockResolvedValueOnce([
+      { id: 'unit-1', code: '1A', label: '1A', unitCategory: null },
+      { id: 'unit-2', code: '2A', label: '2A', unitCategory: null },
+    ]);
+
+    const draft = await service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    });
+
+    expect(draft.chargesPreview).toEqual([
+      expect.objectContaining({ unitId: 'unit-2', amountMinor: 100 }),
+    ]);
+    expect(draft.chargesPreview).toHaveLength(1);
+  });
+
+  it.each([
+    ['one cross-building allocation', [{ tenantId: 'tenant-1', buildingId: 'building-2' }]],
+    ['allocations spanning multiple buildings', [
+      { tenantId: 'tenant-1', buildingId: 'building-1' },
+      { tenantId: 'tenant-1', buildingId: 'building-2' },
+    ]],
+  ])('fails closed for %s', async (_name, allocations) => {
+    useOnlyGroupExpense(groupExpense({ allocations }));
+
+    await expect(service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    })).rejects.toThrow('allocations outside its group building');
+    expect(tx.liquidation.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing group', groupExpense({ unitGroup: null })],
+    ['group in another tenant', groupExpense({ unitGroup: { id: 'group-1', tenantId: 'tenant-2', buildingId: 'building-1', members: [] } })],
+    ['group in another building', groupExpense({ unitGroup: { id: 'group-1', tenantId: 'tenant-1', buildingId: 'building-2', members: [] } })],
+    ['empty group', groupExpense({ unitGroup: { id: 'group-1', tenantId: 'tenant-1', buildingId: 'building-1', members: [] } })],
+    ['all non-billable group', groupExpense({ unitGroup: { id: 'group-1', tenantId: 'tenant-1', buildingId: 'building-1', members: [{ tenantId: 'tenant-1', buildingId: 'building-1', unit: { id: 'unit-2', tenantId: 'tenant-1', buildingId: 'building-1', code: '2A', label: '2A', isBillable: false, m2: 50, unitCategory: null } }] } })],
+    ['member in another building', groupExpense({ unitGroup: { id: 'group-1', tenantId: 'tenant-1', buildingId: 'building-1', members: [{ tenantId: 'tenant-1', buildingId: 'building-2', unit: { id: 'unit-2', tenantId: 'tenant-1', buildingId: 'building-2', code: '2A', label: '2A', isBillable: true, m2: 50, unitCategory: null } }] } })],
+  ])('fails closed for %s', async (_name, expense) => {
+    useOnlyGroupExpense(expense);
+
+    await expect(service.createDraft('tenant-1', 'member-1', {
+      buildingId: 'building-1', period: '2026-05', baseCurrency: 'ARS',
+    })).rejects.toThrow(BadRequestException);
+    expect(tx.liquidation.create).not.toHaveBeenCalled();
+  });
+});
+
+it('guards included adjustments and preserves the existing empty behavior', async () => {
     tx.liquidation.findFirst.mockResolvedValueOnce(null);
     tx.adjustment.findMany.mockResolvedValueOnce([{
       id: 'adj-1', amountMinor: 100, currencyCode: 'USD',

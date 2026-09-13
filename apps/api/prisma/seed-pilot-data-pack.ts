@@ -1144,6 +1144,7 @@ async function loadPilotDataPack() {
       where: {
         tenantId: options.tenantId,
         buildingId: options.buildingId,
+        isBillable: true,
       },
       orderBy: {
         code: 'asc',
