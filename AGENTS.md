@@ -6,11 +6,46 @@
 - Checkpoint: every 10 minutes or at end of each sub-step.
 - No modify package.json, package-lock.json, pnpm-lock.yaml, or yarn.lock without explicit user permission.
 - No add dependencies without explicit user permission.
-- No run build, deploy, or publish without explicit user permission.
+- Do not run arbitrary builds, deploys, or publishing without explicit user permission. The local pre-push delivery-gate commands below are the only build/test exceptions.
 - No commit or push without explicit user permission.
 - If scope is uncertain, STOP and ask before proceeding.
 - Never say "listo" without validation, or clarify that validation was not performed.
 - GitHub Actions build, lint, test, and E2E jobs declared in `.github/workflows/` are preauthorized quality gates for CI alignment work. This does not authorize deploys, VPS access, staging, production, or remote migrations.
+
+## PRE-PUSH DELIVERY GATE — MANDATORY
+
+Before any push intended for CI, PR, or PM review:
+
+1. The candidate must already have completed its relevant focused local tests.
+2. Run the exact local build parity gate: `npm run build:ci`.
+3. If the change touches seed logic, seed fixtures, finance seed fixtures, or files whose correctness is exercised by the API seed test:
+   - Before running the seed test, verify that `DATABASE_URL` points to a disposable or dedicated LOCAL test database consistent with `docs/TESTING.md`.
+   - Never run `seed:test` against the normal long-lived development database, staging, production, or any shared/non-isolated database.
+   - If an isolated local test target cannot be verified, do not run `seed:test`, do not push, set state to `WORK_REMAINS` or `EXTERNAL_BLOCKER` as appropriate, and report the database target that must be provided or selected.
+   - Once the safety precondition is verified, run: `npm run seed:test -w apps/api`.
+4. The commands above are explicitly preauthorized LOCAL quality gates. This exception authorizes only these commands; it does not authorize deploys, publishing, staging or production access, remote migrations, or destructive database actions.
+5. If `build:ci` or applicable `seed:test` fails, push is FORBIDDEN and state is `WORK_REMAINS`. Reproduce and fix the exact local failure, rerun the exact failing command, and continue until PASS. Never push merely to use GitHub Actions as a debugger.
+6. If remote CI later fails, inspect the exact failing CI command, reproduce that exact command locally before another push, fix locally, and obtain PASS locally. Only then may another push be considered.
+7. An agent must never report `READY_FOR_PM_REVIEW` or `READY_FOR_MERGE` if the mandatory delivery gate applicable to the latest code revision has not passed.
+
+Canonical gate logic:
+
+```text
+if (buildCi !== PASS) {
+  push = FORBIDDEN;
+  state = WORK_REMAINS;
+}
+
+if (seedTestApplicable && seedTest !== PASS) {
+  push = FORBIDDEN;
+  state = WORK_REMAINS;
+}
+
+if (remoteCiFails) {
+  reproduceExactFailingCommandLocally = REQUIRED;
+  push = FORBIDDEN until local PASS;
+}
+```
 
 ## Regla obligatoria: desarrollo local antes de staging
 
