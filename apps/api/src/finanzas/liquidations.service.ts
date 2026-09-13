@@ -1107,7 +1107,7 @@ export class LiquidationsService {
       totalAmountMinor: number;
       totalsByCurrency: unknown;
       expenseSnapshot: unknown;
-      distributionSnapshot: unknown;
+      distributionSnapshot?: unknown;
       publicationSnapshot: unknown;
       incomeOffsetsByCurrency?: unknown;
       incomeOffsetSnapshot?: unknown;
