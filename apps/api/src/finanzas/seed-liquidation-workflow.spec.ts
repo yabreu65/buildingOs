@@ -508,7 +508,8 @@ describe('ensureSeedPublishedLiquidation', () => {
         tenantId: 'tenant-1',
         buildingId: 'building-1',
         unitGroupId: 'group-1',
-        unit: { isBillable: true },
+        unitGroup: { tenantId: 'tenant-1', buildingId: 'building-1' },
+        unit: { tenantId: 'tenant-1', buildingId: 'building-1', isBillable: true },
       },
       include: { unit: { include: { unitCategory: { select: { coefficient: true } } } } },
     });
@@ -571,7 +572,8 @@ describe('ensureSeedPublishedLiquidation', () => {
         tenantId: 'tenant-1',
         buildingId: 'building-1',
         unitGroupId: 'group-1',
-        unit: { isBillable: true },
+        unitGroup: { tenantId: 'tenant-1', buildingId: 'building-1' },
+        unit: { tenantId: 'tenant-1', buildingId: 'building-1', isBillable: true },
       },
       include: { unit: { include: { unitCategory: { select: { coefficient: true } } } } },
     });

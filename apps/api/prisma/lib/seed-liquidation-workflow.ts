@@ -216,7 +216,15 @@ async function loadUnitGroupDistributionRecipients(
       tenantId: input.tenantId,
       buildingId: input.buildingId,
       unitGroupId,
-        unit: { isBillable: true },
+        unitGroup: {
+          tenantId: input.tenantId,
+          buildingId: input.buildingId,
+        },
+        unit: {
+          tenantId: input.tenantId,
+          buildingId: input.buildingId,
+          isBillable: true,
+        },
     },
     include: { unit: { include: { unitCategory: { select: { coefficient: true } } } } },
   });
