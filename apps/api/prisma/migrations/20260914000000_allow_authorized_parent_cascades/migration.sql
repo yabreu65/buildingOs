@@ -5,6 +5,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
   modern boolean;
+  snapshotPublishedAt timestamptz;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     IF OLD."status" = 'PUBLISHED' THEN
@@ -104,11 +105,63 @@ BEGIN
        OR NEW."publishedByMembershipId" IS NULL THEN
       RAISE EXCEPTION 'publishing a liquidation requires publication metadata';
     END IF;
-    IF NEW."publicationSnapshot" ->> 'version' IS DISTINCT FROM '4'
+    IF NEW."publicationSnapshot" -> 'version' IS DISTINCT FROM '4'::jsonb
+       OR NEW."publicationSnapshot" ->> 'liquidationId' IS DISTINCT FROM NEW."id"
+       OR NEW."publicationSnapshot" ->> 'tenantId' IS DISTINCT FROM NEW."tenantId"
+       OR NEW."publicationSnapshot" ->> 'buildingId' IS DISTINCT FROM NEW."buildingId"
        OR NEW."publicationSnapshot" ->> 'period' IS DISTINCT FROM NEW."period"
        OR NEW."publicationSnapshot" ->> 'chargePeriod' IS DISTINCT FROM NEW."chargePeriod"
-       OR NEW."publicationSnapshot" ->> 'publicationIntegrityVersion' IS DISTINCT FROM '1' THEN
-      RAISE EXCEPTION 'modern liquidation publication requires matching V4 integrity evidence';
+       OR NEW."publicationSnapshot" -> 'publicationIntegrityVersion' IS DISTINCT FROM '1'::jsonb
+       OR NEW."publicationSnapshot" ->> 'valuationMode' IS DISTINCT FROM NEW."valuationMode"
+       OR NEW."publicationSnapshot" ->> 'baseCurrency' IS DISTINCT FROM NEW."baseCurrency"
+       OR NEW."publicationSnapshot" -> 'totalAmountMinor' IS DISTINCT FROM to_jsonb(NEW."totalAmountMinor")
+       OR NEW."publicationSnapshot" -> 'totalsByCurrency' IS DISTINCT FROM NEW."totalsByCurrency"
+       OR jsonb_typeof(NEW."publicationSnapshot" -> 'totalsByCurrency') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(NEW."publicationSnapshot" -> 'expenses') IS DISTINCT FROM 'array'
+       OR jsonb_typeof(NEW."publicationSnapshot" -> 'allocations') IS DISTINCT FROM 'array'
+       OR jsonb_typeof(NEW."publicationSnapshot" -> 'dueDate') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(NEW."publicationSnapshot" -> 'publishedAt') IS DISTINCT FROM 'string' THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END IF;
+
+    BEGIN
+      PERFORM (NEW."publicationSnapshot" ->> 'dueDate')::timestamptz;
+      snapshotPublishedAt := (NEW."publicationSnapshot" ->> 'publishedAt')::timestamptz;
+    EXCEPTION WHEN others THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END;
+
+    IF snapshotPublishedAt IS DISTINCT FROM NEW."publishedAt" THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END IF;
+
+    IF NEW."grossExpenseAmountMinor" IS NOT NULL
+       OR NEW."adjustmentAmountMinor" IS NOT NULL
+       OR NEW."preIncomeAmountMinor" IS NOT NULL
+       OR NEW."incomeOffsetAmountMinor" IS NOT NULL
+       OR NEW."netDistributableAmountMinor" IS NOT NULL
+       OR NEW."incomeOffsetSnapshot" IS NOT NULL
+       OR NEW."incomeOffsetsByCurrency" IS NOT NULL THEN
+      IF NOT NEW."publicationSnapshot" ?& ARRAY[
+        'grossExpenseAmountMinor', 'adjustmentAmountMinor', 'preIncomeAmountMinor',
+        'incomeOffsetAmountMinor', 'netDistributableAmountMinor', 'incomeOffsets',
+        'incomeOffsetsByCurrency'
+      ]
+         OR NEW."publicationSnapshot" -> 'grossExpenseAmountMinor' IS DISTINCT FROM to_jsonb(NEW."grossExpenseAmountMinor")
+         OR NEW."publicationSnapshot" -> 'adjustmentAmountMinor' IS DISTINCT FROM to_jsonb(NEW."adjustmentAmountMinor")
+         OR NEW."publicationSnapshot" -> 'preIncomeAmountMinor' IS DISTINCT FROM to_jsonb(NEW."preIncomeAmountMinor")
+         OR NEW."publicationSnapshot" -> 'incomeOffsetAmountMinor' IS DISTINCT FROM to_jsonb(NEW."incomeOffsetAmountMinor")
+         OR NEW."publicationSnapshot" -> 'netDistributableAmountMinor' IS DISTINCT FROM to_jsonb(NEW."netDistributableAmountMinor")
+         OR NEW."publicationSnapshot" -> 'incomeOffsets' IS DISTINCT FROM NEW."incomeOffsetSnapshot"
+         OR NEW."publicationSnapshot" -> 'incomeOffsetsByCurrency' IS DISTINCT FROM NEW."incomeOffsetsByCurrency" THEN
+        RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+      END IF;
+    ELSIF NEW."publicationSnapshot" ?| ARRAY[
+      'grossExpenseAmountMinor', 'adjustmentAmountMinor', 'preIncomeAmountMinor',
+      'incomeOffsetAmountMinor', 'netDistributableAmountMinor', 'incomeOffsets',
+      'incomeOffsetsByCurrency'
+    ] THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END IF;
   END IF;
 

@@ -303,7 +303,9 @@ describe('authorized parent cascade trigger migration preflight', () => {
     expect(liquidationTriggerSql).toContain('EXISTS (SELECT 1 FROM "Building" WHERE "id" = OLD."buildingId")');
     expect(liquidationTriggerSql).not.toContain('pg_trigger_depth');
     expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'liquidation publicationIntegrityVersion is immutable after insert'");
-    expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'modern liquidation publication requires matching V4 integrity evidence'");
+    expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence'");
+    expect(liquidationTriggerSql).toContain("NEW.\"publicationSnapshot\" ->> 'liquidationId' IS DISTINCT FROM NEW.\"id\"");
+    expect(liquidationTriggerSql).toContain("NEW.\"publicationSnapshot\" -> 'incomeOffsets' IS DISTINCT FROM NEW.\"incomeOffsetSnapshot\"");
     expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charge economic origin is immutable'");
     expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'manual charges cannot acquire liquidationId'");
     expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charges cannot be deleted'");
@@ -413,9 +415,49 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
   ): Promise<void> {
     await tx.$executeRawUnsafe(`
       INSERT INTO "Liquidation" ("id", "tenantId", "buildingId", "period", "chargePeriod", "status", "publicationIntegrityVersion", "valuationMode", "baseCurrency", "totalAmountMinor", "totalsByCurrency", "expenseSnapshot", "distributionSnapshot", "unitCount", "generatedByMembershipId", "generatedAt", "grossExpenseAmountMinor", "adjustmentAmountMinor", "preIncomeAmountMinor", "incomeOffsetAmountMinor", "netDistributableAmountMinor", "incomeOffsetSnapshot", "incomeOffsetsByCurrency", "createdAt", "updatedAt")
-      VALUES ('${id}', '${tenantId}', '${buildingId}', '2026-05', '2026-06', 'DRAFT', 1, 'LEGACY_NOMINAL', 'ARS', 100, '{"ARS":100}', '[]', '[]', 2, 'member-1', '2026-05-01T00:00:00Z', 100, 0, 100, 0, 100, '[]', '{"ARS":0}', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
+      VALUES ('${id}', '${tenantId}', '${buildingId}', '2026-05', '2026-06', 'DRAFT', 1, 'LEGACY_NOMINAL', 'ARS', 100, '{"ARS":100}', '[]', '[]', 2, 'member-1', '2026-05-01T00:00:00Z', 100, 0, 100, 0, 100, '[]', '{}', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
     `);
   }
+  function completeV4PublicationSnapshot(
+    id: string,
+    tenantId: string,
+    buildingId: string,
+  ): string {
+    return JSON.stringify({
+      version: 4,
+      liquidationId: id,
+      tenantId,
+      buildingId,
+      period: '2026-05',
+      chargePeriod: '2026-06',
+      publicationIntegrityVersion: 1,
+      valuationMode: 'LEGACY_NOMINAL',
+      baseCurrency: 'ARS',
+      totalAmountMinor: 100,
+      totalsByCurrency: { ARS: 100 },
+      grossExpenseAmountMinor: 100,
+      adjustmentAmountMinor: 0,
+      preIncomeAmountMinor: 100,
+      incomeOffsetAmountMinor: 0,
+      netDistributableAmountMinor: 100,
+      incomeOffsetsByCurrency: {},
+      expenses: [{
+        expenseId: 'expense-1',
+        categoryName: 'Common expenses',
+        vendorName: null,
+        amountMinor: 100,
+        currencyCode: 'ARS',
+        invoiceDate: '2026-05-01',
+        description: null,
+        type: 'EXPENSE',
+      }],
+      incomeOffsets: [],
+      allocations: [{ unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 100 }],
+      dueDate: '2026-06-10T00:00:00.000Z',
+      publishedAt: '2026-05-03T00:00:00.000Z',
+    });
+  }
+
   async function publish(
     tx: TransactionClient,
     id: string,
@@ -424,7 +466,8 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
   ): Promise<void> {
     await insertLiquidation(tx, id, tenantId, buildingId);
     await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = '${id}'`);
-    await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '{"version":4,"period":"2026-05","chargePeriod":"2026-06","publicationIntegrityVersion":1}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = '${id}'`);
+    const publicationSnapshot = completeV4PublicationSnapshot(id, tenantId, buildingId);
+    await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = '${id}'`);
   }
   async function insertCharge(
     tx: TransactionClient,
@@ -540,12 +583,33 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     })).rejects.toThrow('publication integrity v1 drafts require next chargePeriod');
   });
 
+  it('requires a complete reconciled V4 snapshot for modern publication', async () => {
+    await expect(sandbox(async (tx) => {
+      await insertLiquidation(tx, 'modern-incomplete');
+      await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-incomplete'`);
+      await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '{"version":4,"period":"2026-05","chargePeriod":"2026-06","publicationIntegrityVersion":1}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-incomplete'`);
+    })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+    await expect(sandbox(async (tx) => {
+      await insertLiquidation(tx, 'modern-mismatched');
+      await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-mismatched'`);
+      const publicationSnapshot = completeV4PublicationSnapshot('modern-mismatched', 'tenant-1', 'building-1')
+        .replace('"totalAmountMinor":100', '"totalAmountMinor":101');
+      await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-mismatched'`);
+    })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+    await sandbox(async (tx) => {
+      await publish(tx, 'modern-valid');
+      expect(await tx.$queryRawUnsafe(`SELECT "status" FROM "Liquidation" WHERE "id" = 'modern-valid'`)).toEqual([{ status: 'PUBLISHED' }]);
+    });
+  });
+
   it('rejects modern V2 publication snapshots', async () => {
     await expect(sandbox(async (tx) => {
       await insertLiquidation(tx, 'modern-v2');
       await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-v2'`);
       await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '{"version":2}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-v2'`);
-    })).rejects.toThrow('modern liquidation publication requires matching V4 integrity evidence');
+    })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
   });
 
   it('rejects liquidation-generated Charge economic changes/deletion but allows operational fields', async () => {
