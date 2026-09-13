@@ -265,7 +265,7 @@ describe('liquidation distribution', () => {
     expect(parseLiquidationDistributionSnapshot(distribution)).toEqual(distribution);
   });
 
-  it('derives the weight source and weights from frozen coefficient or M2 evidence', () => {
+  it('uses coefficient weighting or equal fallback from frozen evidence', () => {
     const coefficientDistribution = distributeLiquidationMovements({
       tenantId: 'tenant-1',
       buildingId: 'building-1',
@@ -319,16 +319,11 @@ describe('liquidation distribution', () => {
       ...coefficientDistribution,
       movements: [{ ...coefficientMovement, weightSource: 'M2' as const }],
     };
-    const alteredM2Evidence = {
-      ...m2Distribution,
-      movements: [{
-        ...m2Movement,
-        recipients: m2Movement.recipients.map((recipient) => (
-          recipient.unitId === 'unit-4' ? { ...recipient, m2: '5' } : recipient
-        )),
-      }],
-    };
-
+    expect(m2Movement.weightSource).toBe('EQUAL');
+    expect(m2Distribution.allocations).toEqual([
+      { unitId: 'unit-4', unitCode: '4', unitLabel: null, amountMinor: 50 },
+      { unitId: 'unit-6', unitCode: '6', unitLabel: null, amountMinor: 50 },
+    ]);
     expect(parseLiquidationDistributionSnapshot(m2Distribution)).toEqual(m2Distribution);
     expect(() => parseLiquidationDistributionSnapshot(alteredWeight)).toThrow(
       'recipient weight is inconsistent',
@@ -338,9 +333,6 @@ describe('liquidation distribution', () => {
     );
     expect(() => parseLiquidationDistributionSnapshot(alteredWeightSource)).toThrow(
       'weightSource is inconsistent',
-    );
-    expect(() => parseLiquidationDistributionSnapshot(alteredM2Evidence)).toThrow(
-      'recipient weight is inconsistent',
     );
   });
 

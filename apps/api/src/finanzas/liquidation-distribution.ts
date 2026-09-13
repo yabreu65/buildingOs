@@ -473,19 +473,6 @@ function resolveRecipientWeights(recipients: readonly NormalizedRecipient[]): {
     };
   }
 
-  const positiveM2 = recipients.filter(
-    (recipient) => recipient.m2Decimal?.greaterThan(0) === true,
-  );
-  if (positiveM2.length > 0) {
-    return {
-      weightSource: 'M2',
-      weights: recipients.map((recipient) => ({
-        recipient,
-        weight: recipient.m2Decimal ?? new Prisma.Decimal(0),
-      })),
-    };
-  }
-
   return {
     weightSource: 'EQUAL',
     weights: recipients.map((recipient) => ({ recipient, weight: new Prisma.Decimal(1) })),
@@ -499,11 +486,6 @@ function resolveCanonicalWeightSource(
     recipient.coefficient !== null && new Prisma.Decimal(recipient.coefficient).greaterThan(0),
   )) {
     return 'COEFFICIENT';
-  }
-  if (recipients.some((recipient) =>
-    recipient.m2 !== null && new Prisma.Decimal(recipient.m2).greaterThan(0),
-  )) {
-    return 'M2';
   }
   return 'EQUAL';
 }
