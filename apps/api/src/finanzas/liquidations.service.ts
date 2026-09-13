@@ -48,6 +48,7 @@ import {
 import {
   buildLiquidationDistributionSnapshot,
   distributeLiquidationMovements,
+  parseLiquidationDistributionSnapshot,
   type LiquidationDistributionRecipientInput,
 } from './liquidation-distribution';
 import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
@@ -1106,6 +1107,7 @@ export class LiquidationsService {
       totalAmountMinor: number;
       totalsByCurrency: unknown;
       expenseSnapshot: unknown;
+      distributionSnapshot: unknown;
       publicationSnapshot: unknown;
       incomeOffsetsByCurrency?: unknown;
       incomeOffsetSnapshot?: unknown;
@@ -1130,6 +1132,12 @@ export class LiquidationsService {
       liq.status === 'PUBLISHED'
         ? parseLiquidationPublicationSnapshot(liq.publicationSnapshot)
         : null;
+    const distributionSnapshot =
+      liq.status !== 'PUBLISHED' &&
+      liq.distributionSnapshot !== null &&
+      liq.distributionSnapshot !== undefined
+        ? parseLiquidationDistributionSnapshot(liq.distributionSnapshot)
+        : null;
 
     if (publicationSnapshot) {
       return {
@@ -1144,7 +1152,9 @@ export class LiquidationsService {
           invoiceDate: new Date(expense.invoiceDate),
           description: expense.description,
         })),
-        chargesPreview: publicationSnapshot.allocations.map((allocation) => ({
+        chargesPreview: publicationSnapshot.allocations
+        .filter((allocation) => allocation.amountMinor > 0)
+        .map((allocation) => ({
           unitId: allocation.unitId,
           unitCode: allocation.unitCode,
           unitLabel: allocation.unitLabel,
@@ -1167,7 +1177,16 @@ export class LiquidationsService {
         invoiceDate: new Date(expense.invoiceDate),
         description: expense.description,
       })),
-      chargesPreview: options.charges,
+      chargesPreview: distributionSnapshot
+        ? distributionSnapshot.allocations
+            .filter((allocation) => allocation.amountMinor > 0)
+            .map((allocation) => ({
+              unitId: allocation.unitId,
+              unitCode: allocation.unitCode,
+              unitLabel: allocation.unitLabel,
+              amountMinor: allocation.amountMinor,
+            }))
+        : options.charges,
     };
   }
 
