@@ -192,6 +192,7 @@ describe('ensureSeedPublishedLiquidation', () => {
     }];
     prisma.__setActive({
       ...baseLiquidation,
+      unitCount: 1,
       expenseSnapshot: groupExpenseSnapshot,
       publicationSnapshot: {
         ...baseLiquidation.publicationSnapshot,
@@ -243,6 +244,58 @@ describe('ensureSeedPublishedLiquidation', () => {
 
     expect(result).toEqual({ id: 'liq-1', created: false, status: 'PUBLISHED' });
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('reruns a published liquidation with zero snapshot allocations using only payable charges', async () => {
+    const prisma = createPrismaMock();
+    prisma.__setActive({
+      ...baseLiquidation,
+      unitCount: 1,
+      distributionSnapshot: {
+        allocations: [
+          { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', amountMinor: 0 },
+          { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', amountMinor: 200 },
+        ],
+      },
+      publicationSnapshot: {
+        ...baseLiquidation.publicationSnapshot,
+        allocations: [
+          { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', amountMinor: 0 },
+          { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', amountMinor: 200 },
+        ],
+      },
+    });
+    prisma.charge.findMany.mockResolvedValue([
+      {
+        id: 'charge-2',
+        unitId: 'unit-2',
+        amount: 200,
+        currency: 'ARS',
+        concept: 'Expensas comunes 2026-05',
+        dueDate: new Date('2026-06-10T00:00:00.000Z'),
+        period: '2026-05',
+        buildingId: 'building-1',
+        liquidationId: 'liq-1',
+      },
+    ]);
+
+    const result = await ensureSeedPublishedLiquidation({
+      prisma: prisma as never,
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      membershipId: 'member-1',
+      period: '2026-05',
+      chargePeriod: '2026-06',
+      baseCurrency: 'ARS',
+      totalAmountMinor: 200,
+      totalsByCurrency: { ARS: 200 },
+      expenseSnapshot,
+      units,
+      dueDate: new Date('2026-06-10T00:00:00.000Z'),
+      notificationPolicy: 'disabled',
+    });
+
+    expect(result).toEqual({ id: 'liq-1', created: false, status: 'PUBLISHED' });
   });
 
   it('fails when an active liquidation is incompatible', async () => {

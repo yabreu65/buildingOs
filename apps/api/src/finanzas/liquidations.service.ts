@@ -279,13 +279,17 @@ export class LiquidationsService {
           const unitGroupExpenses = await tx.expense.findMany({
         where: {
           tenantId,
-          ...this.expenseAccountingPeriodWhere(dto.period),
+          AND: [
+            this.expenseAccountingPeriodWhere(dto.period),
+            {
+              OR: [
+                { buildingId: dto.buildingId },
+                { buildingId: null, unitGroup: { buildingId: dto.buildingId } },
+              ],
+            },
+          ],
           status: 'VALIDATED',
           scopeType: 'UNIT_GROUP',
-          OR: [
-            { buildingId: dto.buildingId },
-            { buildingId: null, unitGroup: { buildingId: dto.buildingId } },
-          ],
         },
         include: {
           category: { select: { name: true } },

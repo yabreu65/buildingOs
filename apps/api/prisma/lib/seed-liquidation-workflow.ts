@@ -58,6 +58,7 @@ interface ActiveLiquidationRecord {
   totalsByCurrency: unknown;
   expenseSnapshot: unknown;
   publicationSnapshot: unknown;
+  distributionSnapshot: unknown;
   unitCount: number;
   generatedByMembershipId: string;
   generatedAt: Date;
@@ -146,6 +147,26 @@ function stripDistributionSourceEvidence(snapshot: Prisma.InputJsonArray): Prism
 
 function isP2002(error: unknown): error is Prisma.PrismaClientKnownRequestError {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+function countPositiveSnapshotAllocations(snapshot: unknown): number | null {
+  if (snapshot === null || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return null;
+  }
+
+  const allocations = (snapshot as Record<string, unknown>).allocations;
+  if (!Array.isArray(allocations)) {
+    return null;
+  }
+
+  return allocations.filter(
+    (allocation) =>
+      allocation !== null &&
+      typeof allocation === 'object' &&
+      !Array.isArray(allocation) &&
+      typeof (allocation as Record<string, unknown>).amountMinor === 'number' &&
+      (allocation as Record<string, unknown>).amountMinor > 0,
+  ).length;
 }
 
 function normalizeSnapshotForComparison(snapshot: unknown): Record<string, unknown> | null {
@@ -365,6 +386,10 @@ export async function ensureSeedPublishedLiquidation(
 
   let expectedDraftExpenseSnapshot = input.expenseSnapshot;
   let expectedUnitCount = input.units.length;
+  const expectedUnitCountFor = (liquidation: ActiveLiquidationRecord | null): number =>
+    countPositiveSnapshotAllocations(liquidation?.distributionSnapshot) ??
+    countPositiveSnapshotAllocations(liquidation?.publicationSnapshot) ??
+    input.units.length;
   const expectedPublishedSnapshotBase = (): Record<string, unknown> => ({
     version: 1,
     liquidationId: '',
@@ -444,9 +469,13 @@ export async function ensureSeedPublishedLiquidation(
       ? publicationSnapshot.allocations
       : null;
 
-    if (!allocations || allocations.length !== charges.length) {
+    const payableAllocations = allocations?.filter((allocation) => {
+      const row = allocation as { amountMinor?: unknown };
+      return typeof row.amountMinor === 'number' && row.amountMinor > 0;
+    });
+    if (!allocations || !payableAllocations || payableAllocations.length !== charges.length) {
       throw new Error(
-        `Seed liquidation ${liquidation.id} has ${charges.length} charges but ${allocations?.length ?? 0} published allocations were expected`,
+        `Seed liquidation ${liquidation.id} has ${charges.length} charges but ${payableAllocations?.length ?? 0} payable published allocations were expected`,
       );
     }
 
@@ -468,7 +497,9 @@ export async function ensureSeedPublishedLiquidation(
           `Seed liquidation ${liquidation.id} publication snapshot allocations are invalid`,
         );
       }
-      expectedByUnit.set(row.unitId, row.amountMinor);
+      if (row.amountMinor > 0) {
+        expectedByUnit.set(row.unitId, row.amountMinor);
+      }
     }
 
     const chargeUnitIds = new Set<string>();
@@ -493,6 +524,7 @@ export async function ensureSeedPublishedLiquidation(
 
   let liquidation = await findActive();
   let created = false;
+  expectedUnitCount = expectedUnitCountFor(liquidation);
 
   if (!liquidation) {
     const frozenDistribution = await buildFrozenDistribution();
@@ -528,6 +560,7 @@ export async function ensureSeedPublishedLiquidation(
       if (!liquidation) {
         throw error;
       }
+      expectedUnitCount = expectedUnitCountFor(liquidation);
     }
   }
 

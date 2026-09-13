@@ -855,6 +855,19 @@ describe('LiquidationsService', () => {
     expect(draft.chargesPreview).toEqual([
       expect.objectContaining({ unitId: 'unit-2', amountMinor: 100 }),
     ]);
+    expect(tx.expense.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: [
+          { OR: [{ liquidationPeriod: '2026-05' }, { liquidationPeriod: null, period: '2026-05' }] },
+          {
+            OR: [
+              { buildingId: 'building-1' },
+              { buildingId: null, unitGroup: { buildingId: 'building-1' } },
+            ],
+          },
+        ],
+      }),
+    }));
     expect(tx.liquidation.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         expenseSnapshot: [expect.objectContaining({
