@@ -1,4 +1,5 @@
 import {
+  Prisma,
   PrismaClient,
   TenantType,
   Role,
@@ -10,8 +11,83 @@ import {
   CatalogScope,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import {
+  buildLiquidationPublicationSnapshot,
+  distributeLiquidationAmountByLargestRemainder,
+  type PublishedExpenseSnapshot,
+} from '../src/finanzas/liquidation-publication-snapshot';
 
 const prisma = new PrismaClient();
+
+interface SeedGeneratedCharge {
+  readonly unitId: string;
+  readonly unitCode: string;
+  readonly unitLabel: string | null;
+  readonly amountMinor: number;
+}
+
+interface SeedPublicationExpenseSource {
+  readonly id: string;
+  readonly category: { readonly name: string };
+  readonly vendor: { readonly name: string } | null;
+  readonly amountMinor: number;
+  readonly currencyCode: string;
+  readonly invoiceDate: Date;
+  readonly description: string | null;
+}
+
+interface SeedLegacyPublicationSnapshotInput {
+  readonly liquidationId: string;
+  readonly tenantId: string;
+  readonly buildingId: string;
+  readonly period: string;
+  readonly baseCurrency: string;
+  readonly totalAmountMinor: number;
+  readonly expenses: readonly PublishedExpenseSnapshot[];
+  readonly charges: readonly SeedGeneratedCharge[];
+  readonly dueDate: Date;
+  readonly publishedAt: Date;
+}
+
+function toPublicationExpenseSnapshot(
+  expense: SeedPublicationExpenseSource,
+  amountMinor: number = expense.amountMinor,
+): PublishedExpenseSnapshot {
+  return {
+    expenseId: expense.id,
+    categoryName: expense.category.name,
+    vendorName: expense.vendor?.name ?? null,
+    amountMinor,
+    currencyCode: expense.currencyCode,
+    invoiceDate: expense.invoiceDate.toISOString(),
+    description: expense.description,
+    type: 'EXPENSE',
+  };
+}
+
+export function buildSanCristobalLegacyPublicationSnapshot(
+  input: SeedLegacyPublicationSnapshotInput,
+): Prisma.InputJsonObject {
+  return buildLiquidationPublicationSnapshot({
+    liquidationId: input.liquidationId,
+    tenantId: input.tenantId,
+    buildingId: input.buildingId,
+    period: input.period,
+    baseCurrency: input.baseCurrency,
+    totalAmountMinor: input.totalAmountMinor,
+    totalsByCurrency: { [input.baseCurrency]: input.totalAmountMinor },
+    expenses: input.expenses,
+    allocations: input.charges.map((charge) => ({
+      unitId: charge.unitId,
+      unitCode: charge.unitCode,
+      unitLabel: charge.unitLabel,
+      amountMinor: charge.amountMinor,
+    })),
+    dueDate: input.dueDate,
+    publishedAt: input.publishedAt,
+    valuationMode: 'LEGACY_NOMINAL',
+  });
+}
 
 const TENANT_NAME = 'Residencia San Cristóbal';
 const CURRENCY = 'USD';
@@ -72,7 +148,7 @@ const PERIOD_EXPENSES: Record<string, { common: Record<string, number>, building
   },
 };
 
-async function main() {
+export async function main() {
   console.log('🏗️  SEEDER: Residencia San Cristóbal\n');
 
   // 1. Delete existing tenant if exists
@@ -537,23 +613,53 @@ async function main() {
   
   for (const building of [buildingA, buildingB]) {
     for (const [period, chargePeriod] of Object.entries(periodMapping)) {
-      // Calculate total expenses for this building/period
-      const buildingExpenses = await prisma.expense.aggregate({
-        where: { tenantId: tenant.id, buildingId: building.id, liquidationPeriod: period, status: 'VALIDATED' },
-        _sum: { amountMinor: true },
+      // Calculate total expenses for this building/period.
+      const buildingExpenses = await prisma.expense.findMany({
+        where: {
+          tenantId: tenant.id,
+          buildingId: building.id,
+          liquidationPeriod: period,
+          status: 'VALIDATED',
+        },
+        include: {
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+        },
       });
-      
+
       const sharedExpenses = await prisma.expense.findMany({
-        where: { tenantId: tenant.id, period, status: 'VALIDATED', scopeType: 'TENANT_SHARED', allocations: { some: { buildingId: building.id } } },
-        include: { allocations: true },
+        where: {
+          tenantId: tenant.id,
+          period,
+          status: 'VALIDATED',
+          scopeType: 'TENANT_SHARED',
+          allocations: { some: { buildingId: building.id } },
+        },
+        include: {
+          allocations: true,
+          category: { select: { name: true } },
+          vendor: { select: { name: true } },
+        },
       });
-      
-      const sharedTotal = sharedExpenses.reduce((sum: number, exp: any) => {
-        const alloc = exp.allocations.find((a: any) => a.buildingId === building.id);
-        return sum + (alloc?.amountMinor ?? Math.floor(exp.amountMinor * (alloc?.percentage ?? 0) / 100));
-      }, 0);
-      
-      const totalAmount = (buildingExpenses._sum.amountMinor ?? 0) + sharedTotal;
+
+      const sharedExpenseAllocations = sharedExpenses.map((expense) => {
+        const allocation = expense.allocations.find((item) => item.buildingId === building.id);
+        const amountMinor = allocation?.amountMinor
+          ?? Math.floor(expense.amountMinor * (allocation?.percentage ?? 0) / 100);
+        return { expense, amountMinor };
+      });
+      const sharedTotal = sharedExpenseAllocations.reduce(
+        (sum, item) => sum + item.amountMinor,
+        0,
+      );
+      const totalAmount = buildingExpenses.reduce((sum, expense) => sum + expense.amountMinor, 0)
+        + sharedTotal;
+      const publicationExpenses = [
+        ...buildingExpenses.map((expense) => toPublicationExpenseSnapshot(expense)),
+        ...sharedExpenseAllocations.map(({ expense, amountMinor }) =>
+          toPublicationExpenseSnapshot(expense, amountMinor),
+        ),
+      ];
       
       // Create liquidation (DRAFT first)
       const liquidation = await prisma.liquidation.create({
@@ -566,6 +672,7 @@ async function main() {
           baseCurrency: CURRENCY,
           totalAmountMinor: totalAmount,
           totalsByCurrency: { [CURRENCY]: totalAmount },
+          // Keep this legacy local-seed draft behavior; publication evidence comes from the validated seed rows.
           expenseSnapshot: [],
           unitCount: 96,
           generatedByMembershipId: membershipId,
@@ -575,36 +682,81 @@ async function main() {
       // If publishable, review and publish
       const shouldPublish = periodsToPublish.includes(period);
       if (shouldPublish) {
-        await prisma.liquidation.update({ where: { id: liquidation.id }, data: { status: 'REVIEWED' } });
+        await prisma.liquidation.update({
+          where: { id: liquidation.id },
+          data: {
+            status: 'REVIEWED',
+            reviewedByMembershipId: membershipId,
+            reviewedAt: new Date(),
+          },
+        });
         
-        // Get units with m2
-        const units = await prisma.unit.findMany({ where: { buildingId: building.id, isBillable: true }, select: { id: true, code: true, m2: true } });
-        const totalM2 = units.reduce((sum, u) => sum + (u.m2 ?? 0), 0);
-        
-        // Create charges
-        for (const unit of units) {
-          const unitShare = totalM2 > 0 ? (unit.m2 ?? 0) / totalM2 : 1 / units.length;
-          const amount = Math.round(totalAmount * unitShare);
-          
+        // Get units with m2.
+        const units = await prisma.unit.findMany({
+          where: { buildingId: building.id, isBillable: true },
+          select: { id: true, code: true, label: true, m2: true },
+        });
+        const chargeAllocations = distributeLiquidationAmountByLargestRemainder(
+          units.map((unit) => ({
+            id: unit.id,
+            code: unit.code,
+            label: unit.label,
+            areaM2: unit.m2 ?? 0,
+          })),
+          totalAmount,
+        );
+        const dueDate = new Date(`${chargePeriod}-05`);
+        const generatedCharges: SeedGeneratedCharge[] = [];
+
+        // Create charges from the exact allocation used by the publication snapshot.
+        for (const allocation of chargeAllocations) {
           // chargePeriod = period + 1
-          await prisma.charge.create({
+          const charge = await prisma.charge.create({
             data: {
               tenantId: tenant.id,
               buildingId: building.id,
-              unitId: unit.id,
+              unitId: allocation.unitId,
               period: chargePeriod, // This is correct: charge in next month
               type: 'COMMON_EXPENSE',
               concept: `Expensas comunes ${periodMapping[period] || period}`,
-              amount,
+              amount: allocation.amountMinor,
               currency: CURRENCY,
-              dueDate: new Date(`${chargePeriod}-05`),
+              dueDate,
               status: ChargeStatus.PENDING,
               liquidationId: liquidation.id,
             },
           });
+          generatedCharges.push({
+            unitId: charge.unitId,
+            unitCode: allocation.unitCode,
+            unitLabel: allocation.unitLabel,
+            amountMinor: charge.amount,
+          });
         }
-        
-        await prisma.liquidation.update({ where: { id: liquidation.id }, data: { status: 'PUBLISHED', publishedByMembershipId: membershipId, publishedAt: new Date() } });
+
+        const publishedAt = new Date();
+        const publicationSnapshot = buildSanCristobalLegacyPublicationSnapshot({
+          liquidationId: liquidation.id,
+          tenantId: tenant.id,
+          buildingId: building.id,
+          period,
+          baseCurrency: CURRENCY,
+          totalAmountMinor: totalAmount,
+          expenses: publicationExpenses,
+          charges: generatedCharges,
+          dueDate,
+          publishedAt,
+        });
+
+        await prisma.liquidation.update({
+          where: { id: liquidation.id },
+          data: {
+            status: 'PUBLISHED',
+            publishedByMembershipId: membershipId,
+            publishedAt,
+            publicationSnapshot,
+          },
+        });
       }
       
       liquidationResults.push({ buildingId: building.id, period, status: shouldPublish ? 'PUBLISHED' : 'DRAFT', total: totalAmount });
@@ -663,9 +815,11 @@ async function main() {
   console.log('\n✅ SEED COMPLETADO!\n');
 }
 
-main()
-  .catch((e) => {
-    console.error('Error:', e);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+if (require.main === module) {
+  main()
+    .catch((e) => {
+      console.error('Error:', e);
+      process.exit(1);
+    })
+    .finally(() => prisma.$disconnect());
+}
