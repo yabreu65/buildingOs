@@ -413,6 +413,15 @@ export async function ensureSeedPublishedLiquidation(
   });
 
   const validateCompatible = async (liquidation: ActiveLiquidationRecord): Promise<void> => {
+    const isLegacyDistribution =
+      liquidation.distributionSnapshot === null || liquidation.distributionSnapshot === undefined;
+    const expectedExpenseSnapshot = isLegacyDistribution
+      ? stripDistributionSourceEvidence(expectedDraftExpenseSnapshot)
+      : expectedDraftExpenseSnapshot;
+    const actualExpenseSnapshot = isLegacyDistribution && Array.isArray(liquidation.expenseSnapshot)
+      ? stripDistributionSourceEvidence(liquidation.expenseSnapshot as Prisma.InputJsonArray)
+      : liquidation.expenseSnapshot;
+
     if (
       liquidation.baseCurrency !== input.baseCurrency ||
       liquidation.totalAmountMinor !== input.totalAmountMinor ||
@@ -420,8 +429,8 @@ export async function ensureSeedPublishedLiquidation(
       liquidation.chargePeriod !== (input.chargePeriod ?? null) ||
       !sameJson(liquidation.totalsByCurrency, input.totalsByCurrency) ||
       !sameExpenseSnapshotWithLegacyRecipientEvidence(
-        liquidation.expenseSnapshot,
-        expectedDraftExpenseSnapshot,
+        actualExpenseSnapshot,
+        expectedExpenseSnapshot,
       )
     ) {
       throw new Error(
