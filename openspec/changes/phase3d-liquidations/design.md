@@ -12,7 +12,7 @@
 
 1. Validate tenant/building identity, non-negative safe minor-unit amounts, unique movement IDs, and non-empty recipient sets.
 2. Normalize Float-backed `coefficient` and `m2` values only after finiteness/range validation, retaining normalized decimal strings in snapshot evidence.
-3. Resolve the established building weighting policy. Positive coefficients are used; missing/non-positive coefficients receive the existing neutral weight of `1`; if no positive coefficient exists, the result is equal weighting. No custom UnitGroup weight is accepted.
+3. Resolve the established building weighting policy. Coefficients are used only when every eligible unit has coefficient evidence and their sum is positive; explicit zero coefficients remain zero. Missing coefficients or an all-zero coefficient set produce equal weighting. No custom UnitGroup weight is accepted.
 4. Apportion any liquidation-level income-offset reduction across source movement budgets deterministically, then distribute each movement only among its own recipient set.
 5. Round Decimal shares to integer minor units with `Prisma.Decimal.ROUND_HALF_EVEN`, reconcile residuals deterministically, and use `unitId` as the final stable tie-breaker.
 6. Aggregate movement allocations by unit and require exact equality with the liquidation total.

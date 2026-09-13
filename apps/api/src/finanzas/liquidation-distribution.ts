@@ -456,19 +456,19 @@ function resolveRecipientWeights(recipients: readonly NormalizedRecipient[]): {
   readonly weightSource: LiquidationDistributionWeightSource;
   readonly weights: Array<{ readonly recipient: NormalizedRecipient; readonly weight: Prisma.Decimal }>;
 } {
-  const positiveCoefficients = recipients.filter(
-    (recipient) => recipient.coefficientDecimal?.greaterThan(0) === true,
+  const allRecipientsHaveCoefficients = recipients.every(
+    (recipient) => recipient.coefficientDecimal !== null,
   );
-  if (positiveCoefficients.length > 0) {
+  const coefficientTotal = recipients.reduce(
+    (total, recipient) => total.plus(recipient.coefficientDecimal ?? 0),
+    new Prisma.Decimal(0),
+  );
+  if (allRecipientsHaveCoefficients && coefficientTotal.greaterThan(0)) {
     return {
       weightSource: 'COEFFICIENT',
-      // Preserve the established resolver: a missing or non-positive coefficient
-      // receives the neutral weight 1 rather than changing the building policy.
       weights: recipients.map((recipient) => ({
         recipient,
-        weight: recipient.coefficientDecimal?.greaterThan(0)
-          ? recipient.coefficientDecimal
-          : new Prisma.Decimal(1),
+        weight: recipient.coefficientDecimal ?? new Prisma.Decimal(0),
       })),
     };
   }
@@ -482,9 +482,13 @@ function resolveRecipientWeights(recipients: readonly NormalizedRecipient[]): {
 function resolveCanonicalWeightSource(
   recipients: readonly Pick<LiquidationDistributionSnapshotRecipient, 'coefficient' | 'm2'>[],
 ): LiquidationDistributionWeightSource {
-  if (recipients.some((recipient) =>
-    recipient.coefficient !== null && new Prisma.Decimal(recipient.coefficient).greaterThan(0),
-  )) {
+  const coefficients = recipients.map((recipient) =>
+    recipient.coefficient === null ? null : new Prisma.Decimal(recipient.coefficient),
+  );
+  if (
+    coefficients.every((coefficient) => coefficient !== null) &&
+    coefficients.reduce((total, coefficient) => total.plus(coefficient ?? 0), new Prisma.Decimal(0)).greaterThan(0)
+  ) {
     return 'COEFFICIENT';
   }
   return 'EQUAL';
@@ -513,7 +517,7 @@ function deriveFrozenRecipientWeights(
     }
     return evidenceWeights.map(({ recipient, evidence }) => ({
       recipient,
-      weight: evidence.greaterThan(0) ? evidence : new Prisma.Decimal(1),
+      weight: evidence,
     }));
   }
 

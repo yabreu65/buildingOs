@@ -281,6 +281,21 @@ describe('liquidation distribution', () => {
       }],
     });
     const coefficientMovement = coefficientDistribution.movements[0]!;
+    const zeroCoefficientDistribution = distributeLiquidationMovements({
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      totalAmountMinor: 100,
+      movements: [{
+        movementId: 'expense-zero-coefficient',
+        scope: 'BUILDING',
+        amountMinor: 100,
+        recipients: [
+          { unitId: 'unit-4', unitCode: '4', unitLabel: null, coefficient: 4, m2: 40 },
+          { unitId: 'unit-6', unitCode: '6', unitLabel: null, coefficient: 0, m2: 60 },
+        ],
+      }],
+    });
+    const zeroCoefficientMovement = zeroCoefficientDistribution.movements[0]!;
     const m2Distribution = distributeLiquidationMovements({
       tenantId: 'tenant-1',
       buildingId: 'building-1',
@@ -290,7 +305,7 @@ describe('liquidation distribution', () => {
         scope: 'BUILDING',
         amountMinor: 100,
         recipients: [
-          { unitId: 'unit-4', unitCode: '4', unitLabel: null, coefficient: null, m2: 4 },
+          { unitId: 'unit-4', unitCode: '4', unitLabel: null, coefficient: 4, m2: 4 },
           { unitId: 'unit-6', unitCode: '6', unitLabel: null, coefficient: null, m2: 6 },
         ],
       }],
@@ -319,6 +334,11 @@ describe('liquidation distribution', () => {
       ...coefficientDistribution,
       movements: [{ ...coefficientMovement, weightSource: 'M2' as const }],
     };
+    expect(zeroCoefficientMovement.weightSource).toBe('COEFFICIENT');
+    expect(zeroCoefficientDistribution.allocations).toEqual([
+      { unitId: 'unit-4', unitCode: '4', unitLabel: null, amountMinor: 100 },
+      { unitId: 'unit-6', unitCode: '6', unitLabel: null, amountMinor: 0 },
+    ]);
     expect(m2Movement.weightSource).toBe('EQUAL');
     expect(m2Distribution.allocations).toEqual([
       { unitId: 'unit-4', unitCode: '4', unitLabel: null, amountMinor: 50 },
