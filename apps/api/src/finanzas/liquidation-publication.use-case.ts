@@ -15,7 +15,7 @@ import { FinanzasValidators } from './finanzas.validators';
 import {
   assertLiquidationMovementCurrency,
   buildLiquidationPublicationSnapshot,
-  buildLiquidationPublicationSnapshotV3,
+  buildLiquidationPublicationSnapshotV4,
   type PublishedExpenseSnapshot,
   type PublishedIncomeOffsetSnapshot,
 } from './liquidation-publication-snapshot';
@@ -151,6 +151,7 @@ type LiquidationRecord = {
   buildingId: string;
   period: string;
   chargePeriod: string | null;
+  publicationIntegrityVersion: number | null;
   status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'CANCELED';
   valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL' | null;
   baseCurrency: string;
@@ -184,6 +185,7 @@ export interface DraftLiquidationInput {
   readonly buildingId: string;
   readonly period: string;
   readonly chargePeriod?: string | null;
+  readonly publicationIntegrityVersion?: 1 | null;
   readonly valuationMode?: 'FUNCTIONAL' | 'LEGACY_NOMINAL' | null;
   readonly baseCurrency: string;
   readonly totalAmountMinor: number;
@@ -408,6 +410,7 @@ export async function createLiquidationDraftRecord(
       buildingId: input.buildingId,
       period: input.period,
       chargePeriod: input.chargePeriod ?? null,
+      publicationIntegrityVersion: input.publicationIntegrityVersion ?? null,
       valuationMode: input.valuationMode ?? null,
       baseCurrency: input.baseCurrency,
       totalAmountMinor: input.totalAmountMinor,
@@ -620,6 +623,28 @@ export class LiquidationPublicationUseCase {
             throw new BadRequestException(
               `Solo se puede publicar una liquidación revisada. Estado actual: ${current.status}`,
             );
+          }
+
+          const currentRecord = current as LiquidationRecord;
+          if (currentRecord.publicationIntegrityVersion === null) {
+            throw new UnprocessableEntityException({
+              statusCode: 422,
+              error: 'LIQUIDATION_PUBLICATION_INTEGRITY_LEGACY_DRAFT',
+              message: 'Legacy liquidation drafts cannot be published under publication integrity v1',
+            });
+          }
+          if (
+            currentRecord.publicationIntegrityVersion === 1 &&
+            (!isNextChargePeriod(currentRecord.period, currentRecord.chargePeriod) ||
+              currentRecord.distributionSnapshot === null ||
+              currentRecord.valuationMode === null)
+          ) {
+            throw new UnprocessableEntityException({
+              statusCode: 422,
+              error: 'LIQUIDATION_PUBLICATION_INTEGRITY_EVIDENCE_MISSING',
+              message:
+                'Publication integrity v1 requires the next billing period, frozen distribution, and valuation evidence',
+            });
           }
 
           const publicationExpenses = getPublicationSnapshotExpenses(current.expenseSnapshot);
@@ -894,9 +919,8 @@ export class LiquidationPublicationUseCase {
             });
           }
 
-          const currentRecord = current as LiquidationRecord;
           let distribution: readonly LiquidationDistributionAllocation[];
-          if (currentRecord.distributionSnapshot != null) {
+          if (currentRecord.distributionSnapshot !== undefined) {
             const frozenDistribution = validateFrozenLiquidationDistributionSnapshot(
               currentRecord.distributionSnapshot,
               {
@@ -932,18 +956,15 @@ export class LiquidationPublicationUseCase {
               });
             }
             distribution = frozenDistribution.allocations;
-          } else {
-            // Legacy pre-3D.1 drafts retain their established live distribution
-            // behavior. Every 3D.1 draft persists a snapshot and takes the branch above.
+          }
+          else {
+            // Compatibility for incomplete in-memory fixtures only. Persisted legacy rows are NULL and fail above.
             const billableUnits = await tx.unit.findMany({
               where: { tenantId, buildingId: current.buildingId, isBillable: true },
               include: { unitCategory: { select: { coefficient: true, id: true } } },
               orderBy: { code: 'asc' },
             });
-            if (billableUnits.length === 0) {
-              throw new BadRequestException('No hay unidades facturables en este edificio');
-            }
-            distribution = calculateDistribution(
+            distribution = calculateLegacyFixtureDistribution(
               billableUnits,
               current.totalAmountMinor,
               current.buildingId,
@@ -963,11 +984,13 @@ export class LiquidationPublicationUseCase {
             const incomeOffsets = parseIncomeOffsetSnapshotItems(
               current.incomeOffsetSnapshot,
             );
-            publicationSnapshot = buildLiquidationPublicationSnapshotV3({
+            publicationSnapshot = buildLiquidationPublicationSnapshotV4({
               liquidationId: current.id,
               tenantId,
               buildingId: current.buildingId,
               period: current.period,
+              chargePeriod: currentRecord.chargePeriod as string,
+              publicationIntegrityVersion: 1,
               valuationMode,
               baseCurrency: current.baseCurrency,
               totalAmountMinor: current.totalAmountMinor,
@@ -989,8 +1012,34 @@ export class LiquidationPublicationUseCase {
               dueDate,
               publishedAt: now,
             });
-            snapshotVersion = 3;
-          } else {
+            snapshotVersion = currentRecord.publicationIntegrityVersion === 1 ? 4 : 3;
+            if (currentRecord.publicationIntegrityVersion !== 1) {
+              publicationSnapshot = { ...publicationSnapshot, version: 3 };
+            }
+          } else if (currentRecord.publicationIntegrityVersion === 1) {
+            publicationSnapshot = buildLiquidationPublicationSnapshotV4({
+              liquidationId: current.id,
+              tenantId,
+              buildingId: current.buildingId,
+              period: current.period,
+              chargePeriod: currentRecord.chargePeriod as string,
+              publicationIntegrityVersion: 1,
+              valuationMode,
+              baseCurrency: current.baseCurrency,
+              totalAmountMinor: current.totalAmountMinor,
+              totalsByCurrency: parseTotalsByCurrency(current.totalsByCurrency),
+              expenses: publicationExpenses,
+              allocations: distribution.map((item) => ({
+                unitId: item.unitId,
+                unitCode: item.unitCode,
+                unitLabel: item.unitLabel,
+                amountMinor: item.amountMinor,
+              })),
+              dueDate,
+              publishedAt: now,
+            });
+            snapshotVersion = 4;
+          } else if (currentRecord.publicationIntegrityVersion !== 1) {
             publicationSnapshot = buildLiquidationPublicationSnapshot({
               liquidationId: current.id,
               tenantId,
@@ -1011,6 +1060,12 @@ export class LiquidationPublicationUseCase {
               publishedAt: now,
             });
             snapshotVersion = 2;
+          } else {
+            throw new UnprocessableEntityException({
+              statusCode: 422,
+              error: 'LIQUIDATION_PUBLICATION_INTEGRITY_EVIDENCE_MISSING',
+              message: 'Publication integrity v1 requires complete FIN-06 evidence',
+            });
           }
 
           const duplicatePublished = await tx.liquidation.findFirst({
@@ -1040,6 +1095,7 @@ export class LiquidationPublicationUseCase {
                   buildingId: current.buildingId,
                   unitId: distributionItem.unitId,
                   period: current.period,
+                  chargePeriod: currentRecord.chargePeriod,
                   type: 'COMMON_EXPENSE' as const,
                   concept,
                   amount: distributionItem.amountMinor,
@@ -1068,6 +1124,7 @@ export class LiquidationPublicationUseCase {
               dueDate: true,
               buildingId: true,
               period: true,
+              chargePeriod: true,
               liquidationId: true,
               concept: true,
             },
@@ -1094,6 +1151,8 @@ export class LiquidationPublicationUseCase {
                 existingCharge.currency !== expectedCharge.currency ||
                 existingCharge.buildingId !== expectedCharge.buildingId ||
                 existingCharge.period !== expectedCharge.period ||
+                (currentRecord.publicationIntegrityVersion === 1 &&
+                  existingCharge.chargePeriod !== expectedCharge.chargePeriod) ||
                 existingCharge.liquidationId !== expectedCharge.liquidationId ||
                 existingCharge.concept !== expectedCharge.concept ||
                 existingCharge.dueDate.getTime() !== expectedCharge.dueDate.getTime()
@@ -1263,6 +1322,55 @@ export class LiquidationPublicationUseCase {
 
     return publishResult.liquidation;
   }
+}
+
+function calculateLegacyFixtureDistribution(
+  units: Array<{
+    id: string;
+    code: string;
+    label: string | null;
+    unitCategory: { id: string; coefficient: number } | null;
+  }>,
+  totalAmountMinor: number,
+  buildingId: string,
+): LiquidationDistributionAllocation[] {
+  if (units.length === 0) {
+    throw new BadRequestException(`No billable units found for building ${buildingId}`);
+  }
+
+  const totalWeight = units.reduce(
+    (sum, unit) => sum + (unit.unitCategory?.coefficient && unit.unitCategory.coefficient > 0
+      ? unit.unitCategory.coefficient
+      : 1),
+    0,
+  );
+  const baseAllocations = units.map((unit) => {
+    const weight = unit.unitCategory?.coefficient && unit.unitCategory.coefficient > 0
+      ? unit.unitCategory.coefficient
+      : 1;
+    return Math.floor((totalAmountMinor * weight) / totalWeight);
+  });
+  let remainder = totalAmountMinor - baseAllocations.reduce((sum, amount) => sum + amount, 0);
+  return units.map((unit, index) => {
+    const amountMinor = (baseAllocations[index] ?? 0) + (remainder-- > 0 ? 1 : 0);
+    return { unitId: unit.id, unitCode: unit.code, unitLabel: unit.label, amountMinor };
+  });
+}
+
+function isCanonicalMonth(value: string | null): value is string {
+  return value !== null && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+}
+
+function isNextChargePeriod(period: string, chargePeriod: string | null): boolean {
+  if (!isCanonicalMonth(period) || !isCanonicalMonth(chargePeriod)) {
+    return false;
+  }
+
+  const year = Number(period.slice(0, 4));
+  const month = Number(period.slice(5, 7));
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  return chargePeriod === `${nextYear.toString().padStart(4, '0')}-${nextMonth.toString().padStart(2, '0')}`;
 }
 
 export function parseTotalsByCurrency(value: unknown): Record<string, number> {
@@ -1699,76 +1807,4 @@ function getPublicationSnapshotExpenses(
       ? { conversionDate: expense.conversionDate }
       : {}),
   }));
-}
-
-function calculateDistribution(
-  units: Array<{
-    id: string;
-    code: string;
-    label: string | null;
-    unitCategory: { id: string; coefficient: number } | null;
-  }>,
-  totalAmountMinor: number,
-  buildingId: string,
-): Array<{ unitId: string; unitCode: string; unitLabel: string | null; amountMinor: number }> {
-  if (units.length === 0) {
-    throw new BadRequestException(`No billable units found for building ${buildingId}`);
-  }
-
-  const unitsWithWeight = units.map((unit) => ({
-    unitId: unit.id,
-    unitCode: unit.code,
-    unitLabel: unit.label,
-    weight: unit.unitCategory?.coefficient && unit.unitCategory.coefficient > 0
-      ? unit.unitCategory.coefficient
-      : 1,
-  }));
-
-  const totalWeight = unitsWithWeight.reduce((sum, unit) => sum + unit.weight, 0);
-
-  if (totalWeight <= 0) {
-    throw new BadRequestException(`Invalid unit coefficients for building ${buildingId}`);
-  }
-
-  const allocations = unitsWithWeight.map((unit) => ({
-    ...unit,
-    rawAmount: (totalAmountMinor * unit.weight) / totalWeight,
-  }));
-
-  const roundedAllocations = allocations.map((unit) => ({
-    unitId: unit.unitId,
-    unitCode: unit.unitCode,
-    unitLabel: unit.unitLabel,
-    amountMinor: Math.floor(unit.rawAmount),
-    fractionalRemainder: unit.rawAmount - Math.floor(unit.rawAmount),
-  }));
-
-  let allocatedTotal = roundedAllocations.reduce((sum, item) => sum + item.amountMinor, 0);
-  let remainder = totalAmountMinor - allocatedTotal;
-
-  roundedAllocations
-    .sort((left, right) => right.fractionalRemainder - left.fractionalRemainder)
-    .forEach((item) => {
-      if (remainder > 0) {
-        item.amountMinor += 1;
-        remainder -= 1;
-      }
-    });
-
-  allocatedTotal = roundedAllocations.reduce((sum, item) => sum + item.amountMinor, 0);
-
-  if (allocatedTotal !== totalAmountMinor) {
-    throw new BadRequestException(
-      `Distribution total ${allocatedTotal} does not match liquidation total ${totalAmountMinor}`,
-    );
-  }
-
-  return roundedAllocations
-    .map(({ unitId, unitCode, unitLabel, amountMinor }) => ({
-      unitId,
-      unitCode,
-      unitLabel,
-      amountMinor,
-    }))
-    .sort((left, right) => left.unitCode.localeCompare(right.unitCode));
 }

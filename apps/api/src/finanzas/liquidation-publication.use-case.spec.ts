@@ -173,6 +173,40 @@ describe('LiquidationPublicationUseCase', () => {
     );
   });
 
+  it('publishes a modern non-FIN-06 liquidation with a V4 snapshot', async () => {
+    const modernLiquidation = {
+      ...baseLiquidation,
+      publicationIntegrityVersion: 1 as const,
+      valuationMode: 'LEGACY_NOMINAL' as const,
+      // Undefined is the focused unit-test fixture compatibility path; persisted
+      // modern rows are independently enforced by the PostgreSQL trigger.
+      distributionSnapshot: undefined,
+    };
+    tx.liquidation.findFirst.mockReset()
+      .mockResolvedValueOnce(modernLiquidation)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        ...modernLiquidation,
+        status: 'PUBLISHED',
+        publishedAt: new Date('2026-05-03T00:00:00.000Z'),
+      });
+
+    await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+      dueDate: '2026-06-10',
+    })).resolves.toMatchObject({ status: 'PUBLISHED' });
+
+    expect(tx.liquidation.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        publicationSnapshot: expect.objectContaining({
+          version: 4,
+          period: '2026-05',
+          chargePeriod: '2026-06',
+          publicationIntegrityVersion: 1,
+        }),
+      }),
+    }));
+  });
+
   it('publishes charges from the frozen draft distribution after live weights change', async () => {
   const frozenDistribution = distributeLiquidationMovements({
     tenantId: 'tenant-1',
@@ -448,6 +482,23 @@ it('rejects publication when status is not REVIEWED', async () => {
         dueDate: '2026-06-10',
       }),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('fails closed with a stable error for legacy reviewed drafts', async () => {
+    tx.liquidation.findFirst.mockReset().mockResolvedValueOnce({
+      ...baseLiquidation,
+      publicationIntegrityVersion: null,
+    });
+
+    await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+      dueDate: '2026-06-10',
+    })).rejects.toMatchObject({
+      response: {
+        statusCode: 422,
+        error: 'LIQUIDATION_PUBLICATION_INTEGRITY_LEGACY_DRAFT',
+      },
+    });
+    expect(tx.charge.createMany).not.toHaveBeenCalled();
   });
 
   it('reuses compatible existing charges instead of creating duplicates', async () => {

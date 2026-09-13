@@ -23,6 +23,7 @@ import {
   type LiquidationWorkflowDependencies,
 } from './liquidation-publication.use-case';
 import { ensureSeedPublishedLiquidation } from '../../prisma/lib/seed-liquidation-workflow';
+import { buildLiquidationDistributionSnapshot, distributeLiquidationMovements } from './liquidation-distribution';
 
 const describePostgresIntegration =
   process.env.RUN_POSTGRES_INTEGRATION === '1' ? describe : describe.skip;
@@ -199,6 +200,34 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
   }) {
     const totalAmountMinor = params.totalAmountMinor ?? 200;
     const expenseSnapshot = params.expenseSnapshot ?? buildExpenseSnapshot(params.period, totalAmountMinor);
+    const units = await prisma.unit.findMany({
+      where: { tenantId: params.tenantId, buildingId: params.buildingId, isBillable: true },
+      select: { id: true, code: true, label: true },
+      orderBy: { code: 'asc' },
+    });
+    const modernExpenseSnapshot = expenseSnapshot.map((expense) => ({
+      ...(expense as Prisma.InputJsonObject),
+      recipientUnitIds: units.map((unit) => unit.id),
+    })) as Prisma.InputJsonArray;
+    const distributionSnapshot = buildLiquidationDistributionSnapshot(
+      distributeLiquidationMovements({
+        tenantId: params.tenantId,
+        buildingId: params.buildingId,
+        totalAmountMinor,
+        movements: [{
+          movementId: `exp-${params.period}`,
+          scope: 'BUILDING',
+          amountMinor: totalAmountMinor,
+          recipients: units.map((unit) => ({
+            unitId: unit.id,
+            unitCode: unit.code,
+            unitLabel: unit.label,
+            coefficient: null,
+            m2: null,
+          })),
+        }],
+      }),
+    );
 
     const draft = await prisma.$transaction((tx) =>
       createLiquidationDraftRecord(
@@ -212,11 +241,14 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
           buildingId: params.buildingId,
           period: params.period,
           chargePeriod: params.chargePeriod ?? null,
+          publicationIntegrityVersion: 1,
+          valuationMode: 'LEGACY_NOMINAL',
           baseCurrency: 'ARS',
           totalAmountMinor,
           totalsByCurrency: { ARS: totalAmountMinor },
-          expenseSnapshot,
-          unitCount: 2,
+          expenseSnapshot: modernExpenseSnapshot,
+          distributionSnapshot,
+          unitCount: units.length,
           generatedByMembershipId: params.membershipId,
         },
       ),
@@ -377,7 +409,7 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
     expect(persisted.status).toBe('PUBLISHED');
     expect(persisted.publicationSnapshot).toEqual(
       expect.objectContaining({
-        version: 2,
+        version: 4,
         valuationMode: 'LEGACY_NOMINAL',
         liquidationId: reviewed.id,
         dueDate: '2026-10-10T00:00:00.000Z',
