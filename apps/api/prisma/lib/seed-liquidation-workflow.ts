@@ -159,14 +159,14 @@ function countPositiveSnapshotAllocations(snapshot: unknown): number | null {
     return null;
   }
 
-  return allocations.filter(
-    (allocation) =>
-      allocation !== null &&
-      typeof allocation === 'object' &&
-      !Array.isArray(allocation) &&
-      typeof (allocation as Record<string, unknown>).amountMinor === 'number' &&
-      (allocation as Record<string, unknown>).amountMinor > 0,
-  ).length;
+  return allocations.filter((allocation) => {
+    if (allocation === null || typeof allocation !== 'object' || Array.isArray(allocation)) {
+      return false;
+    }
+
+    const amountMinor = (allocation as Record<string, unknown>).amountMinor;
+    return typeof amountMinor === 'number' && amountMinor > 0;
+  }).length;
 }
 
 function normalizeSnapshotForComparison(snapshot: unknown): Record<string, unknown> | null {
