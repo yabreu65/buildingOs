@@ -321,7 +321,12 @@ export async function ensureSeedPublishedLiquidation(
   ): Prisma.InputJsonArray => {
     const recipientUnitIdsByMovementId = new Map(
       frozenDistribution.movements
-        .filter((movement) => movement.scope === 'UNIT_GROUP' || movement.scope === 'BUILDING')
+        .filter(
+          (movement) =>
+            movement.scope === 'UNIT_GROUP' ||
+            movement.scope === 'BUILDING' ||
+            movement.scope === 'ADJUSTMENT',
+        )
         .map((movement) => [movement.movementId, movement.recipientUnitIds]),
     );
 
@@ -331,7 +336,11 @@ export async function ensureSeedPublishedLiquidation(
       }
 
       const snapshot = item as Record<string, Prisma.InputJsonValue>;
-      if (snapshot.scopeType !== 'UNIT_GROUP' && snapshot.scopeType !== 'BUILDING') {
+      if (
+        snapshot.scopeType !== 'UNIT_GROUP' &&
+        snapshot.scopeType !== 'BUILDING' &&
+        snapshot.scopeType !== 'ADJUSTMENT'
+      ) {
         return snapshot as Prisma.InputJsonObject;
       }
       if (
@@ -355,6 +364,7 @@ export async function ensureSeedPublishedLiquidation(
   };
 
   let expectedDraftExpenseSnapshot = input.expenseSnapshot;
+  let expectedUnitCount = input.units.length;
   const expectedPublishedSnapshotBase = (): Record<string, unknown> => ({
     version: 1,
     liquidationId: '',
@@ -373,7 +383,7 @@ export async function ensureSeedPublishedLiquidation(
     if (
       liquidation.baseCurrency !== input.baseCurrency ||
       liquidation.totalAmountMinor !== input.totalAmountMinor ||
-      liquidation.unitCount !== input.units.length ||
+      liquidation.unitCount !== expectedUnitCount ||
       liquidation.chargePeriod !== (input.chargePeriod ?? null) ||
       !sameJson(liquidation.totalsByCurrency, input.totalsByCurrency) ||
       !sameExpenseSnapshotWithLegacyRecipientEvidence(
@@ -486,6 +496,9 @@ export async function ensureSeedPublishedLiquidation(
 
   if (!liquidation) {
     const frozenDistribution = await buildFrozenDistribution();
+    expectedUnitCount = frozenDistribution.allocations.filter(
+      (allocation) => allocation.amountMinor > 0,
+    ).length;
     expectedDraftExpenseSnapshot = bindRecipientEvidence(frozenDistribution);
     try {
       liquidation = await input.prisma.$transaction((tx) =>
@@ -500,7 +513,7 @@ export async function ensureSeedPublishedLiquidation(
           totalAmountMinor: input.totalAmountMinor,
           totalsByCurrency: input.totalsByCurrency,
           expenseSnapshot: expectedDraftExpenseSnapshot,
-          unitCount: input.units.length,
+          unitCount: expectedUnitCount,
           generatedByMembershipId: membership.id,
           distributionSnapshot: buildLiquidationDistributionSnapshot(frozenDistribution),
         }),

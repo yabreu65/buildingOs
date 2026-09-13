@@ -1031,10 +1031,11 @@ export class LiquidationPublicationUseCase {
           }
 
           const concept = `Expensas comunes ${current.period}`;
+          const payableAllocations = distribution.filter((item) => item.amountMinor > 0);
           const expectedCharges =
-            current.totalAmountMinor === 0
+            current.totalAmountMinor === 0 || payableAllocations.length === 0
               ? []
-              : distribution.map((distributionItem) => ({
+              : payableAllocations.map((distributionItem) => ({
                   tenantId,
                   buildingId: current.buildingId,
                   unitId: distributionItem.unitId,
@@ -1395,6 +1396,7 @@ function parseExpenseSnapshot(value: unknown): ParsedLiquidationExpenseItem[] {
     if (
       scopeType !== 'UNIT_GROUP' &&
       scopeType !== 'BUILDING' &&
+      scopeType !== 'ADJUSTMENT' &&
       recipientUnitIds !== undefined
     ) {
       throw new BadRequestException(`Liquidation expense snapshot item ${index} has unexpected recipientUnitIds`);
@@ -1652,7 +1654,7 @@ function assertFrozenDistributionMatchesExpenseSources(
       source.scopeType === undefined ||
       source.scopeType !== movement.scope ||
       (source.unitGroupId ?? null) !== movement.unitGroupId ||
-      ((source.scopeType === 'UNIT_GROUP' || source.scopeType === 'BUILDING') &&
+      ((source.scopeType === 'UNIT_GROUP' || source.scopeType === 'BUILDING' || source.scopeType === 'ADJUSTMENT') &&
         source.recipientUnitIds !== undefined &&
         source.recipientUnitIds.join('|') !== [...movement.recipientUnitIds].sort().join('|')) ||
       expectedMovement?.amountMinor !== movement.amountMinor

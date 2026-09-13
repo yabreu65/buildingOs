@@ -662,7 +662,10 @@ export class LiquidationsService {
       }));
       const buildingRecipientUnitIds = buildingRecipients.map((unit) => unit.unitId).sort();
       for (const expenseSnapshotItem of expenseSnapshotItems) {
-        if (expenseSnapshotItem.scopeType === 'BUILDING') {
+        if (
+          expenseSnapshotItem.scopeType === 'BUILDING' ||
+          expenseSnapshotItem.scopeType === 'ADJUSTMENT'
+        ) {
           expenseSnapshotItem.recipientUnitIds = buildingRecipientUnitIds;
         }
       }
@@ -733,7 +736,7 @@ export class LiquidationsService {
         totalAmountMinor,
         totalsByCurrency,
         expenseSnapshot: expenseSnapshotItems,
-        unitCount: billableUnits.length,
+        unitCount: distribution.allocations.filter((allocation) => allocation.amountMinor > 0).length,
         generatedByMembershipId: membership.id,
         grossExpenseAmountMinor,
         adjustmentAmountMinor,
