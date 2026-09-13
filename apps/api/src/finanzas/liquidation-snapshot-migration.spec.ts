@@ -270,15 +270,15 @@ describeDatabaseBehavior('liquidation snapshot migration database behavior', () 
   });
 });
 
-const phase3d2MigrationSql = readFileSync(
-  join(__dirname, '../../prisma/migrations/20260913000000_add_phase3d2_publication_integrity/migration.sql'),
+const parentCascadeMigrationSql = readFileSync(
+  join(__dirname, '../../prisma/migrations/20260914000000_allow_authorized_parent_cascades/migration.sql'),
   'utf8',
 );
 
 function triggerFunctionSql(functionName: string, triggerName: string): string {
-  const start = phase3d2MigrationSql.indexOf(`CREATE OR REPLACE FUNCTION ${functionName}()`);
-  const trigger = phase3d2MigrationSql.indexOf(`DROP TRIGGER IF EXISTS "${triggerName}"`);
-  return start >= 0 && trigger > start ? phase3d2MigrationSql.slice(start, trigger).trim() : '';
+  const start = parentCascadeMigrationSql.indexOf(`CREATE OR REPLACE FUNCTION ${functionName}()`);
+  const trigger = parentCascadeMigrationSql.indexOf(`DROP TRIGGER IF EXISTS "${triggerName}"`);
+  return start >= 0 && trigger > start ? parentCascadeMigrationSql.slice(start, trigger).trim() : '';
 }
 
 const liquidationTriggerSql = triggerFunctionSql(
@@ -294,26 +294,50 @@ const describePhase3d2Postgres =
     ? describe
     : describe.skip;
 
-describe('FASE 3D.2 trigger migration preflight', () => {
+describe('authorized parent cascade trigger migration preflight', () => {
   it('extracts the actual functions used by the PostgreSQL sandbox', () => {
     expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'modern liquidation identity and evidence are immutable'");
     expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'published liquidations cannot be updated'");
     expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'published liquidations cannot be deleted'");
+    expect(liquidationTriggerSql).toContain('EXISTS (SELECT 1 FROM "Tenant" WHERE "id" = OLD."tenantId")');
+    expect(liquidationTriggerSql).toContain('EXISTS (SELECT 1 FROM "Building" WHERE "id" = OLD."buildingId")');
+    expect(liquidationTriggerSql).not.toContain('pg_trigger_depth');
     expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'liquidation publicationIntegrityVersion is immutable after insert'");
     expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'modern liquidation publication requires matching V4 integrity evidence'");
     expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charge economic origin is immutable'");
     expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'manual charges cannot acquire liquidationId'");
     expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charges cannot be deleted'");
+    expect(chargeTriggerSql).toContain('OLD."canceledAt" IS NOT NULL');
+    expect(chargeTriggerSql).toContain('NOT EXISTS (SELECT 1 FROM "Unit" WHERE "id" = OLD."unitId")');
+    expect(chargeTriggerSql).not.toContain('pg_trigger_depth');
   });
 });
 
-describePhase3d2Postgres('FASE 3D.2 PostgreSQL trigger behavior', () => {
+describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior', () => {
   let prisma: import('@prisma/client').PrismaClient;
   type TransactionClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
+  const tenantTableSql = `
+    CREATE TEMP TABLE "Tenant" (
+      "id" TEXT PRIMARY KEY
+    ) ON COMMIT DROP;
+  `;
+  const buildingTableSql = `
+    CREATE TEMP TABLE "Building" (
+      "id" TEXT PRIMARY KEY,
+      "tenantId" TEXT NOT NULL REFERENCES "Tenant" ("id") ON DELETE CASCADE
+    ) ON COMMIT DROP;
+  `;
+  const unitTableSql = `
+    CREATE TEMP TABLE "Unit" (
+      "id" TEXT PRIMARY KEY,
+      "tenantId" TEXT NOT NULL REFERENCES "Tenant" ("id") ON DELETE CASCADE,
+      "buildingId" TEXT NOT NULL REFERENCES "Building" ("id") ON DELETE CASCADE
+    ) ON COMMIT DROP;
+  `;
   const liquidationTableSql = `
     CREATE TEMP TABLE "Liquidation" (
-      "id" TEXT PRIMARY KEY, "tenantId" TEXT NOT NULL, "buildingId" TEXT NOT NULL, "period" TEXT NOT NULL,
+      "id" TEXT PRIMARY KEY, "tenantId" TEXT NOT NULL REFERENCES "Tenant" ("id") ON DELETE CASCADE, "buildingId" TEXT NOT NULL REFERENCES "Building" ("id") ON DELETE CASCADE, "period" TEXT NOT NULL,
       "chargePeriod" TEXT, "status" TEXT NOT NULL, "publicationIntegrityVersion" INTEGER, "valuationMode" TEXT,
       "baseCurrency" TEXT NOT NULL, "totalAmountMinor" BIGINT NOT NULL, "totalsByCurrency" JSONB NOT NULL,
       "expenseSnapshot" JSONB NOT NULL, "distributionSnapshot" JSONB, "unitCount" INTEGER NOT NULL,
@@ -327,7 +351,7 @@ describePhase3d2Postgres('FASE 3D.2 PostgreSQL trigger behavior', () => {
   `;
   const chargeTableSql = `
     CREATE TEMP TABLE "Charge" (
-      "id" TEXT PRIMARY KEY, "tenantId" TEXT NOT NULL, "buildingId" TEXT NOT NULL, "unitId" TEXT NOT NULL,
+      "id" TEXT PRIMARY KEY, "tenantId" TEXT NOT NULL REFERENCES "Tenant" ("id") ON DELETE CASCADE, "buildingId" TEXT NOT NULL REFERENCES "Building" ("id") ON DELETE CASCADE, "unitId" TEXT NOT NULL REFERENCES "Unit" ("id") ON DELETE CASCADE,
       "period" TEXT NOT NULL, "chargePeriod" TEXT, "type" TEXT NOT NULL, "concept" TEXT NOT NULL,
       "amount" BIGINT NOT NULL, "remainingAmount" BIGINT NOT NULL, "currency" TEXT NOT NULL,
       "dueDate" TIMESTAMPTZ NOT NULL, "status" TEXT NOT NULL, "liquidationId" TEXT,
@@ -354,9 +378,21 @@ describePhase3d2Postgres('FASE 3D.2 PostgreSQL trigger behavior', () => {
 
   async function sandbox<T>(action: (tx: TransactionClient) => Promise<T>): Promise<T> {
     return prisma.$transaction(async (tx) => {
-      if (!liquidationTriggerSql || !chargeTriggerSql) throw new Error('Could not extract FASE 3D.2 trigger function SQL');
+      if (!liquidationTriggerSql || !chargeTriggerSql) throw new Error('Could not extract authorized parent cascade trigger function SQL');
+      await tx.$executeRawUnsafe(tenantTableSql);
+      await tx.$executeRawUnsafe(buildingTableSql);
+      await tx.$executeRawUnsafe(unitTableSql);
       await tx.$executeRawUnsafe(liquidationTableSql);
       await tx.$executeRawUnsafe(chargeTableSql);
+      await tx.$executeRawUnsafe(`
+        INSERT INTO "Tenant" ("id") VALUES ('tenant-1');
+      `);
+      await tx.$executeRawUnsafe(`
+        INSERT INTO "Building" ("id", "tenantId") VALUES ('building-1', 'tenant-1');
+      `);
+      await tx.$executeRawUnsafe(`
+        INSERT INTO "Unit" ("id", "tenantId", "buildingId") VALUES ('unit-1', 'tenant-1', 'building-1');
+      `);
       await tx.$executeRawUnsafe(liquidationTriggerSql);
       await tx.$executeRawUnsafe(chargeTriggerSql);
       await tx.$executeRawUnsafe(`
@@ -369,22 +405,41 @@ describePhase3d2Postgres('FASE 3D.2 PostgreSQL trigger behavior', () => {
     });
   }
 
-  async function insertLiquidation(tx: TransactionClient, id: string): Promise<void> {
+  async function insertLiquidation(
+    tx: TransactionClient,
+    id: string,
+    tenantId = 'tenant-1',
+    buildingId = 'building-1',
+  ): Promise<void> {
     await tx.$executeRawUnsafe(`
       INSERT INTO "Liquidation" ("id", "tenantId", "buildingId", "period", "chargePeriod", "status", "publicationIntegrityVersion", "valuationMode", "baseCurrency", "totalAmountMinor", "totalsByCurrency", "expenseSnapshot", "distributionSnapshot", "unitCount", "generatedByMembershipId", "generatedAt", "grossExpenseAmountMinor", "adjustmentAmountMinor", "preIncomeAmountMinor", "incomeOffsetAmountMinor", "netDistributableAmountMinor", "incomeOffsetSnapshot", "incomeOffsetsByCurrency", "createdAt", "updatedAt")
-      VALUES ('${id}', 'tenant-1', 'building-1', '2026-05', '2026-06', 'DRAFT', 1, 'LEGACY_NOMINAL', 'ARS', 100, '{"ARS":100}', '[]', '[]', 2, 'member-1', '2026-05-01T00:00:00Z', 100, 0, 100, 0, 100, '[]', '{"ARS":0}', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
+      VALUES ('${id}', '${tenantId}', '${buildingId}', '2026-05', '2026-06', 'DRAFT', 1, 'LEGACY_NOMINAL', 'ARS', 100, '{"ARS":100}', '[]', '[]', 2, 'member-1', '2026-05-01T00:00:00Z', 100, 0, 100, 0, 100, '[]', '{"ARS":0}', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
     `);
   }
-  async function publish(tx: TransactionClient, id: string): Promise<void> {
-    await insertLiquidation(tx, id);
+  async function publish(
+    tx: TransactionClient,
+    id: string,
+    tenantId = 'tenant-1',
+    buildingId = 'building-1',
+  ): Promise<void> {
+    await insertLiquidation(tx, id, tenantId, buildingId);
     await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = '${id}'`);
     await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '{"version":4,"period":"2026-05","chargePeriod":"2026-06","publicationIntegrityVersion":1}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = '${id}'`);
   }
-  async function insertCharge(tx: TransactionClient, id: string, liquidationId: string | null): Promise<void> {
+  async function insertCharge(
+    tx: TransactionClient,
+    id: string,
+    liquidationId: string | null,
+    tenantId = 'tenant-1',
+    buildingId = 'building-1',
+    unitId = 'unit-1',
+    canceledAt: string | null = null,
+  ): Promise<void> {
     const liquidationValue = liquidationId === null ? 'NULL' : `'${liquidationId}'`;
+    const canceledAtValue = canceledAt === null ? 'NULL' : `'${canceledAt}'`;
     await tx.$executeRawUnsafe(`
-      INSERT INTO "Charge" ("id", "tenantId", "buildingId", "unitId", "period", "chargePeriod", "type", "concept", "amount", "remainingAmount", "currency", "dueDate", "status", "liquidationId", "createdByMembershipId", "periodId", "coefficientSnapshot", "sumCoefSnapshot", "totalToAllocateSnapshot", "categorySnapshotId", "createdAt", "updatedAt")
-      VALUES ('${id}', 'tenant-1', 'building-1', 'unit-1', '2026-05', '2026-06', 'EXPENSE', 'Monthly liquidation', 100, 100, 'ARS', '2026-06-10T00:00:00Z', 'PENDING', ${liquidationValue}, 'member-1', 'period-1', '{"coefficient":1}', 1, 100, 'category-1', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
+      INSERT INTO "Charge" ("id", "tenantId", "buildingId", "unitId", "period", "chargePeriod", "type", "concept", "amount", "remainingAmount", "currency", "dueDate", "status", "liquidationId", "createdByMembershipId", "periodId", "coefficientSnapshot", "sumCoefSnapshot", "totalToAllocateSnapshot", "categorySnapshotId", "canceledAt", "createdAt", "updatedAt")
+      VALUES ('${id}', '${tenantId}', '${buildingId}', '${unitId}', '2026-05', '2026-06', 'EXPENSE', 'Monthly liquidation', 100, 100, 'ARS', '2026-06-10T00:00:00Z', 'PENDING', ${liquidationValue}, 'member-1', 'period-1', '{"coefficient":1}', 1, 100, 'category-1', ${canceledAtValue}, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
     `);
   }
 
@@ -402,6 +457,72 @@ describePhase3d2Postgres('FASE 3D.2 PostgreSQL trigger behavior', () => {
     await expect(sandbox(async (tx) => { await insertLiquidation(tx, 'evidence'); await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "totalAmountMinor" = 101 WHERE "id" = 'evidence'`); })).rejects.toThrow('modern liquidation identity and evidence are immutable');
     await expect(sandbox(async (tx) => { await publish(tx, 'published-update'); await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "updatedAt" = '2026-05-04T00:00:00Z' WHERE "id" = 'published-update'`); })).rejects.toThrow('published liquidations cannot be updated');
     await expect(sandbox(async (tx) => { await publish(tx, 'published-delete'); await tx.$executeRawUnsafe(`DELETE /* intentional trigger test */ FROM "Liquidation" WHERE "id" = 'published-delete'`); })).rejects.toThrow('published liquidations cannot be deleted');
+  });
+
+  it('allows a tenant cascade to remove published Liquidations and generated Charges while unrelated data survives', async () => {
+    await sandbox(async (tx) => {
+      await tx.$executeRawUnsafe(`
+        INSERT INTO "Tenant" ("id") VALUES ('tenant-cascade'), ('tenant-unrelated');
+      `);
+      await tx.$executeRawUnsafe(`
+        INSERT INTO "Building" ("id", "tenantId") VALUES ('building-cascade', 'tenant-cascade'), ('building-unrelated', 'tenant-unrelated');
+      `);
+      await tx.$executeRawUnsafe(`
+        INSERT INTO "Unit" ("id", "tenantId", "buildingId") VALUES ('unit-cascade', 'tenant-cascade', 'building-cascade'), ('unit-unrelated', 'tenant-unrelated', 'building-unrelated');
+      `);
+      await publish(tx, 'liquidation-cascade', 'tenant-cascade', 'building-cascade');
+      await insertCharge(tx, 'charge-cascade', 'liquidation-cascade', 'tenant-cascade', 'building-cascade', 'unit-cascade');
+      await publish(tx, 'liquidation-unrelated', 'tenant-unrelated', 'building-unrelated');
+      await insertCharge(tx, 'charge-unrelated', 'liquidation-unrelated', 'tenant-unrelated', 'building-unrelated', 'unit-unrelated');
+
+      await tx.$executeRawUnsafe(`DELETE /* intentional cascade test */ FROM "Tenant" WHERE "id" = 'tenant-cascade'`);
+
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Liquidation" WHERE "id" = 'liquidation-cascade'`)).toEqual([{ count: 0 }]);
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Charge" WHERE "id" = 'charge-cascade'`)).toEqual([{ count: 0 }]);
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Tenant" WHERE "id" = 'tenant-unrelated'`)).toEqual([{ count: 1 }]);
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Liquidation" WHERE "id" = 'liquidation-unrelated'`)).toEqual([{ count: 1 }]);
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Charge" WHERE "id" = 'charge-unrelated'`)).toEqual([{ count: 1 }]);
+    });
+  });
+
+  it('allows a building cascade to remove a published Liquidation while its tenant remains', async () => {
+    await sandbox(async (tx) => {
+      await publish(tx, 'liquidation-building-cascade');
+
+      await tx.$executeRawUnsafe(`DELETE /* intentional cascade test */ FROM "Building" WHERE "id" = 'building-1'`);
+
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Liquidation" WHERE "id" = 'liquidation-building-cascade'`)).toEqual([{ count: 0 }]);
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Tenant" WHERE "id" = 'tenant-1'`)).toEqual([{ count: 1 }]);
+    });
+  });
+
+  it('rejects an active generated Charge when its Unit is deleted by cascade', async () => {
+    await expect(sandbox(async (tx) => {
+      await insertCharge(tx, 'active-unit-cascade', 'liq-1');
+      await tx.$executeRawUnsafe(`DELETE /* intentional cascade test */ FROM "Unit" WHERE "id" = 'unit-1'`);
+    })).rejects.toThrow('liquidation-generated charges cannot be deleted');
+  });
+
+  it('allows a canceled generated Charge to be removed by a Unit cascade while unrelated data survives', async () => {
+    await sandbox(async (tx) => {
+      await tx.$executeRawUnsafe(`
+        INSERT INTO "Tenant" ("id") VALUES ('tenant-unrelated');
+      `);
+      await tx.$executeRawUnsafe(`
+        INSERT INTO "Building" ("id", "tenantId") VALUES ('building-unrelated', 'tenant-unrelated');
+      `);
+      await tx.$executeRawUnsafe(`
+        INSERT INTO "Unit" ("id", "tenantId", "buildingId") VALUES ('unit-unrelated', 'tenant-unrelated', 'building-unrelated');
+      `);
+      await insertCharge(tx, 'canceled-unit-cascade', 'liq-1', 'tenant-1', 'building-1', 'unit-1', '2026-05-04T00:00:00Z');
+      await insertCharge(tx, 'charge-unrelated', 'liq-2', 'tenant-unrelated', 'building-unrelated', 'unit-unrelated');
+
+      await tx.$executeRawUnsafe(`DELETE /* intentional cascade test */ FROM "Unit" WHERE "id" = 'unit-1'`);
+
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Charge" WHERE "id" = 'canceled-unit-cascade'`)).toEqual([{ count: 0 }]);
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Unit" WHERE "id" = 'unit-unrelated'`)).toEqual([{ count: 1 }]);
+      expect(await tx.$queryRawUnsafe(`SELECT COUNT(*)::int AS "count" FROM "Charge" WHERE "id" = 'charge-unrelated'`)).toEqual([{ count: 1 }]);
+    });
   });
 
   it('rejects legacy integrity promotion, invalid state reversal, and mismatched modern chargePeriod', async () => {

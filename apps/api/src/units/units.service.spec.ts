@@ -679,6 +679,36 @@ describe('UnitsService', () => {
       });
     });
 
+    it('should reject deletion when the unit has active charges', async () => {
+      const tenantId = 'tenant-123';
+      const buildingId = 'building-123';
+      const unitId = 'unit-123';
+      const existingUnit = {
+        id: unitId,
+        buildingId,
+        code: 'A01',
+        label: 'Unit 1A',
+        unitType: 'APARTMENT',
+        occupancyStatus: 'VACANT',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        unitOccupants: [],
+      };
+
+      jest.spyOn(prismaService.building, 'findFirst').mockResolvedValue({ id: buildingId, tenantId } as never);
+      jest.spyOn(prismaService.unit, 'findFirst').mockResolvedValue(existingUnit as never);
+      jest.spyOn(prismaService.charge, 'count').mockResolvedValue(1);
+
+      await expect(service.remove(tenantId, buildingId, unitId, 'user-123')).rejects.toThrow(
+        'No se puede eliminar una unidad con cargos activos. Cancele los cargos primero.',
+      );
+
+      expect(prismaService.charge.count).toHaveBeenCalledWith({
+        where: { tenantId, unitId, canceledAt: null },
+      });
+      expect(prismaService.unit.deleteMany).not.toHaveBeenCalled();
+    });
+
     it('should throw NotFoundException when unit not found', async () => {
       // ARRANGE
       const tenantId = 'tenant-123';
