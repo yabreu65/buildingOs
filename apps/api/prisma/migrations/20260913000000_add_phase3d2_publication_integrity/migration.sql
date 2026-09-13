@@ -53,7 +53,7 @@ BEGIN
     RAISE EXCEPTION 'published liquidations cannot be updated';
   END IF;
 
-  modern := OLD."publicationIntegrityVersion" = 1;
+  modern := COALESCE(OLD."publicationIntegrityVersion" = 1, false);
   IF modern AND (
     NEW."id" IS DISTINCT FROM OLD."id" OR NEW."tenantId" IS DISTINCT FROM OLD."tenantId"
     OR NEW."buildingId" IS DISTINCT FROM OLD."buildingId" OR NEW."period" IS DISTINCT FROM OLD."period"
@@ -100,7 +100,11 @@ BEGIN
 
   IF NEW."status" = 'PUBLISHED' THEN
     IF NOT modern THEN
-      RAISE EXCEPTION 'legacy liquidation drafts cannot be published';
+      IF NEW."publicationSnapshot" IS NULL
+         OR NEW."publicationSnapshot" ->> 'version' NOT IN ('1', '2') THEN
+        RAISE EXCEPTION 'legacy liquidation drafts cannot be published';
+      END IF;
+      RETURN NEW;
     END IF;
     IF NEW."publicationSnapshot" IS NULL OR NEW."publishedAt" IS NULL
        OR NEW."publishedByMembershipId" IS NULL THEN

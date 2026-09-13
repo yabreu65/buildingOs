@@ -562,7 +562,7 @@ async function main() {
     buildingId: buildingA1.id,
     membershipId: adminMembershipA.id,
     period: currentPeriod,
-    chargePeriod: currentPeriod,
+    chargePeriod: "2026-05",
     baseCurrency: currency,
     totalAmountMinor: 500000,
     totalsByCurrency: { ARS: 500000 },
@@ -582,7 +582,7 @@ async function main() {
 
   const expectedTotals = { ARS: 500000 };
   if (liquidationA1.baseCurrency !== currency || liquidationA1.totalAmountMinor !== 500000 ||
-      liquidationA1.unitCount !== unitsA1.length || liquidationA1.chargePeriod !== null && liquidationA1.chargePeriod !== currentPeriod ||
+      liquidationA1.unitCount !== unitsA1.length || liquidationA1.chargePeriod !== null && liquidationA1.chargePeriod !== "2026-05" ||
       JSON.stringify(liquidationA1.totalsByCurrency) !== JSON.stringify(expectedTotals) ||
       !Array.isArray(liquidationA1.expenseSnapshot) ||
       liquidationA1.expenseSnapshot.length !== 1) {
