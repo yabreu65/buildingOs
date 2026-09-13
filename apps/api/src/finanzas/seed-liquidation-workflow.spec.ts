@@ -13,6 +13,7 @@ describe('ensureSeedPublishedLiquidation', () => {
     type: 'EXPENSE',
     scopeType: 'BUILDING',
     unitGroupId: null,
+  recipientUnitIds: ['unit-1', 'unit-2'],
   }];
 
   const publishedExpenseSnapshot = [{

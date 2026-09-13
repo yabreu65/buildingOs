@@ -1655,8 +1655,8 @@ function assertFrozenDistributionMatchesExpenseSources(
       source.scopeType !== movement.scope ||
       (source.unitGroupId ?? null) !== movement.unitGroupId ||
       ((source.scopeType === 'UNIT_GROUP' || source.scopeType === 'BUILDING' || source.scopeType === 'ADJUSTMENT') &&
-        source.recipientUnitIds !== undefined &&
-        source.recipientUnitIds.join('|') !== [...movement.recipientUnitIds].sort().join('|')) ||
+        (source.recipientUnitIds === undefined ||
+          source.recipientUnitIds.join('|') !== [...movement.recipientUnitIds].sort().join('|'))) ||
       expectedMovement?.amountMinor !== movement.amountMinor
     ) {
       invalidFrozenSource();

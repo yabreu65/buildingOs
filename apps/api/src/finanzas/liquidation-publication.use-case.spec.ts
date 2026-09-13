@@ -34,6 +34,7 @@ const baseLiquidation = {
       type: 'EXPENSE',
       scopeType: 'BUILDING',
       unitGroupId: null,
+      recipientUnitIds: ['unit-1', 'unit-2'],
     },
   ],
   unitCount: 2,
@@ -284,7 +285,7 @@ it('fails closed when a frozen UNIT_GROUP movement is retagged as BUILDING', asy
   expect(tx.charge.createMany).not.toHaveBeenCalled();
 });
 
-it('publishes a legacy UNIT_GROUP distribution without source recipient evidence', async () => {
+it('rejects an authoritative UNIT_GROUP distribution without source recipient evidence', async () => {
       const frozenDistribution = distributeLiquidationMovements({
         tenantId: 'tenant-1',
         buildingId: 'building-1',
@@ -313,17 +314,15 @@ it('publishes a legacy UNIT_GROUP distribution without source recipient evidence
         .mockResolvedValueOnce({ ...baseLiquidation, status: 'PUBLISHED' });
       tx.unit.findMany.mockResolvedValueOnce([{ id: 'unit-1' }]);
 
-      const result = await useCase.execute('tenant-1', 'liq-1', 'member-1', {
+      await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
         dueDate: '2026-06-10',
+      })).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID' },
       });
-
-      expect(result.status).toBe('PUBLISHED');
-      expect(tx.charge.createMany).toHaveBeenCalledWith(expect.objectContaining({
-        data: [expect.objectContaining({ unitId: 'unit-1', amount: 101 })],
-      }));
+      expect(tx.charge.createMany).not.toHaveBeenCalled();
     });
 
-it('publishes a legacy BUILDING distribution without source recipient evidence', async () => {
+it('rejects an authoritative BUILDING distribution without source recipient evidence', async () => {
       const frozenDistribution = distributeLiquidationMovements({
         tenantId: 'tenant-1',
         buildingId: 'building-1',
@@ -343,14 +342,12 @@ it('publishes a legacy BUILDING distribution without source recipient evidence',
         .mockResolvedValueOnce({ ...baseLiquidation, status: 'PUBLISHED' });
       tx.unit.findMany.mockResolvedValueOnce([{ id: 'unit-1' }]);
 
-      const result = await useCase.execute('tenant-1', 'liq-1', 'member-1', {
+      await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
         dueDate: '2026-06-10',
+      })).rejects.toMatchObject({
+        response: { statusCode: 422, error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID' },
       });
-
-      expect(result.status).toBe('PUBLISHED');
-      expect(tx.charge.createMany).toHaveBeenCalledWith(expect.objectContaining({
-        data: [expect.objectContaining({ unitId: 'unit-1', amount: 101 })],
-      }));
+      expect(tx.charge.createMany).not.toHaveBeenCalled();
     });
 
     it('rejects same-building BUILDING recipient substitutions against frozen source evidence', async () => {
@@ -654,6 +651,7 @@ it('rejects publication when status is not REVIEWED', async () => {
           type: 'EXPENSE',
           scopeType: 'BUILDING',
           unitGroupId: null,
+          recipientUnitIds: ['unit-1'],
           functionalAmountMinor: 36500,
           functionalCurrencyCode: 'VES',
           exchangeRateId: 'rate-1',
@@ -673,6 +671,7 @@ it('rejects publication when status is not REVIEWED', async () => {
           type: 'ADJUSTMENT',
           scopeType: 'ADJUSTMENT',
           unitGroupId: null,
+          recipientUnitIds: ['unit-1'],
           sourcePeriod: '2026-08',
           functionalAmountMinor: 125,
           functionalCurrencyCode: 'VES',
@@ -864,6 +863,7 @@ it('rejects publication when status is not REVIEWED', async () => {
           type: 'EXPENSE',
           scopeType: 'BUILDING',
           unitGroupId: null,
+          recipientUnitIds: ['unit-1', 'unit-2'],
         },
       ],
       grossExpenseAmountMinor: 10000,
@@ -997,6 +997,7 @@ it('rejects publication when status is not REVIEWED', async () => {
             amountMinor: 50,
             scopeType: 'BUILDING',
             unitGroupId: null,
+            recipientUnitIds: ['unit-1'],
           },
           {
             expenseId: 'exp-2',
@@ -1009,6 +1010,7 @@ it('rejects publication when status is not REVIEWED', async () => {
             type: 'EXPENSE',
             scopeType: 'BUILDING',
             unitGroupId: null,
+            recipientUnitIds: ['unit-2'],
           },
         ],
         grossExpenseAmountMinor: 101,
