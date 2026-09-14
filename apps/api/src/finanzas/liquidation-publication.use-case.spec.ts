@@ -6,10 +6,27 @@ import {
 import { Prisma } from '@prisma/client';
 import {
   LiquidationPublicationUseCase,
+  calculateLegacyFixtureDistribution,
   sendChargePublishedNotifications,
   type LiquidationWorkflowDependencies,
 } from './liquidation-publication.use-case';
 import { distributeLiquidationMovements } from './liquidation-distribution';
+
+describe('calculateLegacyFixtureDistribution', () => {
+  it('preserves largest-remainder allocation for historical liquidations', () => {
+    const distribution = calculateLegacyFixtureDistribution(
+      [
+        { id: 'unit-a', code: 'A', label: null, unitCategory: { id: 'cat-a', coefficient: 3 } },
+        { id: 'unit-b', code: 'B', label: null, unitCategory: { id: 'cat-b', coefficient: 1 } },
+        { id: 'unit-c', code: 'C', label: null, unitCategory: { id: 'cat-c', coefficient: 1 } },
+      ],
+      4,
+      'building-1',
+    );
+
+    expect(distribution.map((item) => item.amountMinor)).toEqual([2, 1, 1]);
+  });
+});
 
 const baseLiquidation = {
   id: 'liq-1',

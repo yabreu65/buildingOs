@@ -1311,7 +1311,7 @@ export class LiquidationPublicationUseCase {
   }
 }
 
-function calculateLegacyFixtureDistribution(
+export function calculateLegacyFixtureDistribution(
   units: Array<{
     id: string;
     code: string;
@@ -1331,17 +1331,50 @@ function calculateLegacyFixtureDistribution(
       : 1),
     0,
   );
-  const baseAllocations = units.map((unit) => {
+  if (totalWeight <= 0) {
+    throw new BadRequestException(`Invalid unit coefficients for building ${buildingId}`);
+  }
+
+  const roundedAllocations = units.map((unit, index) => {
     const weight = unit.unitCategory?.coefficient && unit.unitCategory.coefficient > 0
       ? unit.unitCategory.coefficient
       : 1;
-    return Math.floor((totalAmountMinor * weight) / totalWeight);
+    const rawAmount = (totalAmountMinor * weight) / totalWeight;
+    return {
+      unitId: unit.id,
+      unitCode: unit.code,
+      unitLabel: unit.label,
+      amountMinor: Math.floor(rawAmount),
+      fractionalRemainder: rawAmount - Math.floor(rawAmount),
+      index,
+    };
   });
-  let remainder = totalAmountMinor - baseAllocations.reduce((sum, amount) => sum + amount, 0);
-  return units.map((unit, index) => {
-    const amountMinor = (baseAllocations[index] ?? 0) + (remainder-- > 0 ? 1 : 0);
-    return { unitId: unit.id, unitCode: unit.code, unitLabel: unit.label, amountMinor };
-  });
+  let remainder = totalAmountMinor - roundedAllocations.reduce((sum, item) => sum + item.amountMinor, 0);
+
+  roundedAllocations
+    .sort((left, right) => right.fractionalRemainder - left.fractionalRemainder || left.index - right.index)
+    .forEach((item) => {
+      if (remainder > 0) {
+        item.amountMinor += 1;
+        remainder -= 1;
+      }
+    });
+
+  const allocatedTotal = roundedAllocations.reduce((sum, item) => sum + item.amountMinor, 0);
+  if (allocatedTotal !== totalAmountMinor) {
+    throw new BadRequestException(
+      `Distribution total ${allocatedTotal} does not match liquidation total ${totalAmountMinor}`,
+    );
+  }
+
+  return roundedAllocations
+    .sort((left, right) => left.unitCode.localeCompare(right.unitCode))
+    .map(({ unitId, unitCode, unitLabel, amountMinor }) => ({
+      unitId,
+      unitCode,
+      unitLabel,
+      amountMinor,
+    }));
 }
 
 function isCanonicalMonth(value: string | null): value is string {
