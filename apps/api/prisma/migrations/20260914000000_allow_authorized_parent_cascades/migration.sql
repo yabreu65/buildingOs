@@ -9,6 +9,9 @@ DECLARE
   snapshotDueDate timestamptz;
   allocationTotal bigint;
   expenseTotalsByCurrency jsonb;
+  expenseSourceEvidence jsonb;
+  publicationExpenseEvidence jsonb;
+  functionalExpenseTotal bigint;
   allocationChargeEvidence jsonb;
   generatedChargeEvidence jsonb;
 BEGIN
@@ -166,9 +169,54 @@ BEGIN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END IF;
 
+    IF NEW."valuationMode" = 'FUNCTIONAL' AND EXISTS (
+         SELECT 1
+         FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense
+         WHERE jsonb_typeof(expense -> 'functionalAmountMinor') IS DISTINCT FROM 'number'
+            OR expense ->> 'functionalAmountMinor' !~ '^(0|[1-9][0-9]*)$'
+            OR jsonb_typeof(expense -> 'functionalCurrencyCode') IS DISTINCT FROM 'string'
+            OR btrim(expense ->> 'functionalCurrencyCode') = ''
+            OR expense ->> 'functionalCurrencyCode' IS DISTINCT FROM NEW."baseCurrency"
+            OR (
+              jsonb_typeof(expense -> 'exchangeRateValue') IS DISTINCT FROM 'string'
+              AND jsonb_typeof(expense -> 'exchangeRateValue') IS DISTINCT FROM 'number'
+            )
+            OR btrim(expense ->> 'exchangeRateValue') = ''
+            OR expense ->> 'exchangeRateValue' !~ '^(0|[1-9][0-9]*)(\.[0-9]+)?$'
+            OR jsonb_typeof(expense -> 'exchangeRateDirection') IS DISTINCT FROM 'string'
+            OR expense ->> 'exchangeRateDirection' NOT IN ('IDENTITY', 'DIRECT', 'INVERSE')
+            OR jsonb_typeof(expense -> 'conversionDate') IS DISTINCT FROM 'string'
+            OR (
+              expense ->> 'exchangeRateDirection' = 'IDENTITY' AND (
+                (expense ->> 'exchangeRateValue')::numeric <> 1
+                OR jsonb_typeof(expense -> 'exchangeRateId') IS DISTINCT FROM 'null'
+                OR jsonb_typeof(expense -> 'exchangeRateEffectiveAt') IS DISTINCT FROM 'null'
+              )
+            )
+            OR (
+              expense ->> 'exchangeRateDirection' IN ('DIRECT', 'INVERSE') AND (
+                (expense ->> 'exchangeRateValue')::numeric <= 0
+                OR jsonb_typeof(expense -> 'exchangeRateId') IS DISTINCT FROM 'string'
+                OR btrim(expense ->> 'exchangeRateId') = ''
+                OR jsonb_typeof(expense -> 'exchangeRateEffectiveAt') IS DISTINCT FROM 'string'
+              )
+            )
+       ) THEN
+      RAISE EXCEPTION 'modern functional liquidation publication requires complete FX evidence';
+    END IF;
+
     BEGIN
       PERFORM (expense ->> 'invoiceDate')::timestamptz
       FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense;
+
+      IF NEW."valuationMode" = 'FUNCTIONAL' THEN
+        PERFORM (expense ->> 'conversionDate')::timestamptz
+        FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense;
+
+        PERFORM (expense ->> 'exchangeRateEffectiveAt')::timestamptz
+        FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense
+        WHERE expense ->> 'exchangeRateDirection' IN ('DIRECT', 'INVERSE');
+      END IF;
 
       PERFORM 1
       FROM jsonb_each(NEW."publicationSnapshot" -> 'totalsByCurrency') AS total(currencyCode, amount)
@@ -187,6 +235,68 @@ BEGIN
         FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense
         GROUP BY expense ->> 'currencyCode'
       ) AS expenseTotals;
+
+      IF NEW."valuationMode" = 'FUNCTIONAL' THEN
+        SELECT COALESCE(SUM((expense ->> 'functionalAmountMinor')::bigint), 0)
+        INTO functionalExpenseTotal
+        FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense;
+      END IF;
+
+      SELECT COALESCE(
+        jsonb_agg(
+          jsonb_build_object(
+            'expenseId', expense -> 'expenseId',
+            'categoryName', expense -> 'categoryName',
+            'vendorName', expense -> 'vendorName',
+            'amountMinor', expense -> 'amountMinor',
+            'currencyCode', expense -> 'currencyCode',
+            'invoiceDate', expense -> 'invoiceDate',
+            'description', expense -> 'description',
+            'type', expense -> 'type'
+          ) || jsonb_strip_nulls(jsonb_build_object(
+            'sourcePeriod', expense -> 'sourcePeriod',
+            'functionalAmountMinor', expense -> 'functionalAmountMinor',
+            'functionalCurrencyCode', expense -> 'functionalCurrencyCode',
+            'exchangeRateId', expense -> 'exchangeRateId',
+            'exchangeRateValue', to_jsonb(expense ->> 'exchangeRateValue'),
+            'exchangeRateDirection', expense -> 'exchangeRateDirection',
+            'exchangeRateEffectiveAt', expense -> 'exchangeRateEffectiveAt',
+            'conversionDate', expense -> 'conversionDate'
+          ))
+          ORDER BY expense ->> 'expenseId', expense::text
+        ),
+        '[]'::jsonb
+      )
+      INTO publicationExpenseEvidence
+      FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense;
+
+      SELECT COALESCE(
+        jsonb_agg(
+          jsonb_build_object(
+            'expenseId', expense -> 'expenseId',
+            'categoryName', expense -> 'categoryName',
+            'vendorName', expense -> 'vendorName',
+            'amountMinor', expense -> 'amountMinor',
+            'currencyCode', expense -> 'currencyCode',
+            'invoiceDate', expense -> 'invoiceDate',
+            'description', expense -> 'description',
+            'type', expense -> 'type'
+          ) || jsonb_strip_nulls(jsonb_build_object(
+            'sourcePeriod', expense -> 'sourcePeriod',
+            'functionalAmountMinor', expense -> 'functionalAmountMinor',
+            'functionalCurrencyCode', expense -> 'functionalCurrencyCode',
+            'exchangeRateId', expense -> 'exchangeRateId',
+            'exchangeRateValue', to_jsonb(expense ->> 'exchangeRateValue'),
+            'exchangeRateDirection', expense -> 'exchangeRateDirection',
+            'exchangeRateEffectiveAt', expense -> 'exchangeRateEffectiveAt',
+            'conversionDate', expense -> 'conversionDate'
+          ))
+          ORDER BY expense ->> 'expenseId', expense::text
+        ),
+        '[]'::jsonb
+      )
+      INTO expenseSourceEvidence
+      FROM jsonb_array_elements(NEW."expenseSnapshot") AS expense;
     EXCEPTION WHEN others THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END;
@@ -204,6 +314,12 @@ BEGIN
          LEFT JOIN jsonb_each(NEW."publicationSnapshot" -> 'totalsByCurrency') AS declared(currencyCode, amount)
            USING (currencyCode)
          WHERE declared.currencyCode IS NULL
+       ) OR expenseSourceEvidence IS DISTINCT FROM publicationExpenseEvidence
+       OR (
+         NEW."valuationMode" = 'FUNCTIONAL'
+         AND functionalExpenseTotal IS DISTINCT FROM COALESCE(
+           NEW."preIncomeAmountMinor", NEW."totalAmountMinor"
+         )
        ) THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END IF;
@@ -213,9 +329,24 @@ BEGIN
          SELECT 1
          FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'allocations') AS allocation
          WHERE jsonb_typeof(allocation -> 'unitId') IS DISTINCT FROM 'string'
-            OR allocation ->> 'unitId' = ''
+            OR btrim(allocation ->> 'unitId') = ''
+            OR jsonb_typeof(allocation -> 'unitCode') IS DISTINCT FROM 'string'
+            OR btrim(allocation ->> 'unitCode') = ''
+            OR (
+              jsonb_typeof(allocation -> 'unitLabel') IS DISTINCT FROM 'null'
+              AND jsonb_typeof(allocation -> 'unitLabel') IS DISTINCT FROM 'string'
+            )
             OR jsonb_typeof(allocation -> 'amountMinor') IS DISTINCT FROM 'number'
             OR allocation ->> 'amountMinor' !~ '^(0|[1-9][0-9]*)$'
+            OR NOT EXISTS (
+              SELECT 1
+              FROM "Unit" unit
+              WHERE unit."id" = allocation ->> 'unitId'
+                AND unit."tenantId" = NEW."tenantId"
+                AND unit."buildingId" = NEW."buildingId"
+                AND unit."code" = allocation ->> 'unitCode'
+                AND unit."label" IS NOT DISTINCT FROM allocation ->> 'unitLabel'
+            )
        ) THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END IF;
