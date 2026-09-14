@@ -51,6 +51,10 @@ reject_dirty_tree() {
   fi
 }
 
+if ! command -v gga >/dev/null 2>&1; then
+  external_blocker 'GGA CLI is unavailable; install gga and rerun the exact-head gate'
+fi
+
 provider="${GGA_PROVIDER:-}"
 if [[ -z "$provider" ]]; then
   if command -v codex >/dev/null 2>&1; then

@@ -124,6 +124,20 @@ run_gga_rejection_case() {
 make_fake_gga "$TEMP_ROOT/fake-bin"
 make_fake_npm "$TEMP_ROOT/fake-bin"
 
+missing_gga_bin="$TEMP_ROOT/missing-gga-bin"
+mkdir -p "$missing_gga_bin"
+ln -s "$(command -v dirname)" "$missing_gga_bin/dirname"
+missing_gga_repository="$(setup_repository missing-gga)"
+if GGA_PROVIDER=fake PATH="$missing_gga_bin" /bin/bash "$missing_gga_repository/scripts/quality/gga-pr-gate.sh" \
+  >"$TEMP_ROOT/missing-gga-output" 2>&1; then
+  fail 'GGA gate unexpectedly passed without the gga CLI'
+fi
+grep -F 'EXTERNAL_BLOCKER: GGA CLI is unavailable' "$TEMP_ROOT/missing-gga-output" >/dev/null ||
+  fail 'missing gga CLI was not classified as EXTERNAL_BLOCKER'
+if grep -F '+ gga run --pr-mode --no-cache' "$TEMP_ROOT/missing-gga-output" >/dev/null; then
+  fail 'GGA gate attempted review execution without the gga CLI'
+fi
+
 dirty_repository="$(setup_repository dirty)"
 printf 'tracked change\n' >> "$dirty_repository/README.md"
 run_gga_rejection_case "$dirty_repository" "$TEMP_ROOT/dirty-invoked" "$TEMP_ROOT/dirty-output"
