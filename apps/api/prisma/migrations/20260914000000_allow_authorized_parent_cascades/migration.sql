@@ -6,6 +6,9 @@ AS $$
 DECLARE
   modern boolean;
   snapshotPublishedAt timestamptz;
+  allocationTotal bigint;
+  allocationChargeEvidence jsonb;
+  generatedChargeEvidence jsonb;
 BEGIN
   IF TG_OP = 'DELETE' THEN
     IF OLD."status" = 'PUBLISHED' THEN
@@ -112,7 +115,7 @@ BEGIN
        OR NEW."publicationSnapshot" ->> 'period' IS DISTINCT FROM NEW."period"
        OR NEW."publicationSnapshot" ->> 'chargePeriod' IS DISTINCT FROM NEW."chargePeriod"
        OR NEW."publicationSnapshot" -> 'publicationIntegrityVersion' IS DISTINCT FROM '1'::jsonb
-       OR NEW."publicationSnapshot" ->> 'valuationMode' IS DISTINCT FROM NEW."valuationMode"
+       OR NEW."publicationSnapshot" ->> 'valuationMode' IS DISTINCT FROM NEW."valuationMode"::text
        OR NEW."publicationSnapshot" ->> 'baseCurrency' IS DISTINCT FROM NEW."baseCurrency"
        OR NEW."publicationSnapshot" -> 'totalAmountMinor' IS DISTINCT FROM to_jsonb(NEW."totalAmountMinor")
        OR NEW."publicationSnapshot" -> 'totalsByCurrency' IS DISTINCT FROM NEW."totalsByCurrency"
@@ -132,6 +135,55 @@ BEGIN
     END;
 
     IF snapshotPublishedAt IS DISTINCT FROM NEW."publishedAt" THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END IF;
+
+    IF jsonb_array_length(NEW."publicationSnapshot" -> 'allocations') = 0
+       OR EXISTS (
+         SELECT 1
+         FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'allocations') AS allocation
+         WHERE jsonb_typeof(allocation -> 'unitId') IS DISTINCT FROM 'string'
+            OR allocation ->> 'unitId' = ''
+            OR jsonb_typeof(allocation -> 'amountMinor') IS DISTINCT FROM 'number'
+            OR allocation ->> 'amountMinor' !~ '^(0|[1-9][0-9]*)$'
+       ) THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END IF;
+
+    BEGIN
+      SELECT COALESCE(SUM((allocation ->> 'amountMinor')::bigint), 0)
+      INTO allocationTotal
+      FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'allocations') AS allocation;
+
+      SELECT COALESCE(
+        jsonb_agg(
+          jsonb_build_object(
+            'unitId', allocation ->> 'unitId',
+            'amountMinor', (allocation ->> 'amountMinor')::bigint
+          )
+          ORDER BY allocation ->> 'unitId', (allocation ->> 'amountMinor')::bigint
+        ) FILTER (WHERE (allocation ->> 'amountMinor')::bigint > 0),
+        '[]'::jsonb
+      )
+      INTO allocationChargeEvidence
+      FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'allocations') AS allocation;
+
+      SELECT COALESCE(
+        jsonb_agg(
+          jsonb_build_object('unitId', "unitId", 'amountMinor', "amount")
+          ORDER BY "unitId", "amount"
+        ),
+        '[]'::jsonb
+      )
+      INTO generatedChargeEvidence
+      FROM "Charge"
+      WHERE "liquidationId" = NEW."id";
+    EXCEPTION WHEN others THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END;
+
+    IF allocationTotal IS DISTINCT FROM NEW."totalAmountMinor"
+       OR allocationChargeEvidence IS DISTINCT FROM generatedChargeEvidence THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END IF;
 
@@ -209,7 +261,16 @@ BEGIN
      OR NEW."type" IS DISTINCT FROM OLD."type" OR NEW."concept" IS DISTINCT FROM OLD."concept"
      OR NEW."amount" IS DISTINCT FROM OLD."amount" OR NEW."currency" IS DISTINCT FROM OLD."currency"
      OR NEW."dueDate" IS DISTINCT FROM OLD."dueDate" OR NEW."liquidationId" IS DISTINCT FROM OLD."liquidationId"
-     OR NEW."createdByMembershipId" IS DISTINCT FROM OLD."createdByMembershipId"
+     OR (
+           NEW."createdByMembershipId" IS DISTINCT FROM OLD."createdByMembershipId"
+           AND NOT (
+             NEW."createdByMembershipId" IS NULL
+             AND OLD."createdByMembershipId" IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM "Membership" WHERE "id" = OLD."createdByMembershipId"
+             )
+           )
+         )
      OR NEW."periodId" IS DISTINCT FROM OLD."periodId"
      OR NEW."coefficientSnapshot" IS DISTINCT FROM OLD."coefficientSnapshot"
      OR NEW."sumCoefSnapshot" IS DISTINCT FROM OLD."sumCoefSnapshot"

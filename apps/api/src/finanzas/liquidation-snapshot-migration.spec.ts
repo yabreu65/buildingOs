@@ -306,7 +306,10 @@ describe('authorized parent cascade trigger migration preflight', () => {
     expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence'");
     expect(liquidationTriggerSql).toContain("NEW.\"publicationSnapshot\" ->> 'liquidationId' IS DISTINCT FROM NEW.\"id\"");
     expect(liquidationTriggerSql).toContain("NEW.\"publicationSnapshot\" -> 'incomeOffsets' IS DISTINCT FROM NEW.\"incomeOffsetSnapshot\"");
-    expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charge economic origin is immutable'");
+    expect(liquidationTriggerSql).toContain('jsonb_array_elements(NEW."publicationSnapshot" -> \'allocations\')');
+        expect(liquidationTriggerSql).toContain('FROM "Charge"');
+        expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charge economic origin is immutable'");
+        expect(chargeTriggerSql).toContain('FROM "Membership" WHERE "id" = OLD."createdByMembershipId"');
     expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'manual charges cannot acquire liquidationId'");
     expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charges cannot be deleted'");
     expect(chargeTriggerSql).toContain('OLD."canceledAt" IS NOT NULL');
@@ -337,7 +340,12 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
       "buildingId" TEXT NOT NULL REFERENCES "Building" ("id") ON DELETE CASCADE
     ) ON COMMIT DROP;
   `;
-  const liquidationTableSql = `
+  const membershipTableSql = `
+        CREATE TEMP TABLE "Membership" (
+          "id" TEXT PRIMARY KEY
+        ) ON COMMIT DROP;
+      `;
+      const liquidationTableSql = `
     CREATE TEMP TABLE "Liquidation" (
       "id" TEXT PRIMARY KEY, "tenantId" TEXT NOT NULL REFERENCES "Tenant" ("id") ON DELETE CASCADE, "buildingId" TEXT NOT NULL REFERENCES "Building" ("id") ON DELETE CASCADE, "period" TEXT NOT NULL,
       "chargePeriod" TEXT, "status" TEXT NOT NULL, "publicationIntegrityVersion" INTEGER, "valuationMode" TEXT,
@@ -357,7 +365,7 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
       "period" TEXT NOT NULL, "chargePeriod" TEXT, "type" TEXT NOT NULL, "concept" TEXT NOT NULL,
       "amount" BIGINT NOT NULL, "remainingAmount" BIGINT NOT NULL, "currency" TEXT NOT NULL,
       "dueDate" TIMESTAMPTZ NOT NULL, "status" TEXT NOT NULL, "liquidationId" TEXT,
-      "createdByMembershipId" TEXT, "periodId" TEXT, "coefficientSnapshot" JSONB, "sumCoefSnapshot" BIGINT,
+      "createdByMembershipId" TEXT REFERENCES "Membership" ("id") ON DELETE SET NULL, "periodId" TEXT, "coefficientSnapshot" JSONB, "sumCoefSnapshot" BIGINT,
       "totalToAllocateSnapshot" BIGINT, "categorySnapshotId" TEXT, "canceledAt" TIMESTAMPTZ,
       "createdAt" TIMESTAMPTZ NOT NULL, "updatedAt" TIMESTAMPTZ NOT NULL
     ) ON COMMIT DROP;
@@ -384,6 +392,7 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
       await tx.$executeRawUnsafe(tenantTableSql);
       await tx.$executeRawUnsafe(buildingTableSql);
       await tx.$executeRawUnsafe(unitTableSql);
+          await tx.$executeRawUnsafe(membershipTableSql);
       await tx.$executeRawUnsafe(liquidationTableSql);
       await tx.$executeRawUnsafe(chargeTableSql);
       await tx.$executeRawUnsafe(`
@@ -395,7 +404,10 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
       await tx.$executeRawUnsafe(`
         INSERT INTO "Unit" ("id", "tenantId", "buildingId") VALUES ('unit-1', 'tenant-1', 'building-1');
       `);
-      await tx.$executeRawUnsafe(liquidationTriggerSql);
+      await tx.$executeRawUnsafe(`
+            INSERT INTO "Membership" ("id") VALUES ('member-1');
+          `);
+          await tx.$executeRawUnsafe(liquidationTriggerSql);
       await tx.$executeRawUnsafe(chargeTriggerSql);
       await tx.$executeRawUnsafe(`
         CREATE TRIGGER "Liquidation_publication_integrity" BEFORE INSERT OR UPDATE OR DELETE ON "Liquidation" FOR EACH ROW EXECUTE FUNCTION enforce_liquidation_publication_integrity();
@@ -466,7 +478,8 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
   ): Promise<void> {
     await insertLiquidation(tx, id, tenantId, buildingId);
     await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = '${id}'`);
-    const publicationSnapshot = completeV4PublicationSnapshot(id, tenantId, buildingId);
+    await insertCharge(tx, `charge-${id}`, id, tenantId, buildingId);
+        const publicationSnapshot = completeV4PublicationSnapshot(id, tenantId, buildingId);
     await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = '${id}'`);
   }
   async function insertCharge(
@@ -477,12 +490,13 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     buildingId = 'building-1',
     unitId = 'unit-1',
     canceledAt: string | null = null,
+        amount = 100,
   ): Promise<void> {
     const liquidationValue = liquidationId === null ? 'NULL' : `'${liquidationId}'`;
     const canceledAtValue = canceledAt === null ? 'NULL' : `'${canceledAt}'`;
     await tx.$executeRawUnsafe(`
       INSERT INTO "Charge" ("id", "tenantId", "buildingId", "unitId", "period", "chargePeriod", "type", "concept", "amount", "remainingAmount", "currency", "dueDate", "status", "liquidationId", "createdByMembershipId", "periodId", "coefficientSnapshot", "sumCoefSnapshot", "totalToAllocateSnapshot", "categorySnapshotId", "canceledAt", "createdAt", "updatedAt")
-      VALUES ('${id}', '${tenantId}', '${buildingId}', '${unitId}', '2026-05', '2026-06', 'EXPENSE', 'Monthly liquidation', 100, 100, 'ARS', '2026-06-10T00:00:00Z', 'PENDING', ${liquidationValue}, 'member-1', 'period-1', '{"coefficient":1}', 1, 100, 'category-1', ${canceledAtValue}, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
+      VALUES ('${id}', '${tenantId}', '${buildingId}', '${unitId}', '2026-05', '2026-06', 'EXPENSE', 'Monthly liquidation', ${amount}, ${amount}, 'ARS', '2026-06-10T00:00:00Z', 'PENDING', ${liquidationValue}, 'member-1', 'period-1', '{"coefficient":1}', 1, 100, 'category-1', ${canceledAtValue}, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
     `);
   }
 
@@ -604,7 +618,40 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     });
   });
 
-  it('rejects modern V2 publication snapshots', async () => {
+  it('requires non-empty allocations reconciled to the total and generated Charges for modern V4 publication', async () => {
+        await expect(sandbox(async (tx) => {
+          await insertLiquidation(tx, 'modern-empty-allocations');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-empty-allocations'`);
+          await insertCharge(tx, 'charge-modern-empty-allocations', 'modern-empty-allocations');
+          const publicationSnapshot = completeV4PublicationSnapshot('modern-empty-allocations', 'tenant-1', 'building-1')
+            .replace('"allocations":[{"unitId":"unit-1","unitCode":"1","unitLabel":null,"amountMinor":100}]', '"allocations":[]');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-empty-allocations'`);
+        })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+        await expect(sandbox(async (tx) => {
+          await insertLiquidation(tx, 'modern-mismatched-allocations');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-mismatched-allocations'`);
+          await insertCharge(tx, 'charge-modern-mismatched-allocations', 'modern-mismatched-allocations');
+          const publicationSnapshot = completeV4PublicationSnapshot('modern-mismatched-allocations', 'tenant-1', 'building-1')
+            .replace('"unitLabel":null,"amountMinor":100', '"unitLabel":null,"amountMinor":99');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-mismatched-allocations'`);
+        })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+        await expect(sandbox(async (tx) => {
+          await insertLiquidation(tx, 'modern-mismatched-charges');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-mismatched-charges'`);
+          await insertCharge(tx, 'charge-modern-mismatched-charges', 'modern-mismatched-charges', 'tenant-1', 'building-1', 'unit-1', null, 99);
+          const publicationSnapshot = completeV4PublicationSnapshot('modern-mismatched-charges', 'tenant-1', 'building-1');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-mismatched-charges'`);
+        })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+        await sandbox(async (tx) => {
+          await publish(tx, 'modern-matching-allocations');
+          expect(await tx.$queryRawUnsafe(`SELECT "status" FROM "Liquidation" WHERE "id" = 'modern-matching-allocations'`)).toEqual([{ status: 'PUBLISHED' }]);
+        });
+      });
+
+      it('rejects modern V2 publication snapshots', async () => {
     await expect(sandbox(async (tx) => {
       await insertLiquidation(tx, 'modern-v2');
       await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-v2'`);
@@ -622,7 +669,20 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     });
   });
 
-  it('allows manual Charges with null liquidationId to be mutable and deletable', async () => {
+  it('allows a Membership FK ON DELETE SET NULL on generated Charges but rejects direct provenance changes', async () => {
+        await expect(sandbox(async (tx) => {
+          await insertCharge(tx, 'generated-membership-direct-change', 'liq-1');
+          await tx.$executeRawUnsafe(`UPDATE "Charge" SET "createdByMembershipId" = NULL WHERE "id" = 'generated-membership-direct-change'`);
+        })).rejects.toThrow('liquidation-generated charge economic origin is immutable');
+
+        await sandbox(async (tx) => {
+          await insertCharge(tx, 'generated-membership-cascade', 'liq-1');
+          await tx.$executeRawUnsafe(`DELETE /* intentional FK action test */ FROM "Membership" WHERE "id" = 'member-1'`);
+          expect(await tx.$queryRawUnsafe(`SELECT "createdByMembershipId" FROM "Charge" WHERE "id" = 'generated-membership-cascade'`)).toEqual([{ createdByMembershipId: null }]);
+        });
+      });
+
+      it('allows manual Charges with null liquidationId to be mutable and deletable', async () => {
     await sandbox(async (tx) => {
       await insertCharge(tx, 'manual', null);
       await tx.$executeRawUnsafe(`UPDATE "Charge" SET "amount" = 101 WHERE "id" = 'manual'`);
