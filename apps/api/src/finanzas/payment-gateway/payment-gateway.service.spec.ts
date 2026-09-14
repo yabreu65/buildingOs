@@ -384,6 +384,45 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
     });
   });
 
+  describe('canceled charges', () => {
+    it('leaves a PAID webhook for a locked/reloaded canceled charge unprocessed without financial mutation', async () => {
+      const reservation = {
+        chargeId: 'charge-1',
+        amount: 10000,
+        paymentOriginalAmountMinor: 10000,
+        charge: { currency: 'ARS', status: 'PENDING' },
+      };
+      currentPayment = payment({
+        ...completePaymentSnapshot,
+        paymentAllocations: [reservation],
+      });
+      const paymentBefore = {
+        ...currentPayment,
+        paymentAllocations: [...currentPayment.paymentAllocations],
+      };
+      mockPrisma.charge.findFirst
+        .mockResolvedValueOnce(charge())
+        .mockResolvedValueOnce(charge({
+          canceledAt: new Date('2026-08-11T00:00:00.000Z'),
+          status: 'CANCELLED',
+          paymentAllocations: [{
+            amount: 10000,
+            payment: { id: 'payment-1', status: 'SUBMITTED' },
+          }],
+        }));
+
+      const result = await run(paidEvent());
+
+      expect(result.chargeUpdated).toBe(false);
+      expect(currentPayment).toEqual(paymentBefore);
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+      expect(mockPrisma.processedWebhookEvent.create).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.cacheProcessed).not.toHaveBeenCalled();
+    });
+  });
+
   describe('tenant isolation', () => {
     it('matches the local payment tenant-scoped by reference', async () => {
       await run(paidEvent());
