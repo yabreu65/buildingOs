@@ -997,6 +997,7 @@ it('guards included adjustments and preserves the existing empty behavior', asyn
         period: '2026-05',
         liquidationId: 'liq-1',
         concept: 'Expensas comunes 2026-05',
+        type: 'COMMON_EXPENSE',
       },
       {
         unitId: 'unit-2',
@@ -1007,6 +1008,7 @@ it('guards included adjustments and preserves the existing empty behavior', asyn
         period: '2026-05',
         liquidationId: 'liq-1',
         concept: 'Expensas comunes 2026-05',
+        type: 'COMMON_EXPENSE',
       },
     ]);
     tx.liquidation.findFirst
