@@ -274,6 +274,32 @@ const parentCascadeMigrationSql = readFileSync(
   join(__dirname, '../../prisma/migrations/20260914000000_allow_authorized_parent_cascades/migration.sql'),
   'utf8',
 );
+const distributionIntegrityMigrationSql = readFileSync(
+  join(__dirname, '../../prisma/migrations/20260916000000_harden_phase3d2_distribution_integrity/migration.sql'),
+  'utf8',
+);
+
+function extractDollarQuotedStatement(sql: string, startText: string): string {
+  const start = sql.indexOf(startText);
+  const end = sql.indexOf('$$;', start);
+  return start >= 0 && end > start ? sql.slice(start, end + 3).trim() : '';
+}
+
+const distributionIntegrityMigrationStatements = [
+  extractDollarQuotedStatement(
+    distributionIntegrityMigrationSql,
+    'CREATE OR REPLACE FUNCTION validate_liquidation_distribution_snapshot(',
+  ),
+  extractDollarQuotedStatement(
+    distributionIntegrityMigrationSql,
+    'CREATE OR REPLACE FUNCTION enforce_liquidation_publication_integrity_origin()',
+  ),
+  'DROP TRIGGER IF EXISTS "Liquidation_publication_integrity_origin" ON "Liquidation";',
+  'CREATE TRIGGER "Liquidation_publication_integrity_origin" BEFORE INSERT OR UPDATE ON "Liquidation" FOR EACH ROW EXECUTE FUNCTION enforce_liquidation_publication_integrity_origin();',
+  extractDollarQuotedStatement(distributionIntegrityMigrationSql, 'DO $$'),
+  'DROP TRIGGER IF EXISTS "Liquidation_publication_integrity" ON "Liquidation";',
+  'CREATE TRIGGER "Liquidation_publication_integrity" BEFORE INSERT OR UPDATE OR DELETE ON "Liquidation" FOR EACH ROW EXECUTE FUNCTION enforce_liquidation_publication_integrity();',
+].filter(Boolean);
 
 function triggerFunctionSql(functionName: string, triggerName: string): string {
   const start = parentCascadeMigrationSql.indexOf(`CREATE OR REPLACE FUNCTION ${functionName}()`);
@@ -317,11 +343,13 @@ describe('authorized parent cascade trigger migration preflight', () => {
     expect(liquidationTriggerSql).toContain("'type', \"type\"");
     expect(liquidationTriggerSql).toContain("'concept', \"concept\"");
     expect(liquidationTriggerSql).toContain('jsonb_array_elements(NEW."publicationSnapshot" -> \'allocations\')');
-        expect(liquidationTriggerSql).toContain('jsonb_array_elements(NEW."distributionSnapshot" -> \'allocations\')');
-        expect(liquidationTriggerSql).toContain('publicationAllocationEvidence IS DISTINCT FROM distributionAllocationEvidence');
-        expect(liquidationTriggerSql).not.toContain('unit."code" = allocation ->> \'unitCode\'');
-        expect(liquidationTriggerSql).not.toContain('unit."label" IS NOT DISTINCT FROM allocation ->> \'unitLabel\'');
-        expect(liquidationTriggerSql).toContain('FROM "Charge"');
+      expect(liquidationTriggerSql).toContain('jsonb_array_elements(NEW."distributionSnapshot" -> \'allocations\')');
+      expect(liquidationTriggerSql).toContain('publicationAllocationEvidence IS DISTINCT FROM distributionAllocationEvidence');
+      expect(liquidationTriggerSql).toContain('FROM "Unit" unit');
+      expect(liquidationTriggerSql).toContain('FROM "Charge"');
+      expect(distributionIntegrityMigrationSql).toContain('CREATE OR REPLACE FUNCTION validate_liquidation_distribution_snapshot(');
+      expect(distributionIntegrityMigrationSql).toContain('new liquidations require publication integrity v1');
+      expect(distributionIntegrityMigrationSql).toContain('pg_get_functiondef');
         expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charge economic origin is immutable'");
         expect(chargeTriggerSql).toContain('FROM "Membership" WHERE "id" = OLD."createdByMembershipId"');
     expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'manual charges cannot acquire liquidationId'");
@@ -425,11 +453,22 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
       await tx.$executeRawUnsafe(`
             INSERT INTO "Membership" ("id") VALUES ('member-1');
           `);
-          await tx.$executeRawUnsafe(liquidationTriggerSql);
-      await tx.$executeRawUnsafe(chargeTriggerSql);
+      await tx.$executeRawUnsafe(liquidationTriggerSql);
       await tx.$executeRawUnsafe(`
-        CREATE TRIGGER "Liquidation_publication_integrity" BEFORE INSERT OR UPDATE OR DELETE ON "Liquidation" FOR EACH ROW EXECUTE FUNCTION enforce_liquidation_publication_integrity();
+        INSERT INTO "Liquidation" (
+          "id", "tenantId", "buildingId", "period", "chargePeriod", "status",
+          "baseCurrency", "totalAmountMinor", "totalsByCurrency", "expenseSnapshot",
+          "unitCount", "generatedByMembershipId", "generatedAt", "createdAt", "updatedAt"
+        ) VALUES (
+          'historical-null', 'tenant-1', 'building-1', '2026-01', '2026-02', 'DRAFT',
+          'ARS', 0, '{"ARS":0}', '[]', 0, 'member-1',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        );
       `);
+      for (const statement of distributionIntegrityMigrationStatements) {
+        await tx.$executeRawUnsafe(statement);
+      }
+      await tx.$executeRawUnsafe(chargeTriggerSql);
       await tx.$executeRawUnsafe(`
         CREATE TRIGGER "Charge_liquidation_generated_immutable" BEFORE UPDATE OR DELETE ON "Charge" FOR EACH ROW EXECUTE FUNCTION enforce_liquidation_generated_charge_immutable();
       `);
@@ -448,6 +487,40 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     readonly valuationMode?: 'FUNCTIONAL' | 'LEGACY_NOMINAL';
     readonly functionalExchangeRateValue?: string | number;
     readonly distributionAllocations?: readonly AllocationEvidence[];
+  }
+
+  function completeDistributionSnapshot(
+    allocations: readonly AllocationEvidence[],
+    tenantId: string,
+    buildingId: string,
+  ): Record<string, unknown> {
+    const totalAmountMinor = allocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0);
+    const useCoefficientWeights = totalAmountMinor > 0;
+    return {
+      version: 1,
+      tenantId,
+      buildingId,
+      totalAmountMinor,
+      movements: [{
+        movementId: 'movement-1',
+        scope: 'BUILDING',
+        unitGroupId: null,
+        amountMinor: totalAmountMinor,
+        weightSource: useCoefficientWeights ? 'COEFFICIENT' : 'EQUAL',
+        totalWeight: useCoefficientWeights ? String(totalAmountMinor) : String(allocations.length),
+        recipientUnitIds: allocations.map((allocation) => allocation.unitId),
+        recipients: allocations.map((allocation) => ({
+          unitId: allocation.unitId,
+          unitCode: allocation.unitCode,
+          unitLabel: allocation.unitLabel,
+          coefficient: useCoefficientWeights ? String(allocation.amountMinor) : null,
+          m2: null,
+          weight: useCoefficientWeights ? String(allocation.amountMinor) : '1',
+        })),
+        allocations,
+      }],
+      allocations,
+    };
   }
 
   function expenseEvidence(
@@ -497,11 +570,12 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     const expenseSnapshot = JSON.stringify([
       expenseEvidence(valuationMode, options.functionalExchangeRateValue),
     ]);
-    const distributionSnapshot = JSON.stringify({
-      allocations: options.distributionAllocations ?? [
+    const distributionAllocations = options.distributionAllocations ?? [
         { unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 100 },
-      ],
-    });
+      ];
+    const distributionSnapshot = JSON.stringify(
+      completeDistributionSnapshot(distributionAllocations, tenantId, buildingId),
+    );
     await tx.$executeRawUnsafe(`
       INSERT INTO "Liquidation" ("id", "tenantId", "buildingId", "period", "chargePeriod", "status", "publicationIntegrityVersion", "valuationMode", "baseCurrency", "totalAmountMinor", "totalsByCurrency", "expenseSnapshot", "distributionSnapshot", "unitCount", "generatedByMembershipId", "generatedAt", "grossExpenseAmountMinor", "adjustmentAmountMinor", "preIncomeAmountMinor", "incomeOffsetAmountMinor", "netDistributableAmountMinor", "incomeOffsetSnapshot", "incomeOffsetsByCurrency", "createdAt", "updatedAt")
       VALUES ('${id}', '${tenantId}', '${buildingId}', '2026-05', '2026-06', 'DRAFT', 1, '${valuationMode}', 'ARS', 100, '{"ARS":100}', '${expenseSnapshot}', '${distributionSnapshot}', 2, 'member-1', '2026-05-01T00:00:00Z', 100, 0, 100, 0, 100, '[]', '{}', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
@@ -680,8 +754,7 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
   it('rejects legacy integrity promotion, invalid state reversal, and mismatched modern chargePeriod', async () => {
     await expect(sandbox(async (tx) => {
       await tx.$executeRawUnsafe(`INSERT INTO "Liquidation" ("id", "tenantId", "buildingId", "period", "chargePeriod", "status", "baseCurrency", "totalAmountMinor", "totalsByCurrency", "expenseSnapshot", "unitCount", "generatedByMembershipId", "generatedAt", "createdAt", "updatedAt") VALUES ('legacy-promotion', 'tenant-1', 'building-1', '2026-05', '2026-06', 'DRAFT', 'ARS', 100, '{"ARS":100}', '[]', 2, 'member-1', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z')`);
-      await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "publicationIntegrityVersion" = 1 WHERE "id" = 'legacy-promotion'`);
-    })).rejects.toThrow('liquidation publicationIntegrityVersion is immutable after insert');
+    })).rejects.toThrow('new liquidations require publication integrity v1');
     await expect(sandbox(async (tx) => {
       await insertLiquidation(tx, 'review-reversal');
       await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'review-reversal'`);

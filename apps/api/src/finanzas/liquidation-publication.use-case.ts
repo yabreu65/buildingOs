@@ -185,7 +185,7 @@ export interface DraftLiquidationInput {
   readonly buildingId: string;
   readonly period: string;
   readonly chargePeriod?: string | null;
-  readonly publicationIntegrityVersion?: 1 | null;
+  readonly publicationIntegrityVersion: 1;
   readonly valuationMode?: 'FUNCTIONAL' | 'LEGACY_NOMINAL' | null;
   readonly baseCurrency: string;
   readonly totalAmountMinor: number;
@@ -397,6 +397,12 @@ export async function createLiquidationDraftRecord(
   deps: Pick<LiquidationWorkflowDependencies, 'createAuditLogRequired'>,
   input: DraftLiquidationInput,
 ): Promise<LiquidationRecord> {
+  if (input.publicationIntegrityVersion !== 1) {
+    throw new BadRequestException(
+      'New liquidations require publication integrity v1; NULL is reserved for historical rows',
+    );
+  }
+
   const isFin06Input =
     input.grossExpenseAmountMinor !== undefined ||
     input.adjustmentAmountMinor !== undefined ||
@@ -410,7 +416,7 @@ export async function createLiquidationDraftRecord(
       buildingId: input.buildingId,
       period: input.period,
       chargePeriod: input.chargePeriod ?? null,
-      publicationIntegrityVersion: input.publicationIntegrityVersion ?? null,
+      publicationIntegrityVersion: input.publicationIntegrityVersion,
       valuationMode: input.valuationMode ?? null,
       baseCurrency: input.baseCurrency,
       totalAmountMinor: input.totalAmountMinor,
@@ -626,13 +632,6 @@ export class LiquidationPublicationUseCase {
           }
 
           const currentRecord = current as LiquidationRecord;
-          if (currentRecord.publicationIntegrityVersion === null) {
-            throw new UnprocessableEntityException({
-              statusCode: 422,
-              error: 'LIQUIDATION_PUBLICATION_INTEGRITY_LEGACY_DRAFT',
-              message: 'Legacy liquidation drafts cannot be published under publication integrity v1',
-            });
-          }
           if (
             currentRecord.publicationIntegrityVersion === 1 &&
             (!isNextChargePeriod(currentRecord.period, currentRecord.chargePeriod) ||
@@ -920,7 +919,7 @@ export class LiquidationPublicationUseCase {
           }
 
           let distribution: readonly LiquidationDistributionAllocation[];
-          if (currentRecord.distributionSnapshot !== undefined) {
+          if (currentRecord.publicationIntegrityVersion === 1) {
             const frozenDistribution = validateFrozenLiquidationDistributionSnapshot(
               currentRecord.distributionSnapshot,
               {
@@ -935,30 +934,10 @@ export class LiquidationPublicationUseCase {
               valuationMode,
               current.totalAmountMinor,
             );
-            const snapshotUnitIds = frozenDistribution.allocations.map((allocation) => allocation.unitId);
-            const scopedUnits = await tx.unit.findMany({
-              where: {
-                tenantId,
-                buildingId: current.buildingId,
-                id: { in: snapshotUnitIds },
-              },
-              select: { id: true },
-            });
-            if (
-              scopedUnits.length !== snapshotUnitIds.length ||
-              new Set(scopedUnits.map((unit) => unit.id)).size !== snapshotUnitIds.length
-            ) {
-              throw new UnprocessableEntityException({
-                statusCode: 422,
-                error: 'LIQUIDATION_DISTRIBUTION_SNAPSHOT_INVALID',
-                message:
-                  'El snapshot de distribución contiene unidades fuera del tenant o edificio; no se publica',
-              });
-            }
             distribution = frozenDistribution.allocations;
           }
           else {
-            // Compatibility for incomplete in-memory fixtures only. Persisted legacy rows are NULL and fail above.
+            // Historical NULL rows retain the pre-3D.2 distribution behavior.
             const billableUnits = await tx.unit.findMany({
               where: { tenantId, buildingId: current.buildingId, isBillable: true },
               include: { unitCategory: { select: { coefficient: true, id: true } } },

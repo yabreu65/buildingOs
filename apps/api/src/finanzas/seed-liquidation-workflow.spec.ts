@@ -588,6 +588,8 @@ describe('ensureSeedPublishedLiquidation', () => {
     ]);
     const reviewedLiquidation = {
       ...baseLiquidation,
+      publicationIntegrityVersion: 1 as const,
+      valuationMode: 'LEGACY_NOMINAL' as const,
       status: 'REVIEWED' as const,
       publicationSnapshot: null,
       distributionSnapshot: frozenDistributionSnapshot,
@@ -650,7 +652,10 @@ describe('ensureSeedPublishedLiquidation', () => {
       },
       liquidationIncomeOffset: { count: jest.fn().mockResolvedValue(0) },
       unit: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'unit-1' }, { id: 'unit-2' }]),
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'unit-1', code: '1A', label: '1A', unitCategory: null },
+          { id: 'unit-2', code: '1B', label: '1B', unitCategory: null },
+        ]),
       },
       charge: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -683,14 +688,7 @@ describe('ensureSeedPublishedLiquidation', () => {
     });
 
     expect(result).toEqual({ id: 'liq-1', created: false, status: 'PUBLISHED' });
-    expect(publicationTransaction.unit.findMany).toHaveBeenCalledWith({
-      where: {
-        tenantId: 'tenant-1',
-        buildingId: 'building-1',
-        id: { in: ['unit-1', 'unit-2'] },
-      },
-      select: { id: true },
-    });
+    expect(publicationTransaction.unit.findMany).not.toHaveBeenCalled();
     expect(publicationTransaction.charge.createMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([
         expect.objectContaining({ unitId: 'unit-1', amount: 50 }),

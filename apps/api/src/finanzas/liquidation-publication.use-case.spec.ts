@@ -18,7 +18,7 @@ const baseLiquidation = {
   period: '2026-05',
   chargePeriod: '2026-06',
   status: 'REVIEWED' as const,
-  valuationMode: null,
+  valuationMode: 'LEGACY_NOMINAL' as const,
   baseCurrency: 'ARS',
   totalAmountMinor: 101,
   totalsByCurrency: { ARS: 101 },
@@ -43,6 +43,21 @@ const baseLiquidation = {
   publishedAt: null,
   canceledAt: null,
   createdAt: new Date('2026-05-01T00:00:00.000Z'),
+  publicationIntegrityVersion: 1 as const,
+  distributionSnapshot: distributeLiquidationMovements({
+    tenantId: 'tenant-1',
+    buildingId: 'building-1',
+    totalAmountMinor: 101,
+    movements: [{
+      movementId: 'exp-1',
+      scope: 'BUILDING',
+      amountMinor: 101,
+      recipients: [
+        { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: 1, m2: 40 },
+        { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', coefficient: 1, m2: 60 },
+      ],
+    }],
+  }),
 };
 
 describe('LiquidationPublicationUseCase', () => {
@@ -150,7 +165,22 @@ describe('LiquidationPublicationUseCase', () => {
     useCase = new LiquidationPublicationUseCase(deps);
   });
 
-  it('publishes a reviewed liquidation and creates charges exactly once', async () => {
+  it('publishes a historical legacy liquidation through the V2 compatibility path', async () => {
+    tx.liquidation.findFirst.mockReset().mockResolvedValueOnce({
+      ...baseLiquidation,
+      publicationIntegrityVersion: null,
+      distributionSnapshot: null,
+    }).mockResolvedValueOnce(null).mockResolvedValueOnce({
+      ...baseLiquidation,
+      publicationIntegrityVersion: null,
+      distributionSnapshot: null,
+      status: 'PUBLISHED',
+    }).mockResolvedValue({
+      ...baseLiquidation,
+      publicationIntegrityVersion: null,
+      distributionSnapshot: null,
+      status: 'PUBLISHED',
+    });
     const result = await useCase.execute('tenant-1', 'liq-1', 'member-1', {
       dueDate: '2026-06-10',
     });
@@ -178,9 +208,7 @@ describe('LiquidationPublicationUseCase', () => {
       ...baseLiquidation,
       publicationIntegrityVersion: 1 as const,
       valuationMode: 'LEGACY_NOMINAL' as const,
-      // Undefined is the focused unit-test fixture compatibility path; persisted
-      // modern rows are independently enforced by the PostgreSQL trigger.
-      distributionSnapshot: undefined,
+      distributionSnapshot: baseLiquidation.distributionSnapshot,
     };
     tx.liquidation.findFirst.mockReset()
       .mockResolvedValueOnce(modernLiquidation)
@@ -226,15 +254,9 @@ describe('LiquidationPublicationUseCase', () => {
     .mockResolvedValueOnce({ ...baseLiquidation, distributionSnapshot: frozenDistribution })
     .mockResolvedValueOnce(null)
     .mockResolvedValueOnce({ ...baseLiquidation, status: 'PUBLISHED' });
-  // Unit lookup proves identity only: allocation inputs remain frozen in the draft.
-  tx.unit.findMany.mockResolvedValueOnce([{ id: 'unit-1' }, { id: 'unit-2' }]);
-
   await useCase.execute('tenant-1', 'liq-1', 'member-1', { dueDate: '2026-06-10' });
 
-  expect(tx.unit.findMany).toHaveBeenCalledWith(expect.objectContaining({
-    select: { id: true },
-    where: expect.objectContaining({ id: { in: ['unit-1', 'unit-2'] } }),
-  }));
+  expect(tx.unit.findMany).not.toHaveBeenCalledWith(expect.objectContaining({ select: { id: true } }));
   expect(tx.charge.createMany).toHaveBeenCalledWith(expect.objectContaining({
     data: expect.arrayContaining([
       expect.objectContaining({ unitId: 'unit-1', amount: 40 }),
@@ -484,21 +506,22 @@ it('rejects publication when status is not REVIEWED', async () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('fails closed with a stable error for legacy reviewed drafts', async () => {
+  it('allows historical legacy reviewed drafts through the explicit V1/V2 path', async () => {
     tx.liquidation.findFirst.mockReset().mockResolvedValueOnce({
       ...baseLiquidation,
       publicationIntegrityVersion: null,
+      distributionSnapshot: null,
+    }).mockResolvedValueOnce(null).mockResolvedValue({
+      ...baseLiquidation,
+      publicationIntegrityVersion: null,
+      distributionSnapshot: null,
+      status: 'PUBLISHED',
     });
 
     await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
       dueDate: '2026-06-10',
-    })).rejects.toMatchObject({
-      response: {
-        statusCode: 422,
-        error: 'LIQUIDATION_PUBLICATION_INTEGRITY_LEGACY_DRAFT',
-      },
-    });
-    expect(tx.charge.createMany).not.toHaveBeenCalled();
+    })).resolves.toMatchObject({ status: 'PUBLISHED' });
+    expect(tx.charge.createMany).toHaveBeenCalled();
   });
 
   it('reuses compatible existing charges instead of creating duplicates', async () => {
@@ -508,9 +531,10 @@ it('rejects publication when status is not REVIEWED', async () => {
         amount: 51,
         currency: 'ARS',
         dueDate: new Date('2026-06-10T00:00:00.000Z'),
-        buildingId: 'building-1',
-        period: '2026-05',
-        liquidationId: 'liq-1',
+         buildingId: 'building-1',
+         period: '2026-05',
+         chargePeriod: '2026-06',
+         liquidationId: 'liq-1',
         type: 'COMMON_EXPENSE',
         concept: 'Expensas comunes 2026-05',
       },
@@ -519,9 +543,10 @@ it('rejects publication when status is not REVIEWED', async () => {
         amount: 50,
         currency: 'ARS',
         dueDate: new Date('2026-06-10T00:00:00.000Z'),
-        buildingId: 'building-1',
-        period: '2026-05',
-        liquidationId: 'liq-1',
+         buildingId: 'building-1',
+         period: '2026-05',
+         chargePeriod: '2026-06',
+         liquidationId: 'liq-1',
         type: 'COMMON_EXPENSE',
         concept: 'Expensas comunes 2026-05',
       },
@@ -699,6 +724,34 @@ it('rejects publication when status is not REVIEWED', async () => {
       baseCurrency: 'VES',
       totalAmountMinor: 36625,
       totalsByCurrency: { USD: 1000, COP: 200 },
+      distributionSnapshot: distributeLiquidationMovements({
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        totalAmountMinor: 36625,
+        movements: [{
+          movementId: 'exp-1',
+          scope: 'BUILDING',
+          amountMinor: 36500,
+          recipients: [{
+            unitId: 'unit-1',
+            unitCode: '1A',
+            unitLabel: '1A',
+            coefficient: null,
+            m2: null,
+          }],
+        }, {
+          movementId: 'ADJ-adj-1',
+          scope: 'ADJUSTMENT',
+          amountMinor: 125,
+          recipients: [{
+            unitId: 'unit-1',
+            unitCode: '1A',
+            unitLabel: '1A',
+            coefficient: null,
+            m2: null,
+          }],
+        }],
+      }),
       expenseSnapshot: [
         {
           expenseId: 'exp-1',
@@ -765,7 +818,7 @@ it('rejects publication when status is not REVIEWED', async () => {
       tx.charge.findMany.mockResolvedValue([]);
     };
 
-    it('publishes a FUNCTIONAL liquidation and writes a version 2 snapshot', async () => {
+    it('publishes a FUNCTIONAL liquidation and writes a version 4 snapshot', async () => {
       mockFunctionalPublish();
 
       const result = await useCase.execute(
@@ -778,11 +831,11 @@ it('rejects publication when status is not REVIEWED', async () => {
 
       expect(result.status).toBe('PUBLISHED');
       const snapshotUpdate = (tx.liquidation.updateMany as jest.Mock).mock.calls.find(
-        (call) => (call[0].data?.publicationSnapshot as { version?: number })?.version === 2,
+        (call) => (call[0].data?.publicationSnapshot as { version?: number })?.version === 4,
       );
       expect(snapshotUpdate).toBeDefined();
       expect(snapshotUpdate[0].data.publicationSnapshot).toMatchObject({
-        version: 2,
+        version: 4,
         valuationMode: 'FUNCTIONAL',
         totalAmountMinor: 36625,
       });
@@ -909,8 +962,23 @@ it('rejects publication when status is not REVIEWED', async () => {
     const incomeOffsetLiquidation = {
       ...baseLiquidation,
       period: '2026-08',
+      chargePeriod: '2026-09',
       totalAmountMinor: 3000,
       totalsByCurrency: { ARS: 10000 },
+      distributionSnapshot: distributeLiquidationMovements({
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        totalAmountMinor: 3000,
+        movements: [{
+          movementId: 'exp-1',
+          scope: 'BUILDING',
+          amountMinor: 3000,
+          recipients: [
+            { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: null, m2: null },
+            { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', coefficient: null, m2: null },
+          ],
+        }],
+      }),
       expenseSnapshot: [
         {
           expenseId: 'exp-1',
@@ -979,7 +1047,7 @@ it('rejects publication when status is not REVIEWED', async () => {
       },
     };
 
-    it('publishes an income-offset liquidation with a version 3 snapshot and no zero charges', async () => {
+    it('publishes an income-offset liquidation with a version 4 snapshot and no zero charges', async () => {
       tx.liquidation.findFirst.mockReset();
       tx.liquidationIncomeOffset.findMany.mockReset();
       tx.incomeApplication.findMany.mockReset();
@@ -1003,7 +1071,7 @@ it('rejects publication when status is not REVIEWED', async () => {
       expect(deps.createAuditLogRequired).toHaveBeenCalledWith(
         expect.objectContaining({
           metadata: expect.objectContaining({
-            snapshotVersion: 3,
+            snapshotVersion: 4,
             incomeOffsetAmountMinor: 7000,
             incomeOffsetCount: 1,
           }),
@@ -1012,7 +1080,7 @@ it('rejects publication when status is not REVIEWED', async () => {
       );
       const publishedSnapshot = tx.liquidation.updateMany.mock.calls[0]![0]!.data
         .publicationSnapshot as Record<string, unknown>;
-      expect(publishedSnapshot.version).toBe(3);
+      expect(publishedSnapshot.version).toBe(4);
       expect(publishedSnapshot.incomeOffsetAmountMinor).toBe(7000);
       expect(publishedSnapshot.netDistributableAmountMinor).toBe(3000);
       expect(tx.charge.createMany).toHaveBeenCalledWith({
@@ -1121,6 +1189,20 @@ it('rejects publication when status is not REVIEWED', async () => {
         totalAmountMinor: 0,
         incomeOffsetAmountMinor: 10000,
         netDistributableAmountMinor: 0,
+        distributionSnapshot: distributeLiquidationMovements({
+          tenantId: 'tenant-1',
+          buildingId: 'building-1',
+          totalAmountMinor: 0,
+          movements: [{
+            movementId: 'exp-1',
+            scope: 'BUILDING',
+            amountMinor: 0,
+            recipients: [
+              { unitId: 'unit-1', unitCode: '1A', unitLabel: '1A', coefficient: null, m2: null },
+              { unitId: 'unit-2', unitCode: '1B', unitLabel: '1B', coefficient: null, m2: null },
+            ],
+          }],
+        }),
         incomeOffsetSnapshot: [
           {
             ...incomeOffsetLiquidation.incomeOffsetSnapshot[0],
@@ -1168,7 +1250,7 @@ it('rejects publication when status is not REVIEWED', async () => {
           metadata: expect.objectContaining({
             chargesCount: 0,
             allocationCount: 2,
-            snapshotVersion: 3,
+            snapshotVersion: 4,
           }),
         }),
         tx,

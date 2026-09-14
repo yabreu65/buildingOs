@@ -2218,26 +2218,33 @@ export async function ensureSeedFinanceFixture(
     select: { id: true },
   });
 
-  // ── Historical V1/V2 (FIN-07D Phase 2A HISTORICAL) ────────────────────────
-  const historical = await ensureHistoricalV1V2Liquidations({
-    prisma: input.prisma,
-    tenantId: input.tenantId,
-    adminMembershipId: input.adminMembershipId,
-    buildingA1Id: input.buildingA1Id,
-    baseCurrency: input.baseCurrency,
-  });
+  // Historical NULL liquidations are valid only as pre-existing records. They
+  // are covered by publication regressions, not created by the production seed.
+  const historical: HistoricalV1V2Result = {
+    v1LiquidationId: '',
+    v1Created: false,
+    v1ChargeCount: 0,
+    v2LiquidationId: '',
+    v2Created: false,
+    v2ChargeCount: 0,
+  };
 
-  // ── Legacy Income Backfill Fixtures (FIN-07D Phase 2A LEGACY_BACKFILL) ──
-  const legacyBackfill = await ensureLegacyIncomeBackfillFixtures({
-    prisma: input.prisma,
-    tenantId: input.tenantId,
-    adminMembershipId: input.adminMembershipId,
-    adminRoles: input.adminRoles,
-    buildingA1Id: input.buildingA1Id,
-    baseCurrency: input.baseCurrency,
-    categoryIncomeId,
-    applications,
-  });
+  const legacyBackfill: LegacyBackfillFixturesResult = {
+    autoOffsetIncomeId: '',
+    autoOffsetCreated: false,
+    alreadyPlanIncomeId: '',
+    alreadyPlanCreated: false,
+    alreadyPlanApplicationId: '',
+    alreadyPlanApplicationCreated: false,
+    reserveFundIncomeId: '',
+    reserveFundCreated: false,
+    specialFundIncomeId: '',
+    specialFundCreated: false,
+    conflictIncomeId: '',
+    conflictCreated: false,
+    conflictLiquidationId: '',
+    conflictLiquidationCreated: false,
+  };
 
   return {
     categoryIncomeId,

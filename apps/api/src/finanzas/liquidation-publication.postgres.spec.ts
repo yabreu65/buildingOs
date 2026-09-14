@@ -128,6 +128,47 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
     },
   ];
 
+  const buildDistributionSnapshot = (
+    tenantId: string,
+    buildingId: string,
+    units: ReadonlyArray<{ id: string; code: string; label: string | null }>,
+    totalAmountMinor: number,
+  ): Prisma.InputJsonObject => {
+    const baseAmount = Math.floor(totalAmountMinor / units.length);
+    const remainder = totalAmountMinor % units.length;
+    const allocations = units.map((unit, index) => ({
+      unitId: unit.id,
+      unitCode: unit.code,
+      unitLabel: unit.label,
+      amountMinor: baseAmount + (index < remainder ? 1 : 0),
+    }));
+    return {
+      version: 1,
+      tenantId,
+      buildingId,
+      totalAmountMinor,
+      movements: [{
+        movementId: 'integration-distribution',
+        scope: 'BUILDING',
+        unitGroupId: null,
+        amountMinor: totalAmountMinor,
+        weightSource: 'EQUAL',
+        totalWeight: String(units.length),
+        recipientUnitIds: units.map((unit) => unit.id),
+        recipients: units.map((unit) => ({
+          unitId: unit.id,
+          unitCode: unit.code,
+          unitLabel: unit.label,
+          coefficient: null,
+          m2: null,
+          weight: '1',
+        })),
+        allocations,
+      }],
+      allocations,
+    };
+  };
+
   async function createFinanceContext(label: string, unitCount: number = 2) {
     const idSuffix = suffix();
     const tenant = await prisma.tenant.create({
@@ -316,9 +357,12 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
           chargePeriod: '2026-08',
           baseCurrency: 'ARS',
           totalAmountMinor: 200,
-          totalsByCurrency: { ARS: 200 },
-          expenseSnapshot: [],
-          unitCount: ctx.units.length,
+           totalsByCurrency: { ARS: 200 },
+           expenseSnapshot: [],
+           publicationIntegrityVersion: 1,
+           valuationMode: 'LEGACY_NOMINAL',
+           distributionSnapshot: buildDistributionSnapshot(ctx.tenant.id, ctx.building.id, ctx.units, 200),
+           unitCount: ctx.units.length,
           generatedByMembershipId: ctx.membership.id,
         },
       ),
@@ -339,9 +383,12 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
             chargePeriod: '2026-08',
             baseCurrency: 'ARS',
             totalAmountMinor: 200,
-            totalsByCurrency: { ARS: 200 },
-            expenseSnapshot: [],
-            unitCount: ctx.units.length,
+           totalsByCurrency: { ARS: 200 },
+           expenseSnapshot: [],
+           publicationIntegrityVersion: 1,
+           valuationMode: 'LEGACY_NOMINAL',
+           distributionSnapshot: buildDistributionSnapshot(ctx.tenant.id, ctx.building.id, ctx.units, 200),
+           unitCount: ctx.units.length,
             generatedByMembershipId: ctx.membership.id,
           },
         ),
@@ -372,9 +419,12 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
           chargePeriod: '2026-08',
           baseCurrency: 'ARS',
           totalAmountMinor: 200,
-          totalsByCurrency: { ARS: 200 },
-          expenseSnapshot: [],
-          unitCount: ctx.units.length,
+           totalsByCurrency: { ARS: 200 },
+           expenseSnapshot: [],
+           publicationIntegrityVersion: 1,
+           valuationMode: 'LEGACY_NOMINAL',
+           distributionSnapshot: buildDistributionSnapshot(ctx.tenant.id, ctx.building.id, ctx.units, 200),
+           unitCount: ctx.units.length,
           generatedByMembershipId: ctx.membership.id,
         },
       ),

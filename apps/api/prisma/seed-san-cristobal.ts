@@ -13,9 +13,13 @@ import {
 import * as bcrypt from 'bcrypt';
 import {
   buildLiquidationPublicationSnapshot,
-  distributeLiquidationAmountByLargestRemainder,
+  buildLiquidationPublicationSnapshotV4,
   type PublishedExpenseSnapshot,
 } from '../src/finanzas/liquidation-publication-snapshot';
+import {
+  buildLiquidationDistributionSnapshot,
+  distributeLiquidationMovements,
+} from '../src/finanzas/liquidation-distribution';
 
 const prisma = new PrismaClient();
 
@@ -661,7 +665,37 @@ export async function main() {
         ),
       ];
       
-      // Create liquidation (DRAFT first)
+      const units = await prisma.unit.findMany({
+        where: { buildingId: building.id, isBillable: true },
+        include: { unitCategory: { select: { coefficient: true } } },
+        orderBy: { code: 'asc' },
+      });
+      const modernExpenseSnapshot = publicationExpenses.map((expense) => ({
+        ...expense,
+        scopeType: 'BUILDING' as const,
+        unitGroupId: null,
+        recipientUnitIds: units.map((unit) => unit.id),
+      }));
+      const frozenDistribution = distributeLiquidationMovements({
+        tenantId: tenant.id,
+        buildingId: building.id,
+        totalAmountMinor: totalAmount,
+        movements: publicationExpenses.map((expense) => ({
+          movementId: expense.expenseId,
+          scope: 'BUILDING' as const,
+          unitGroupId: null,
+          amountMinor: expense.amountMinor,
+          recipients: units.map((unit) => ({
+            unitId: unit.id,
+            unitCode: unit.code,
+            unitLabel: unit.label,
+            coefficient: unit.unitCategory?.coefficient ?? null,
+            m2: unit.m2 ?? null,
+          })),
+        })),
+      });
+
+      // Create a modern liquidation (DRAFT first).
       const liquidation = await prisma.liquidation.create({
         data: {
           tenantId: tenant.id,
@@ -669,12 +703,14 @@ export async function main() {
           period,
           chargePeriod,
           status: 'DRAFT',
+          publicationIntegrityVersion: 1,
+          valuationMode: 'LEGACY_NOMINAL',
           baseCurrency: CURRENCY,
           totalAmountMinor: totalAmount,
           totalsByCurrency: { [CURRENCY]: totalAmount },
-          // Keep this legacy local-seed draft behavior; publication evidence comes from the validated seed rows.
-          expenseSnapshot: [],
-          unitCount: 96,
+          expenseSnapshot: modernExpenseSnapshot,
+          distributionSnapshot: buildLiquidationDistributionSnapshot(frozenDistribution),
+          unitCount: frozenDistribution.allocations.filter((allocation) => allocation.amountMinor > 0).length,
           generatedByMembershipId: membershipId,
         },
       });
@@ -691,34 +727,20 @@ export async function main() {
           },
         });
         
-        // Get units with m2.
-        const units = await prisma.unit.findMany({
-          where: { buildingId: building.id, isBillable: true },
-          select: { id: true, code: true, label: true, m2: true },
-        });
-        const chargeAllocations = distributeLiquidationAmountByLargestRemainder(
-          units.map((unit) => ({
-            id: unit.id,
-            code: unit.code,
-            label: unit.label,
-            areaM2: unit.m2 ?? 0,
-          })),
-          totalAmount,
-        );
         const dueDate = new Date(`${chargePeriod}-05`);
-        const generatedCharges: SeedGeneratedCharge[] = [];
 
         // Create charges from the exact allocation used by the publication snapshot.
-        for (const allocation of chargeAllocations) {
+        for (const allocation of frozenDistribution.allocations) {
           // chargePeriod = period + 1
           const charge = await prisma.charge.create({
             data: {
               tenantId: tenant.id,
               buildingId: building.id,
               unitId: allocation.unitId,
-              period: chargePeriod, // This is correct: charge in next month
+              period,
+              chargePeriod,
               type: 'COMMON_EXPENSE',
-              concept: `Expensas comunes ${periodMapping[period] || period}`,
+              concept: `Expensas comunes ${period}`,
               amount: allocation.amountMinor,
               currency: CURRENCY,
               dueDate,
@@ -726,24 +748,27 @@ export async function main() {
               liquidationId: liquidation.id,
             },
           });
-          generatedCharges.push({
-            unitId: charge.unitId,
-            unitCode: allocation.unitCode,
-            unitLabel: allocation.unitLabel,
-            amountMinor: charge.amount,
-          });
         }
 
         const publishedAt = new Date();
-        const publicationSnapshot = buildSanCristobalLegacyPublicationSnapshot({
+        const publicationSnapshot = buildLiquidationPublicationSnapshotV4({
           liquidationId: liquidation.id,
           tenantId: tenant.id,
           buildingId: building.id,
           period,
+          chargePeriod,
+          publicationIntegrityVersion: 1,
+          valuationMode: 'LEGACY_NOMINAL',
           baseCurrency: CURRENCY,
           totalAmountMinor: totalAmount,
+          totalsByCurrency: { [CURRENCY]: totalAmount },
           expenses: publicationExpenses,
-          charges: generatedCharges,
+          allocations: frozenDistribution.allocations.map((allocation) => ({
+            unitId: allocation.unitId,
+            unitCode: allocation.unitCode,
+            unitLabel: allocation.unitLabel,
+            amountMinor: allocation.amountMinor,
+          })),
           dueDate,
           publishedAt,
         });
