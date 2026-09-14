@@ -203,6 +203,18 @@ if grep -F 'EXTERNAL_BLOCKER:' "$TEMP_ROOT/domain-terms-finding-output" >/dev/nu
   fail 'domain-terms review finding was misclassified as EXTERNAL_BLOCKER'
 fi
 
+ssrf_transport_terms_finding_repository="$(setup_repository ssrf-transport-terms-finding)"
+if GGA_PROVIDER=fake GGA_MARKER="$TEMP_ROOT/ssrf-transport-terms-finding-invoked" \
+  GGA_OUTPUT='Security finding: network error permits SSRF through DNS rebinding despite TLS socket controls after HTTP 500 responses.' GGA_STATUS=23 PATH="$TEMP_ROOT/fake-bin:$PATH" \
+  bash "$ssrf_transport_terms_finding_repository/scripts/quality/gga-pr-gate.sh" >"$TEMP_ROOT/ssrf-transport-terms-finding-output" 2>&1; then
+  fail 'GGA gate unexpectedly passed after an SSRF transport-terms review finding'
+fi
+grep -F 'REVIEW_FAILED: valid reported issues block READY states.' "$TEMP_ROOT/ssrf-transport-terms-finding-output" >/dev/null ||
+  fail 'SSRF transport-terms review finding was not classified as REVIEW_FAILED'
+if grep -F 'EXTERNAL_BLOCKER:' "$TEMP_ROOT/ssrf-transport-terms-finding-output" >/dev/null; then
+  fail 'SSRF transport-terms review finding was misclassified as EXTERNAL_BLOCKER'
+fi
+
 authorization_finding_repository="$(setup_repository authorization-finding)"
 if GGA_PROVIDER=fake GGA_MARKER="$TEMP_ROOT/authorization-finding-invoked" \
   GGA_OUTPUT='Codex provider finding: missing authorization check on tenant mutation' GGA_STATUS=18 PATH="$TEMP_ROOT/fake-bin:$PATH" \

@@ -32,10 +32,18 @@ has_authoritative_review_failure() {
 
 is_external_gga_failure() {
   local output_file="$1"
+  local provider_pattern='provider|codex|opencode|transport'
+  local transport_pattern='network (error|failure|unavailable|unreachable)|connection (refused|reset|timed out|timeout|failed)|dns.*(lookup|resolution|error|failure|failed|unreachable)|tls.*(handshake|error|failure|failed|unreachable)|socket.*(error|failure|failed|closed|reset|timed out|timeout)|http 5[0-9]{2}'
 
-  grep -Eiq \
-    '((provider|codex|opencode).*(authentication|authorization|credentials?|api[ _-]?key|token).*(failed|failure|error|denied|unauthorized|invalid|expired)|(authentication|authorization|credentials?|api[ _-]?key|token).*(failed|failure|error|denied|unauthorized|invalid|expired).*(provider|codex|opencode))|((provider|codex|opencode).*(quota|rate[ -]?limit|too many requests).*(exceeded|exhausted|failed|failure|error|unavailable)|(quota|rate[ -]?limit|too many requests).*(exceeded|exhausted|failed|failure|error|unavailable).*(provider|codex|opencode))|provider (is )?(unavailable|not available|failed|failure|error|not configured|missing)|failed to (initialize|load|connect to) (the )?provider|unable to (initialize|load|connect to) (the )?provider|((provider|codex|opencode|transport).*(timed out|timeout).*(failed|failure|error|unavailable)|(timed out|timeout).*(failed|failure|error|unavailable).*(provider|codex|opencode|transport))|network (error|failure|unavailable|unreachable)|connection (refused|reset|timed out|timeout|failed)|dns.*(lookup|resolution|error|failure|failed|unreachable)|tls.*(handshake|error|failure|failed|unreachable)|socket.*(error|failure|failed|closed|reset|timed out|timeout)|econn[a-z_]*|http 5[0-9]{2}|service unavailable' \
-    "$output_file"
+  if grep -Eiq \
+    '((provider|codex|opencode).*(authentication|authorization|credentials?|api[ _-]?key|token).*(failed|failure|error|denied|unauthorized|invalid|expired)|(authentication|authorization|credentials?|api[ _-]?key|token).*(failed|failure|error|denied|unauthorized|invalid|expired).*(provider|codex|opencode))|((provider|codex|opencode).*(quota|rate[ -]?limit|too many requests).*(exceeded|exhausted|failed|failure|error|unavailable)|(quota|rate[ -]?limit|too many requests).*(exceeded|exhausted|failed|failure|error|unavailable).*(provider|codex|opencode))|provider (is )?(unavailable|not available|failed|failure|error|not configured|missing)|failed to (initialize|load|connect to) (the )?provider|unable to (initialize|load|connect to) (the )?provider|((provider|codex|opencode|transport).*(timed out|timeout).*(failed|failure|error|unavailable)|(timed out|timeout).*(failed|failure|error|unavailable).*(provider|codex|opencode|transport))|econn[a-z_]*|service unavailable' \
+    "$output_file"; then
+    return 0
+  fi
+
+  # Generic transport terms can describe a review finding. Require a provider/transport
+  # diagnostic context or an explicitly structured failure line before classifying external.
+  grep -Eiq "((${provider_pattern})[[:space:]:_-]+(${transport_pattern})|(${provider_pattern})[[:space:]:_-]+(error|failure|failed|unavailable|timed out|timeout)[[:space:]:_-]+(${transport_pattern})|(${transport_pattern})[[:space:]:_-]+(for|from|with|by)[[:space:]]+(the[[:space:]]+)?(${provider_pattern})|^(error|fatal|failed|failure)[[:space:]:_-]+(${transport_pattern}))" "$output_file"
 }
 
 reject_dirty_tree() {
