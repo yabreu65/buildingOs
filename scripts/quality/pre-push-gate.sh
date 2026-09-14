@@ -13,6 +13,12 @@ fail() {
   exit 1
 }
 
+reject_dirty_tracked_tree() {
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    fail 'tracked changes are present; pre-push validation must cover the exact committed HEAD candidate'
+  fi
+}
+
 reject_unexpected_untracked() {
   local untracked
   untracked="$(git ls-files --others --exclude-standard | awk '$0 !~ /^\.codegraph(\/|$)/')"
@@ -20,6 +26,24 @@ reject_unexpected_untracked() {
     printf 'Unexpected untracked files:\n%s\n' "$untracked" >&2
     fail 'remove, ignore, or explicitly account for unexpected untracked files before the pre-push gate'
   fi
+}
+
+is_ipv4_loopback() {
+  local host="$1"
+  local -a octets
+  local octet
+  local value
+
+  IFS='.' read -r -a octets <<< "$host"
+  [[ ${#octets[@]} -eq 4 ]] || return 1
+
+  for octet in "${octets[@]}"; do
+    [[ "$octet" =~ ^[0-9]{1,3}$ ]] || return 1
+    value=$((10#$octet))
+    (( value <= 255 )) || return 1
+  done
+
+  [[ "${octets[0]}" == '127' ]]
 }
 
 is_local_test_database() {
@@ -32,8 +56,8 @@ is_local_test_database() {
   database="${database##*/}"
 
   case "$host" in
-    localhost|127.*|::1|\[::1\]) ;;
-    *) return 1 ;;
+    localhost|::1|\[::1\]) ;;
+    *) is_ipv4_loopback "$host" || return 1 ;;
   esac
 
   case "$database" in
@@ -68,18 +92,24 @@ is_backend_production_path() {
   esac
 }
 
-if ! git rev-parse --verify --quiet origin/main >/dev/null; then
-  fail 'origin/main is unavailable; refusing to determine changed paths'
+if ! git fetch origin main; then
+  fail 'unable to fetch origin/main; refusing to determine changed paths'
 fi
 
+if ! git rev-parse --verify --quiet origin/main >/dev/null; then
+  fail 'origin/main is unavailable after fetch; refusing to determine changed paths'
+fi
+
+reject_dirty_tracked_tree
 reject_unexpected_untracked
 
-if ! changed_paths="$({
-  git diff --name-only origin/main...HEAD
-  git diff --name-only
-  git diff --cached --name-only
-} | awk 'NF && !seen[$0]++')"; then
-  fail 'unable to determine changed paths from origin/main, worktree, and index'
+if [[ "${QUALITY_GATES_INTERNAL_HARNESS:-}" != '1' ]]; then
+  printf '+ bash scripts/tests/quality-gates.test.sh\n'
+  bash "$REPO_ROOT/scripts/tests/quality-gates.test.sh" || fail 'quality gate harness failed'
+fi
+
+if ! changed_paths="$(git diff --name-only origin/main...HEAD)"; then
+  fail 'unable to determine changed paths from origin/main...HEAD'
 fi
 
 needs_seed_test=0
@@ -120,7 +150,7 @@ printf '+ npm run test:ci\n'
 npm run test:ci || fail 'test:ci failed'
 printf '+ npm run build:ci\n'
 npm run build:ci || fail 'build:ci failed'
-printf '+ git diff --check\n'
-git diff --check || fail 'git diff --check failed'
+printf '+ git diff --check origin/main...HEAD\n'
+git diff --check origin/main...HEAD || fail 'git diff --check origin/main...HEAD failed'
 
 printf 'PASS: local candidate pre-push parity gate completed.\n'

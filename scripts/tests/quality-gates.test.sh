@@ -30,13 +30,17 @@ setup_repository() {
   git -C "$repository" config user.name quality-gates
   git -C "$repository" config core.hooksPath /dev/null
   git -C "$repository" checkout -q -b main
-  mkdir -p "$repository/scripts/quality"
+  mkdir -p "$repository/scripts/quality" "$repository/scripts/tests"
   cp "$GGA_GATE" "$repository/scripts/quality/gga-pr-gate.sh"
   cp "$PRE_PUSH_GATE" "$repository/scripts/quality/pre-push-gate.sh"
   cp "$MIGRATION_GATE" "$repository/scripts/quality/migration-upgrade-gate.sh"
-  chmod +x "$repository/scripts/quality/"*.sh
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'exit 0' > "$repository/scripts/tests/quality-gates.test.sh"
+  chmod +x "$repository/scripts/quality/"*.sh "$repository/scripts/tests/quality-gates.test.sh"
   printf 'quality gate fixture\n' > "$repository/README.md"
-  git -C "$repository" add README.md scripts/quality
+  git -C "$repository" add README.md scripts
   git -C "$repository" commit -qm 'test fixture'
   git -C "$repository" remote add origin "$bare_repository"
   git -C "$repository" push -q -u origin main
@@ -86,6 +90,8 @@ make_fake_migration_gate() {
     ': "${MIGRATION_MARKER:?}"' \
     'printf "invoked\\n" > "$MIGRATION_MARKER"' > "$repository/scripts/quality/migration-upgrade-gate.sh"
   chmod +x "$repository/scripts/quality/migration-upgrade-gate.sh"
+  git -C "$repository" add scripts/quality/migration-upgrade-gate.sh
+  git -C "$repository" commit -qm 'fake migration gate'
 }
 
 make_fake_git() {
@@ -94,7 +100,7 @@ make_fake_git() {
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
-    'if [[ "$*" == "fetch origin" ]]; then exit "${GIT_FETCH_STATUS:-0}"; fi' \
+    'if [[ "$*" == "fetch origin"* ]]; then exit "${GIT_FETCH_STATUS:-0}"; fi' \
     'if [[ "$*" == "worktree add --detach "* ]]; then printf "worktree:%s\\n" "$*" >> "${GIT_MARKER:?}"; exit 1; fi' \
     'if [[ "$*" == *origin/main* ]]; then printf "%s\\n" "${GIT_ORIGIN_MAIN_COMMIT:-origin-main}"; exit 0; fi' \
     'if [[ "$*" == *main* ]]; then printf "%s\\n" "${GIT_LOCAL_MAIN_COMMIT:-local-main}"; exit 0; fi' \
@@ -175,6 +181,19 @@ if grep -F 'EXTERNAL_BLOCKER:' "$TEMP_ROOT/authorization-finding-output" >/dev/n
   fail 'authorization review finding was misclassified as EXTERNAL_BLOCKER'
 fi
 
+authoritative_review_failure_repository="$(setup_repository authoritative-review-failure)"
+if GGA_PROVIDER=fake GGA_MARKER="$TEMP_ROOT/authoritative-review-failure-invoked" \
+  GGA_OUTPUT=$'CODE REVIEW FAILED\nReviewed text mentions EXTERNAL_BLOCKER, provider, authentication, quota, and transport.' \
+  GGA_STATUS=20 PATH="$TEMP_ROOT/fake-bin:$PATH" \
+  bash "$authoritative_review_failure_repository/scripts/quality/gga-pr-gate.sh" >"$TEMP_ROOT/authoritative-review-failure-output" 2>&1; then
+  fail 'GGA gate unexpectedly passed after an authoritative review failure'
+fi
+grep -F 'REVIEW_FAILED: valid reported issues block READY states.' "$TEMP_ROOT/authoritative-review-failure-output" >/dev/null ||
+  fail 'authoritative review failure was not classified as REVIEW_FAILED'
+if grep -F 'EXTERNAL_BLOCKER:' "$TEMP_ROOT/authoritative-review-failure-output" >/dev/null; then
+  fail 'authoritative review failure was misclassified as EXTERNAL_BLOCKER'
+fi
+
 external_failure_repository="$(setup_repository external-failure)"
 if GGA_PROVIDER=fake GGA_MARKER="$TEMP_ROOT/external-failure-invoked" \
   GGA_OUTPUT='authentication failed for the configured provider' GGA_STATUS=19 PATH="$TEMP_ROOT/fake-bin:$PATH" \
@@ -211,11 +230,61 @@ if ! grep -F 'origin-main' "$TEMP_ROOT/migration-git-marker" >/dev/null; then
   fail 'migration gate did not use the fetched origin/main commit'
 fi
 
+if PATH="$fake_git_directory:$PATH" GIT_FETCH_STATUS=1 \
+  bash "$PRE_PUSH_GATE" >"$TEMP_ROOT/pre-push-fetch-output" 2>&1; then
+  fail 'pre-push gate unexpectedly passed when origin/main fetch failed'
+fi
+grep -F 'unable to fetch origin/main; refusing to determine changed paths' "$TEMP_ROOT/pre-push-fetch-output" >/dev/null ||
+  fail 'pre-push fetch failure was not reported'
+
+harness_failure_repository="$(setup_repository harness-failure)"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'set -euo pipefail' \
+  ': "${QUALITY_HARNESS_MARKER:?}"' \
+  'printf "invoked\\n" > "$QUALITY_HARNESS_MARKER"' \
+  'exit 1' > "$harness_failure_repository/scripts/tests/quality-gates.test.sh"
+chmod +x "$harness_failure_repository/scripts/tests/quality-gates.test.sh"
+git -C "$harness_failure_repository" add scripts/tests/quality-gates.test.sh
+git -C "$harness_failure_repository" commit -qm 'fail quality harness'
+if QUALITY_HARNESS_MARKER="$TEMP_ROOT/harness-marker" NPM_MARKER="$TEMP_ROOT/harness-npm-marker" \
+  PATH="$TEMP_ROOT/fake-bin:$PATH" bash "$harness_failure_repository/scripts/quality/pre-push-gate.sh" \
+  >"$TEMP_ROOT/harness-output" 2>&1; then
+  fail 'pre-push gate unexpectedly passed after a quality harness failure'
+fi
+[[ -e "$TEMP_ROOT/harness-marker" ]] || fail 'pre-push gate did not invoke the quality harness'
+[[ ! -e "$TEMP_ROOT/harness-npm-marker" ]] || fail 'pre-push gate ran npm before the quality harness passed'
+grep -F 'quality gate harness failed' "$TEMP_ROOT/harness-output" >/dev/null ||
+  fail 'quality harness failure was not reported'
+
+dirty_pre_push_repository="$(setup_repository dirty-pre-push)"
+printf 'tracked change\n' >> "$dirty_pre_push_repository/README.md"
+if QUALITY_GATES_INTERNAL_HARNESS=1 NPM_MARKER="$TEMP_ROOT/dirty-pre-push-npm-marker" \
+  PATH="$TEMP_ROOT/fake-bin:$PATH" bash "$dirty_pre_push_repository/scripts/quality/pre-push-gate.sh" \
+  >"$TEMP_ROOT/dirty-pre-push-output" 2>&1; then
+  fail 'pre-push gate unexpectedly accepted tracked worktree changes'
+fi
+[[ ! -e "$TEMP_ROOT/dirty-pre-push-npm-marker" ]] || fail 'pre-push gate ran npm for tracked worktree changes'
+grep -F 'tracked changes are present' "$TEMP_ROOT/dirty-pre-push-output" >/dev/null ||
+  fail 'tracked worktree rejection was not reported'
+
+whitespace_repository="$(setup_repository whitespace-range)"
+printf 'trailing whitespace \n' > "$whitespace_repository/whitespace.txt"
+git -C "$whitespace_repository" add whitespace.txt
+git -C "$whitespace_repository" commit -qm 'introduce whitespace'
+if QUALITY_GATES_INTERNAL_HARNESS=1 NPM_MARKER="$TEMP_ROOT/whitespace-npm-marker" \
+  PATH="$TEMP_ROOT/fake-bin:$PATH" bash "$whitespace_repository/scripts/quality/pre-push-gate.sh" \
+  >"$TEMP_ROOT/whitespace-output" 2>&1; then
+  fail 'pre-push gate unexpectedly accepted committed PR-range whitespace errors'
+fi
+grep -F 'git diff --check origin/main...HEAD failed' "$TEMP_ROOT/whitespace-output" >/dev/null ||
+  fail 'PR-range whitespace rejection was not reported'
+
 schema_repository="$(setup_repository schema-routing)"
 make_fake_migration_gate "$schema_repository"
 commit_fixture_path "$schema_repository" 'apps/api/prisma/schema.prisma'
 if ! DATABASE_URL='postgresql://quality@127.0.0.1:5432/buildingos_quality' \
-  QUALITY_SEED_TEST_DATABASE_CONFIRMED=1 NPM_MARKER="$TEMP_ROOT/schema-npm-marker" \
+  QUALITY_GATES_INTERNAL_HARNESS=1 QUALITY_SEED_TEST_DATABASE_CONFIRMED=1 NPM_MARKER="$TEMP_ROOT/schema-npm-marker" \
   MIGRATION_MARKER="$TEMP_ROOT/schema-migration-marker" PATH="$TEMP_ROOT/fake-bin:$PATH" \
   bash "$schema_repository/scripts/quality/pre-push-gate.sh" >"$TEMP_ROOT/schema-routing-output" 2>&1; then
   fail 'pre-push gate unexpectedly failed for safe schema routing'
@@ -227,7 +296,7 @@ grep -F 'run seed:test -w apps/api' "$TEMP_ROOT/schema-npm-marker" >/dev/null ||
 backend_repository="$(setup_repository backend-routing)"
 commit_fixture_path "$backend_repository" 'apps/api/src/seed-sensitive.service.ts'
 if ! DATABASE_URL='postgresql://quality@127.0.0.1:5432/buildingos_quality' \
-  QUALITY_SEED_TEST_DATABASE_CONFIRMED=1 NPM_MARKER="$TEMP_ROOT/backend-npm-marker" \
+  QUALITY_GATES_INTERNAL_HARNESS=1 QUALITY_SEED_TEST_DATABASE_CONFIRMED=1 NPM_MARKER="$TEMP_ROOT/backend-npm-marker" \
   PATH="$TEMP_ROOT/fake-bin:$PATH" bash "$backend_repository/scripts/quality/pre-push-gate.sh" \
   >"$TEMP_ROOT/backend-routing-output" 2>&1; then
   fail 'pre-push gate unexpectedly failed for backend production routing'
@@ -238,7 +307,7 @@ grep -F 'run seed:test -w apps/api' "$TEMP_ROOT/backend-npm-marker" >/dev/null |
 unsafe_database_repository="$(setup_repository unsafe-database)"
 commit_fixture_path "$unsafe_database_repository" 'apps/api/src/seed-sensitive.service.ts'
 if DATABASE_URL='postgresql://quality@example.internal:5432/buildingos_quality' \
-  QUALITY_SEED_TEST_DATABASE_CONFIRMED=1 NPM_MARKER="$TEMP_ROOT/unsafe-npm-marker" \
+  QUALITY_GATES_INTERNAL_HARNESS=1 QUALITY_SEED_TEST_DATABASE_CONFIRMED=1 NPM_MARKER="$TEMP_ROOT/unsafe-npm-marker" \
   PATH="$TEMP_ROOT/fake-bin:$PATH" bash "$unsafe_database_repository/scripts/quality/pre-push-gate.sh" \
   >"$TEMP_ROOT/unsafe-database-output" 2>&1; then
   fail 'pre-push gate unexpectedly accepted a non-local seed database'
@@ -246,5 +315,28 @@ fi
 [[ ! -e "$TEMP_ROOT/unsafe-npm-marker" ]] || fail 'pre-push gate ran npm before rejecting an unsafe database'
 grep -F 'DATABASE_URL must use localhost/loopback' "$TEMP_ROOT/unsafe-database-output" >/dev/null ||
   fail 'unsafe database rejection was not reported'
+
+malicious_loopback_repository="$(setup_repository malicious-loopback)"
+commit_fixture_path "$malicious_loopback_repository" 'apps/api/src/seed-sensitive.service.ts'
+if DATABASE_URL='postgresql://quality@127.attacker.example:5432/buildingos_quality' \
+  QUALITY_GATES_INTERNAL_HARNESS=1 QUALITY_SEED_TEST_DATABASE_CONFIRMED=1 NPM_MARKER="$TEMP_ROOT/malicious-loopback-npm-marker" \
+  PATH="$TEMP_ROOT/fake-bin:$PATH" bash "$malicious_loopback_repository/scripts/quality/pre-push-gate.sh" \
+  >"$TEMP_ROOT/malicious-loopback-output" 2>&1; then
+  fail 'pre-push gate unexpectedly accepted a non-numeric 127 hostname'
+fi
+[[ ! -e "$TEMP_ROOT/malicious-loopback-npm-marker" ]] || fail 'pre-push gate ran npm before rejecting a non-numeric 127 hostname'
+grep -F 'DATABASE_URL must use localhost/loopback' "$TEMP_ROOT/malicious-loopback-output" >/dev/null ||
+  fail 'non-numeric 127 hostname rejection was not reported'
+
+numeric_loopback_repository="$(setup_repository numeric-loopback)"
+commit_fixture_path "$numeric_loopback_repository" 'apps/api/src/seed-sensitive.service.ts'
+if ! DATABASE_URL='postgresql://quality@127.255.255.255:5432/buildingos_quality' \
+  QUALITY_GATES_INTERNAL_HARNESS=1 QUALITY_SEED_TEST_DATABASE_CONFIRMED=1 NPM_MARKER="$TEMP_ROOT/numeric-loopback-npm-marker" \
+  PATH="$TEMP_ROOT/fake-bin:$PATH" bash "$numeric_loopback_repository/scripts/quality/pre-push-gate.sh" \
+  >"$TEMP_ROOT/numeric-loopback-output" 2>&1; then
+  fail 'pre-push gate unexpectedly rejected a numeric IPv4 loopback database'
+fi
+grep -F 'run seed:test -w apps/api' "$TEMP_ROOT/numeric-loopback-npm-marker" >/dev/null ||
+  fail 'numeric IPv4 loopback database did not reach seed:test'
 
 printf 'PASS: quality gate shell checks passed.\n'

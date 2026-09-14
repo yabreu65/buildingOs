@@ -24,6 +24,12 @@ review_failed() {
   exit "$status"
 }
 
+has_authoritative_review_failure() {
+  local output_file="$1"
+
+  grep -Fxq 'CODE REVIEW FAILED' "$output_file"
+}
+
 is_external_gga_failure() {
   local output_file="$1"
 
@@ -108,6 +114,9 @@ else
 fi
 
 sed -n '1,200p' "$output_file" >&2
+if has_authoritative_review_failure "$output_file"; then
+  review_failed "$status"
+fi
 if is_external_gga_failure "$output_file"; then
   external_blocker 'GGA provider, authentication, quota, or transport failure; resolve it and rerun the exact-head gate' "$status"
 fi
