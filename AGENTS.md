@@ -14,36 +14,53 @@
 
 ## PRE-PUSH DELIVERY GATE — MANDATORY
 
-Before any push intended for CI, PR, or PM review:
+Before any push intended for CI, PR, or PM review, the local candidate must complete its relevant focused tests and this parity gate in this exact order:
 
-1. The candidate must already have completed its relevant focused local tests.
-2. Run the exact local build parity gate: `npm run build:ci`.
-3. If the change touches seed logic, seed fixtures, finance seed fixtures, or files whose correctness is exercised by the API seed test:
-   - Before running the seed test, verify that `DATABASE_URL` points to a disposable or dedicated LOCAL test database consistent with `docs/TESTING.md`.
-   - Never run `seed:test` against the normal long-lived development database, staging, production, or any shared/non-isolated database.
-   - If an isolated local test target cannot be verified, do not run `seed:test`, do not push, set state to `WORK_REMAINS` or `EXTERNAL_BLOCKER` as appropriate, and report the database target that must be provided or selected.
-   - Once the safety precondition is verified, run: `npm run seed:test -w apps/api`.
-4. The commands above are explicitly preauthorized LOCAL quality gates. This exception authorizes only these commands; it does not authorize deploys, publishing, staging or production access, remote migrations, or destructive database actions.
-5. If `build:ci` or applicable `seed:test` fails, push is FORBIDDEN and state is `WORK_REMAINS`. Reproduce and fix the exact local failure, rerun the exact failing command, and continue until PASS. Never push merely to use GitHub Actions as a debugger.
-6. If remote CI later fails, inspect the exact failing CI command, reproduce that exact command locally before another push, fix locally, and obtain PASS locally. Only then may another push be considered.
-7. An agent must never report `READY_FOR_PM_REVIEW` or `READY_FOR_MERGE` if the mandatory delivery gate applicable to the latest code revision has not passed.
+1. `npm run lint:ci`
+2. `npm run test:ci`
+3. `npm run build:ci`
+4. `git diff --check`
+
+Any failure means `WORK_REMAINS` and push is FORBIDDEN. Reproduce and fix the exact local failure, then rerun the failed gate. Never use remote CI as a debugger. An agent must not report `READY_FOR_PM_REVIEW` or `READY_FOR_MERGE` until every applicable gate for the latest candidate passes.
+
+### Conditional seed and Prisma gates
+
+- Changes to seed logic, seed fixtures, finance seed fixtures, or paths exercised by the API seed test require `npm run seed:test -w apps/api` before the parity gate. Run it only after verifying `DATABASE_URL` selects a disposable or dedicated LOCAL test database; it must never target the normal development database, a shared database, staging, or production. If that target cannot be verified, do not run the seed test; push is FORBIDDEN and state is `WORK_REMAINS` or `EXTERNAL_BLOCKER` as appropriate.
+- Prisma schema or migration changes require `npm exec --workspace @buildingos/api -- prisma validate` and the migration upgrade foundation. The foundation runs only against disposable local PostgreSQL; it never uses a caller database, staging, or production.
+
+### Domain-contract and regression obligations
+
+For every material change, perform scoped impact analysis of affected domain contracts: materially affected producers and consumers; Prisma reads and writes; SQL, triggers, and migrations; mocks, fixtures, and seeds; and unit, integration, PostgreSQL, and E2E paths. Known material consumers that remain unreviewed forbid `READY_FOR_PM_REVIEW` and `READY_FOR_MERGE`.
+
+Confirmed production or review defects require a narrow regression test. If a regression test is technically impossible, document the specific technical reason and the strongest focused alternative validation; do not weaken or remove existing coverage.
+
+### Exact-head GGA PR gate
+
+Before `READY_FOR_MERGE`, run the exact-head GGA gate with a clean tree: fetch `origin`, verify the current non-detached branch and its exact `HEAD` equal `origin/<branch>`, set `PR_BASE_BRANCH=main`, then run `gga run --pr-mode --no-cache` (never `--diff-only`). BuildingOS's primary GGA provider is Codex (`GGA_PROVIDER=codex`) when the installed `codex` CLI is available; only when Codex is unavailable may the gate fall back to `PROVIDER` in `~/.config/gga/config` for OpenCode. An explicit `GGA_PROVIDER` takes precedence. A GGA failure or a valid reported issue blocks READY states. Provider, authentication, or quota failures are `EXTERNAL_BLOCKER` and still block READY states; never fabricate a passing result.
+
+The local gates in this section are explicitly preauthorized. This authorization does not authorize merges, deploys, staging or production access, remote migrations, publishing, or destructive database actions.
 
 Canonical gate logic:
 
 ```text
-if (buildCi !== PASS) {
+if (lintCi !== PASS || testCi !== PASS || buildCi !== PASS || diffCheck !== PASS) {
   push = FORBIDDEN;
   state = WORK_REMAINS;
 }
 
-if (seedTestApplicable && seedTest !== PASS) {
+if (seedTestApplicable && (localTestDatabase !== VERIFIED || seedTest !== PASS)) {
   push = FORBIDDEN;
   state = WORK_REMAINS;
 }
 
-if (remoteCiFails) {
-  reproduceExactFailingCommandLocally = REQUIRED;
-  push = FORBIDDEN until local PASS;
+if (prismaOrMigrationChanged && (prismaValidate !== PASS || migrationUpgradeGate !== PASS)) {
+  push = FORBIDDEN;
+  state = WORK_REMAINS;
+}
+
+if (knownMaterialConsumerUnreviewed || ggaGate !== PASS) {
+  readyForReview = FORBIDDEN;
+  readyForMerge = FORBIDDEN;
 }
 ```
 
@@ -64,7 +81,7 @@ Todo desarrollo en BuildingOS se realiza localmente antes de cualquier interacci
 - **No modificar staging directamente**: no se aplica ningún cambio a staging antes de completar la validación local con tests verdes.
 - **Staging solo post-validación**: staging se utiliza únicamente después de pruebas locales verdes y autorización explícita del responsable.
 - **Hotfix excepcional**: si un hotfix en staging es estrictamente necesario, debe quedar reproducido, versionado y probado localmente después de aplicado.
-- **Autorización requerida**: merge, deploy y cambios de base de datos (migraciones, seeds, datos) requieren autorización explícita.
+- **Autorización requerida**: merge, deploy y cambios de base de datos en desarrollo persistente, staging o producción (migraciones, seeds, datos) requieren autorización explícita. Las compuertas locales explícitamente preautorizadas usan únicamente destinos descartables.
 
 ### Limpieza del repositorio de staging
 
@@ -208,7 +225,7 @@ If RTK is not installed or a command fails because of RTK, fall back to the norm
 - Read only the files needed to decide or verify.
 - Keep production code strict: no `any`, no silent casts, no type escapes unless there is a documented boundary.
 - Keep tests with the code they verify.
-- When backend finance code changes, run slice tests first, then `prisma validate` if schema changed. Request explicit user permission before running any build.
+- When backend finance code changes, run slice tests first, then `prisma validate` if schema changed. Outside the explicitly preauthorized local quality gates above, request explicit user permission before running any build.
 - Use multi-agent only when the task is broad enough that a separate, independent subtask materially helps.
 - Before closing a slice, check the touched production files for accidental `any` usage and run `git diff --check`.
 
