@@ -110,13 +110,16 @@ BEGIN
     IF jsonb_typeof(movement) IS DISTINCT FROM 'object'
        OR jsonb_typeof(movement -> 'movementId') IS DISTINCT FROM 'string'
        OR btrim(movement ->> 'movementId') = ''
-       OR (movement ->> 'scope') NOT IN ('BUILDING', 'UNIT_GROUP', 'ADJUSTMENT')
+       OR jsonb_typeof(movement -> 'scope') IS DISTINCT FROM 'string'
+       OR (movement ->> 'scope') IS DISTINCT FROM 'BUILDING'
+          AND (movement ->> 'scope') IS DISTINCT FROM 'UNIT_GROUP'
+          AND (movement ->> 'scope') IS DISTINCT FROM 'ADJUSTMENT'
        OR jsonb_typeof(movement -> 'amountMinor') IS DISTINCT FROM 'number'
        OR movement ->> 'amountMinor' !~ '^(0|[1-9][0-9]*)$'
        OR (movement ->> 'scope' = 'UNIT_GROUP'
            AND (jsonb_typeof(movement -> 'unitGroupId') IS DISTINCT FROM 'string'
                 OR btrim(movement ->> 'unitGroupId') = ''))
-       OR (movement ->> 'scope' <> 'UNIT_GROUP'
+       OR (movement ->> 'scope' IS DISTINCT FROM 'UNIT_GROUP'
            AND movement -> 'unitGroupId' IS DISTINCT FROM 'null')
        OR jsonb_typeof(movement -> 'totalWeight') IS DISTINCT FROM 'string'
        OR btrim(movement ->> 'totalWeight') = ''
@@ -126,7 +129,10 @@ BEGIN
        OR jsonb_typeof(movement -> 'allocations') IS DISTINCT FROM 'array'
        OR jsonb_array_length(movement -> 'recipients') = 0
        OR jsonb_array_length(movement -> 'allocations') = 0
-        OR (movement ->> 'weightSource') NOT IN ('COEFFICIENT', 'M2', 'EQUAL')
+       OR jsonb_typeof(movement -> 'weightSource') IS DISTINCT FROM 'string'
+       OR (movement ->> 'weightSource') IS DISTINCT FROM 'COEFFICIENT'
+          AND (movement ->> 'weightSource') IS DISTINCT FROM 'M2'
+          AND (movement ->> 'weightSource') IS DISTINCT FROM 'EQUAL'
     THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete frozen distribution evidence';
     END IF;

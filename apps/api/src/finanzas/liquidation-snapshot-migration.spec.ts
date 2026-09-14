@@ -23,6 +23,48 @@ describe('liquidation snapshot migration preflight', () => {
       'cannot create published liquidation uniqueness constraint: duplicate published liquidations exist for tenant, building and period',
     );
   });
+
+  it.each([
+    ['missing scope', "jsonb_typeof(movement -> 'scope') IS DISTINCT FROM 'string'"],
+    ['null scope', "jsonb_typeof(movement -> 'scope') IS DISTINCT FROM 'string'"],
+    ['unknown scope', "(movement ->> 'scope') IS DISTINCT FROM 'BUILDING'"],
+    ['missing weightSource', "jsonb_typeof(movement -> 'weightSource') IS DISTINCT FROM 'string'"],
+    ['null weightSource', "jsonb_typeof(movement -> 'weightSource') IS DISTINCT FROM 'string'"],
+    ['unknown weightSource', "(movement ->> 'weightSource') IS DISTINCT FROM 'COEFFICIENT'"],
+  ])('contains a null-safe rejection predicate for %s', (_caseName, predicate) => {
+    const migration = readFileSync(
+      join(__dirname, '../../prisma/migrations/20260916000000_harden_phase3d2_distribution_integrity/migration.sql'),
+      'utf8',
+    );
+
+    expect(migration).toContain(predicate);
+  });
+
+  it.each([
+    ['missing legacy publicationSnapshot.version'],
+    ['null legacy publicationSnapshot.version'],
+    ['unsupported legacy publicationSnapshot.version'],
+  ])('contains a null-safe rejection predicate for %s', () => {
+    for (const migrationName of [
+      '20260913000000_add_phase3d2_publication_integrity',
+      '20260914000000_allow_authorized_parent_cascades',
+    ]) {
+      const migration = readFileSync(
+        join(__dirname, `../../prisma/migrations/${migrationName}/migration.sql`),
+        'utf8',
+      );
+
+      expect(migration).toContain(
+        `(NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '1'::jsonb`,
+      );
+      expect(migration).toContain(
+        `(NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '2'::jsonb`,
+      );
+      expect(migration).not.toContain(
+        `NEW."publicationSnapshot" ->> 'version' NOT IN ('1', '2')`,
+      );
+    }
+  });
 });
 
 const migrationSql = readFileSync(

@@ -102,6 +102,66 @@ export interface SeedFinanceFixtureInput {
   readonly baseCurrency: string;
 }
 
+export function assertSafeHistoricalFixtureDatabase(): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('Historical FIN07D fixtures require NODE_ENV=test');
+  }
+
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('Historical FIN07D fixtures require DATABASE_URL');
+  }
+
+  let databaseName: string;
+  try {
+    databaseName = decodeURIComponent(new URL(databaseUrl).pathname.replace(/^\/+/, ''));
+  } catch {
+    throw new Error('Historical FIN07D fixtures require a valid DATABASE_URL');
+  }
+
+  if (!/(^|[-_])test($|[-_])/i.test(databaseName)) {
+    throw new Error('Historical FIN07D fixtures require a disposable test database');
+  }
+}
+
+type SeedPrismaClient = PrismaClient | Prisma.TransactionClient;
+
+async function runSeedTransaction<T>(
+  prisma: SeedPrismaClient,
+  action: (tx: SeedPrismaClient) => Promise<T>,
+): Promise<T> {
+  if ('$transaction' in prisma) {
+    return (prisma as PrismaClient).$transaction((tx) => action(tx));
+  }
+
+  return action(prisma);
+}
+
+export async function withHistoricalFixtureTriggers<T>(
+  prisma: PrismaClient,
+  action: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  assertSafeHistoricalFixtureDatabase();
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "Liquidation" DISABLE TRIGGER "Liquidation_publication_integrity_origin"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "Liquidation" DISABLE TRIGGER "Liquidation_publication_integrity"',
+    );
+    try {
+      return await action(tx);
+    } finally {
+      await tx.$executeRawUnsafe(
+        'ALTER TABLE "Liquidation" ENABLE TRIGGER "Liquidation_publication_integrity"',
+      );
+      await tx.$executeRawUnsafe(
+        'ALTER TABLE "Liquidation" ENABLE TRIGGER "Liquidation_publication_integrity_origin"',
+      );
+    }
+  });
+}
+
 export interface SeedFinanceFixtureResult {
   readonly categoryIncomeId: string;
   readonly categoryExpenseId: string;
@@ -1034,7 +1094,7 @@ function buildV2FunctionalPublicationSnapshot(args: {
 }
 
 export async function ensureHistoricalV1V2Liquidations(input: {
-  readonly prisma: PrismaClient;
+  readonly prisma: PrismaClient | Prisma.TransactionClient;
   readonly tenantId: string;
   readonly adminMembershipId: string;
   readonly buildingA1Id: string;
@@ -1259,7 +1319,7 @@ export async function ensureHistoricalV1V2Liquidations(input: {
     }
   } else {
     // R2-6: Wrap entire V1 construction in one Prisma transaction for atomicity.
-    const v1Result = await prisma.$transaction(async (tx) => {
+    const v1Result = await runSeedTransaction(prisma, async (tx) => {
       const v1Draft = await tx.liquidation.create({
         data: {
           tenantId, buildingId: buildingA1Id, period: v1Period,
@@ -1552,7 +1612,7 @@ export async function ensureHistoricalV1V2Liquidations(input: {
     }
   } else {
     // R2-6: Wrap entire V2 construction in one Prisma transaction for atomicity.
-    const v2Result = await prisma.$transaction(async (tx) => {
+    const v2Result = await runSeedTransaction(prisma, async (tx) => {
       const v2Draft = await tx.liquidation.create({
         data: {
           tenantId, buildingId: buildingA1Id, period: v2Period,
@@ -2254,29 +2314,15 @@ export async function ensureSeedFinanceFixture(
 
   // Historical NULL liquidations are test fixtures representing pre-existing
   // records. New application rows remain blocked by the database trigger.
-  await input.prisma.$executeRawUnsafe(
-    'ALTER TABLE "Liquidation" DISABLE TRIGGER "Liquidation_publication_integrity_origin"',
-  );
-  await input.prisma.$executeRawUnsafe(
-    'ALTER TABLE "Liquidation" DISABLE TRIGGER "Liquidation_publication_integrity"',
-  );
-  let historical: HistoricalV1V2Result;
-  try {
-    historical = await ensureHistoricalV1V2Liquidations({
-      prisma: input.prisma,
+  const historical = await withHistoricalFixtureTriggers(input.prisma, (tx) =>
+    ensureHistoricalV1V2Liquidations({
+      prisma: tx,
       tenantId: input.tenantId,
       adminMembershipId: input.adminMembershipId,
       buildingA1Id: input.buildingA1Id,
       baseCurrency: input.baseCurrency,
-    });
-  } finally {
-    await input.prisma.$executeRawUnsafe(
-      'ALTER TABLE "Liquidation" ENABLE TRIGGER "Liquidation_publication_integrity"',
-    );
-    await input.prisma.$executeRawUnsafe(
-      'ALTER TABLE "Liquidation" ENABLE TRIGGER "Liquidation_publication_integrity_origin"',
-    );
-  }
+    }),
+  );
 
   const legacyBackfill = await ensureLegacyIncomeBackfillFixtures({
     prisma: input.prisma,

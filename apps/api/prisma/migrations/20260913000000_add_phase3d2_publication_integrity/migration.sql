@@ -100,8 +100,9 @@ BEGIN
 
   IF NEW."status" = 'PUBLISHED' THEN
     IF NOT modern THEN
-      IF NEW."publicationSnapshot" IS NULL
-         OR NEW."publicationSnapshot" ->> 'version' NOT IN ('1', '2') THEN
+       IF NEW."publicationSnapshot" IS NULL
+          OR (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '1'::jsonb
+             AND (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '2'::jsonb THEN
         RAISE EXCEPTION 'legacy liquidation drafts cannot be published';
       END IF;
       RETURN NEW;

@@ -524,6 +524,25 @@ it('rejects publication when status is not REVIEWED', async () => {
     expect(tx.charge.createMany).toHaveBeenCalled();
   });
 
+  it('fails closed when a legacy row contains FIN-06 evidence', async () => {
+    tx.liquidation.findFirst.mockReset().mockResolvedValueOnce({
+      ...baseLiquidation,
+      publicationIntegrityVersion: null,
+      distributionSnapshot: null,
+      incomeOffsetAmountMinor: 0,
+    });
+
+    await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+      dueDate: '2026-06-10',
+    })).rejects.toMatchObject({
+      response: {
+        statusCode: 422,
+        error: 'LIQUIDATION_FIN06_LEGACY_REBUILD_REQUIRED',
+      },
+    });
+    expect(tx.charge.createMany).not.toHaveBeenCalled();
+  });
+
   it('reuses compatible existing charges instead of creating duplicates', async () => {
     tx.charge.findMany.mockResolvedValue([
       {

@@ -679,6 +679,15 @@ export class LiquidationPublicationUseCase {
           const isFin06Liquidation =
             hasFin06Summary || hasFin06JsonArtifacts || hasFin06RelationalArtifacts;
 
+          if (isFin06Liquidation && currentRecord.publicationIntegrityVersion === null) {
+            throw new UnprocessableEntityException({
+              statusCode: 422,
+              error: 'LIQUIDATION_FIN06_LEGACY_REBUILD_REQUIRED',
+              message:
+                'La liquidación legacy contiene evidencia FIN-06 que requiere reconstrucción como moderna o cancelación',
+            });
+          }
+
           let incomeOffsetReferences: Array<{
             incomeApplicationId: string;
             buildingId: string;
@@ -991,10 +1000,7 @@ export class LiquidationPublicationUseCase {
               dueDate,
               publishedAt: now,
             });
-            snapshotVersion = currentRecord.publicationIntegrityVersion === 1 ? 4 : 3;
-            if (currentRecord.publicationIntegrityVersion !== 1) {
-              publicationSnapshot = { ...publicationSnapshot, version: 3 };
-            }
+            snapshotVersion = 4;
           } else if (currentRecord.publicationIntegrityVersion === 1) {
             publicationSnapshot = buildLiquidationPublicationSnapshotV4({
               liquidationId: current.id,
