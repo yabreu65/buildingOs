@@ -311,8 +311,16 @@ describe('authorized parent cascade trigger migration preflight', () => {
         expect(liquidationTriggerSql).toContain("'exchangeRateValue', to_jsonb(expense ->> 'exchangeRateValue')");
     expect(liquidationTriggerSql).toContain("'tenantId', \"tenantId\"");
     expect(liquidationTriggerSql).toContain("'dueDate', snapshotDueDate AT TIME ZONE 'UTC'");
+    expect(liquidationTriggerSql).toContain("'type', 'COMMON_EXPENSE'");
+    expect(liquidationTriggerSql).toContain("'concept', 'Expensas comunes ' || NEW.\"period\"");
         expect(liquidationTriggerSql).toContain("'dueDate', \"dueDate\"");
+    expect(liquidationTriggerSql).toContain("'type', \"type\"");
+    expect(liquidationTriggerSql).toContain("'concept', \"concept\"");
     expect(liquidationTriggerSql).toContain('jsonb_array_elements(NEW."publicationSnapshot" -> \'allocations\')');
+        expect(liquidationTriggerSql).toContain('jsonb_array_elements(NEW."distributionSnapshot" -> \'allocations\')');
+        expect(liquidationTriggerSql).toContain('publicationAllocationEvidence IS DISTINCT FROM distributionAllocationEvidence');
+        expect(liquidationTriggerSql).not.toContain('unit."code" = allocation ->> \'unitCode\'');
+        expect(liquidationTriggerSql).not.toContain('unit."label" IS NOT DISTINCT FROM allocation ->> \'unitLabel\'');
         expect(liquidationTriggerSql).toContain('FROM "Charge"');
         expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charge economic origin is immutable'");
         expect(chargeTriggerSql).toContain('FROM "Membership" WHERE "id" = OLD."createdByMembershipId"');
@@ -429,9 +437,17 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     });
   }
 
+  interface AllocationEvidence {
+    readonly unitId: string;
+    readonly unitCode: string;
+    readonly unitLabel: string | null;
+    readonly amountMinor: number;
+  }
+
   interface ModernLiquidationOptions {
     readonly valuationMode?: 'FUNCTIONAL' | 'LEGACY_NOMINAL';
-      readonly functionalExchangeRateValue?: string | number;
+    readonly functionalExchangeRateValue?: string | number;
+    readonly distributionAllocations?: readonly AllocationEvidence[];
   }
 
   function expenseEvidence(
@@ -479,11 +495,16 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
   ): Promise<void> {
     const valuationMode = options.valuationMode ?? 'LEGACY_NOMINAL';
     const expenseSnapshot = JSON.stringify([
-        expenseEvidence(valuationMode, options.functionalExchangeRateValue),
-      ]);
+      expenseEvidence(valuationMode, options.functionalExchangeRateValue),
+    ]);
+    const distributionSnapshot = JSON.stringify({
+      allocations: options.distributionAllocations ?? [
+        { unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 100 },
+      ],
+    });
     await tx.$executeRawUnsafe(`
       INSERT INTO "Liquidation" ("id", "tenantId", "buildingId", "period", "chargePeriod", "status", "publicationIntegrityVersion", "valuationMode", "baseCurrency", "totalAmountMinor", "totalsByCurrency", "expenseSnapshot", "distributionSnapshot", "unitCount", "generatedByMembershipId", "generatedAt", "grossExpenseAmountMinor", "adjustmentAmountMinor", "preIncomeAmountMinor", "incomeOffsetAmountMinor", "netDistributableAmountMinor", "incomeOffsetSnapshot", "incomeOffsetsByCurrency", "createdAt", "updatedAt")
-      VALUES ('${id}', '${tenantId}', '${buildingId}', '2026-05', '2026-06', 'DRAFT', 1, '${valuationMode}', 'ARS', 100, '{"ARS":100}', '${expenseSnapshot}', '[]', 2, 'member-1', '2026-05-01T00:00:00Z', 100, 0, 100, 0, 100, '[]', '{}', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
+      VALUES ('${id}', '${tenantId}', '${buildingId}', '2026-05', '2026-06', 'DRAFT', 1, '${valuationMode}', 'ARS', 100, '{"ARS":100}', '${expenseSnapshot}', '${distributionSnapshot}', 2, 'member-1', '2026-05-01T00:00:00Z', 100, 0, 100, 0, 100, '[]', '{}', '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
     `);
   }
   function completeV4PublicationSnapshot(
@@ -491,7 +512,9 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     tenantId: string,
     buildingId: string,
     valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL' = 'LEGACY_NOMINAL',
-    allocation = { unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 100 },
+    allocations: readonly AllocationEvidence[] = [
+      { unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 100 },
+    ],
   ): string {
     return JSON.stringify({
       version: 4,
@@ -513,7 +536,7 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
       incomeOffsetsByCurrency: {},
       expenses: [publicationExpenseEvidence(valuationMode)],
       incomeOffsets: [],
-      allocations: [allocation],
+      allocations,
       dueDate: '2026-06-10T00:00:00.000Z',
       publishedAt: '2026-05-03T00:00:00.000Z',
     });
@@ -530,15 +553,19 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
       : tenantId === 'tenant-unrelated'
         ? { unitId: 'unit-unrelated', unitCode: 'unrelated', unitLabel: null, amountMinor: 100 }
         : { unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 100 };
-    await insertLiquidation(tx, id, tenantId, buildingId);
+    await insertLiquidation(tx, id, tenantId, buildingId, {
+      distributionAllocations: [allocation],
+    });
     await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = '${id}'`);
     await insertCharge(tx, `charge-${id}`, id, tenantId, buildingId, allocation.unitId);
-    const publicationSnapshot = completeV4PublicationSnapshot(id, tenantId, buildingId, 'LEGACY_NOMINAL', allocation);
+    const publicationSnapshot = completeV4PublicationSnapshot(id, tenantId, buildingId, 'LEGACY_NOMINAL', [allocation]);
     await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = '${id}'`);
   }
   interface ChargeInsertOverrides {
     readonly period?: string;
     readonly chargePeriod?: string;
+    readonly type?: string;
+    readonly concept?: string;
     readonly currency?: string;
     readonly dueDate?: string;
   }
@@ -558,11 +585,13 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     const canceledAtValue = canceledAt === null ? 'NULL' : `'${canceledAt}'`;
     const period = overrides.period ?? '2026-05';
     const chargePeriod = overrides.chargePeriod ?? '2026-06';
+    const type = overrides.type ?? 'COMMON_EXPENSE';
+    const concept = overrides.concept ?? `Expensas comunes ${period}`;
     const currency = overrides.currency ?? 'ARS';
     const dueDate = overrides.dueDate ?? '2026-06-10T00:00:00Z';
     await tx.$executeRawUnsafe(`
       INSERT INTO "Charge" ("id", "tenantId", "buildingId", "unitId", "period", "chargePeriod", "type", "concept", "amount", "remainingAmount", "currency", "dueDate", "status", "liquidationId", "createdByMembershipId", "periodId", "coefficientSnapshot", "sumCoefSnapshot", "totalToAllocateSnapshot", "categorySnapshotId", "canceledAt", "createdAt", "updatedAt")
-      VALUES ('${id}', '${tenantId}', '${buildingId}', '${unitId}', '${period}', '${chargePeriod}', 'EXPENSE', 'Monthly liquidation', ${amount}, ${amount}, '${currency}', '${dueDate}', 'PENDING', ${liquidationValue}, 'member-1', 'period-1', '{"coefficient":1}', 1, 100, 'category-1', ${canceledAtValue}, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
+      VALUES ('${id}', '${tenantId}', '${buildingId}', '${unitId}', '${period}', '${chargePeriod}', '${type}', '${concept}', ${amount}, ${amount}, '${currency}', '${dueDate}', 'PENDING', ${liquidationValue}, 'member-1', 'period-1', '{"coefficient":1}', 1, 100, 'category-1', ${canceledAtValue}, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
     `);
   }
 
@@ -731,6 +760,8 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
           { name: 'building', tenantId: 'tenant-1', buildingId: 'building-2', amount: 100, overrides: {} },
           { name: 'period', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { period: '2026-04' } },
           { name: 'charge-period', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { chargePeriod: '2026-07' } },
+          { name: 'type', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { type: 'LATE_FEE' } },
+          { name: 'concept', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { concept: 'Unexpected concept' } },
           { name: 'currency', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { currency: 'USD' } },
           { name: 'due-date', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { dueDate: '2026-06-11T00:00:00Z' } },
           { name: 'liquidation-id', tenantId: 'tenant-1', buildingId: 'building-1', liquidationId: 'other-liquidation', amount: 100, overrides: {} },
@@ -798,7 +829,84 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
         });
       });
 
-      it('rejects nominal-only FUNCTIONAL V4 evidence and accepts complete functional FX evidence', async () => {
+      it('reconciles V4 allocation tuples to frozen distribution evidence', async () => {
+            const frozenAllocation: AllocationEvidence = {
+              unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 100,
+            };
+            const zeroAllocation: AllocationEvidence = {
+              unitId: 'unit-2', unitCode: '2', unitLabel: 'Suite 2', amountMinor: 0,
+            };
+
+            await sandbox(async (tx) => {
+              await tx.$executeRawUnsafe(`UPDATE "Unit" SET "code" = 'renamed-1', "label" = 'Renamed unit' WHERE "id" = 'unit-1'`);
+              await insertLiquidation(tx, 'allocation-renamed', 'tenant-1', 'building-1', { distributionAllocations: [frozenAllocation] });
+              await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'allocation-renamed'`);
+              await insertCharge(tx, 'charge-allocation-renamed', 'allocation-renamed');
+              const publicationSnapshot = completeV4PublicationSnapshot('allocation-renamed', 'tenant-1', 'building-1', 'LEGACY_NOMINAL', [frozenAllocation]);
+              await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'allocation-renamed'`);
+              expect(await tx.$queryRawUnsafe(`SELECT "status" FROM "Liquidation" WHERE "id" = 'allocation-renamed'`)).toEqual([{ status: 'PUBLISHED' }]);
+            });
+
+            await expect(sandbox(async (tx) => {
+              await tx.$executeRawUnsafe(`UPDATE "Unit" SET "code" = 'renamed-1', "label" = 'Renamed unit' WHERE "id" = 'unit-1'`);
+              await insertLiquidation(tx, 'allocation-current-identity', 'tenant-1', 'building-1', { distributionAllocations: [frozenAllocation] });
+              await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'allocation-current-identity'`);
+              await insertCharge(tx, 'charge-allocation-current-identity', 'allocation-current-identity');
+              const publicationSnapshot = completeV4PublicationSnapshot('allocation-current-identity', 'tenant-1', 'building-1', 'LEGACY_NOMINAL', [{ unitId: 'unit-1', unitCode: 'renamed-1', unitLabel: 'Renamed unit', amountMinor: 100 }]);
+              await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'allocation-current-identity'`);
+            })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+            await expect(sandbox(async (tx) => {
+              await insertLiquidation(tx, 'allocation-amount', 'tenant-1', 'building-1', { distributionAllocations: [frozenAllocation] });
+              await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'allocation-amount'`);
+              await insertCharge(tx, 'charge-allocation-amount-1', 'allocation-amount', 'tenant-1', 'building-1', 'unit-1', null, 99);
+              await insertCharge(tx, 'charge-allocation-amount-2', 'allocation-amount', 'tenant-1', 'building-1', 'unit-2', null, 1);
+              const publicationSnapshot = completeV4PublicationSnapshot('allocation-amount', 'tenant-1', 'building-1', 'LEGACY_NOMINAL', [{ unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 99 }, { unitId: 'unit-2', unitCode: '2', unitLabel: 'Suite 2', amountMinor: 1 }]);
+              await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'allocation-amount'`);
+            })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+            for (const [name, frozen, published] of [
+              ['missing', [frozenAllocation, zeroAllocation], [frozenAllocation]],
+              ['extra', [frozenAllocation], [frozenAllocation, zeroAllocation]],
+            ] as const) {
+              await expect(sandbox(async (tx) => {
+                await insertLiquidation(tx, `allocation-${name}`, 'tenant-1', 'building-1', { distributionAllocations: frozen });
+                await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'allocation-${name}'`);
+                await insertCharge(tx, `charge-allocation-${name}`, `allocation-${name}`);
+                const publicationSnapshot = completeV4PublicationSnapshot(`allocation-${name}`, 'tenant-1', 'building-1', 'LEGACY_NOMINAL', published);
+                await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'allocation-${name}'`);
+              })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+            }
+
+            await sandbox(async (tx) => {
+              await insertLiquidation(tx, 'allocation-zero-preserved', 'tenant-1', 'building-1', { distributionAllocations: [frozenAllocation, zeroAllocation] });
+              await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'allocation-zero-preserved'`);
+              await insertCharge(tx, 'charge-allocation-zero-preserved', 'allocation-zero-preserved');
+              const publicationSnapshot = completeV4PublicationSnapshot('allocation-zero-preserved', 'tenant-1', 'building-1', 'LEGACY_NOMINAL', [frozenAllocation, zeroAllocation]);
+              await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'allocation-zero-preserved'`);
+              expect(await tx.$queryRawUnsafe(`SELECT "status" FROM "Liquidation" WHERE "id" = 'allocation-zero-preserved'`)).toEqual([{ status: 'PUBLISHED' }]);
+            });
+          });
+
+          it('rejects cross-tenant and cross-building allocation substitutions', async () => {
+            for (const [scope, unitId, unitCode] of [
+              ['tenant', 'unit-other-tenant', 'other-tenant'],
+              ['building', 'unit-other-building', 'other-building'],
+            ] as const) {
+              await expect(sandbox(async (tx) => {
+                await tx.$executeRawUnsafe(`INSERT INTO "Tenant" ("id") VALUES ('tenant-2')`);
+                await tx.$executeRawUnsafe(`INSERT INTO "Building" ("id", "tenantId") VALUES ('building-2', 'tenant-1'), ('building-tenant-2', 'tenant-2')`);
+                await tx.$executeRawUnsafe(`INSERT INTO "Unit" ("id", "tenantId", "buildingId", "code", "label") VALUES ('unit-other-tenant', 'tenant-2', 'building-tenant-2', 'other-tenant', NULL), ('unit-other-building', 'tenant-1', 'building-2', 'other-building', NULL)`);
+                await insertLiquidation(tx, `allocation-${scope}-scope`, 'tenant-1', 'building-1');
+                await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'allocation-${scope}-scope'`);
+                await insertCharge(tx, `charge-allocation-${scope}-scope`, `allocation-${scope}-scope`);
+                const publicationSnapshot = completeV4PublicationSnapshot(`allocation-${scope}-scope`, 'tenant-1', 'building-1', 'LEGACY_NOMINAL', [{ unitId, unitCode, unitLabel: null, amountMinor: 100 }]);
+                await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'allocation-${scope}-scope'`);
+              })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+            }
+          });
+
+          it('rejects nominal-only FUNCTIONAL V4 evidence and accepts complete functional FX evidence', async () => {
         await expect(sandbox(async (tx) => {
           await insertLiquidation(tx, 'functional-nominal-only', 'tenant-1', 'building-1', { valuationMode: 'FUNCTIONAL' });
           await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'functional-nominal-only'`);
@@ -850,7 +958,12 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
         })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
 
         await sandbox(async (tx) => {
-          await insertLiquidation(tx, 'allocation-zero');
+          await insertLiquidation(tx, 'allocation-zero', 'tenant-1', 'building-1', {
+              distributionAllocations: [
+                { unitId: 'unit-1', unitCode: '1', unitLabel: null, amountMinor: 100 },
+                { unitId: 'unit-2', unitCode: '2', unitLabel: 'Suite 2', amountMinor: 0 },
+              ],
+            });
           await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'allocation-zero'`);
           await insertCharge(tx, 'charge-allocation-zero', 'allocation-zero');
           const publicationSnapshot = completeV4PublicationSnapshot('allocation-zero', 'tenant-1', 'building-1')

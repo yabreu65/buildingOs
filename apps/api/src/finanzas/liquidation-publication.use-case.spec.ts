@@ -511,6 +511,7 @@ it('rejects publication when status is not REVIEWED', async () => {
         buildingId: 'building-1',
         period: '2026-05',
         liquidationId: 'liq-1',
+        type: 'COMMON_EXPENSE',
         concept: 'Expensas comunes 2026-05',
       },
       {
@@ -521,6 +522,7 @@ it('rejects publication when status is not REVIEWED', async () => {
         buildingId: 'building-1',
         period: '2026-05',
         liquidationId: 'liq-1',
+        type: 'COMMON_EXPENSE',
         concept: 'Expensas comunes 2026-05',
       },
     ]);
@@ -532,17 +534,23 @@ it('rejects publication when status is not REVIEWED', async () => {
     expect(tx.charge.createMany).not.toHaveBeenCalled();
   });
 
-  it('fails when existing charges are incompatible', async () => {
+  it.each([
+    ['amount', { amount: 999 }],
+    ['type', { type: 'LATE_FEE' }],
+    ['concept', { concept: 'Unexpected concept' }],
+  ])('rejects existing charges with divergent %s', async (_field, divergence) => {
     tx.charge.findMany.mockResolvedValue([
       {
         unitId: 'unit-1',
-        amount: 999,
+        amount: 51,
         currency: 'ARS',
         dueDate: new Date('2026-06-10T00:00:00.000Z'),
         buildingId: 'building-1',
         period: '2026-05',
         liquidationId: 'liq-1',
+        type: 'COMMON_EXPENSE',
         concept: 'Expensas comunes 2026-05',
+        ...divergence,
       },
       {
         unitId: 'unit-2',
@@ -552,6 +560,7 @@ it('rejects publication when status is not REVIEWED', async () => {
         buildingId: 'building-1',
         period: '2026-05',
         liquidationId: 'liq-1',
+        type: 'COMMON_EXPENSE',
         concept: 'Expensas comunes 2026-05',
       },
     ]);

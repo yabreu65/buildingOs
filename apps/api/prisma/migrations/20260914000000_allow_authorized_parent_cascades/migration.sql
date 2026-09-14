@@ -13,6 +13,8 @@ DECLARE
   publicationExpenseEvidence jsonb;
   functionalExpenseTotal bigint;
   allocationChargeEvidence jsonb;
+  distributionAllocationEvidence jsonb;
+  publicationAllocationEvidence jsonb;
   generatedChargeEvidence jsonb;
 BEGIN
   IF TG_OP = 'DELETE' THEN
@@ -324,6 +326,26 @@ BEGIN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END IF;
 
+    IF jsonb_typeof(NEW."distributionSnapshot") IS DISTINCT FROM 'object'
+       OR jsonb_typeof(NEW."distributionSnapshot" -> 'allocations') IS DISTINCT FROM 'array'
+       OR jsonb_array_length(NEW."distributionSnapshot" -> 'allocations') = 0
+       OR EXISTS (
+             SELECT 1
+             FROM jsonb_array_elements(NEW."distributionSnapshot" -> 'allocations') AS allocation
+             WHERE jsonb_typeof(allocation -> 'unitId') IS DISTINCT FROM 'string'
+                OR btrim(allocation ->> 'unitId') = ''
+                OR jsonb_typeof(allocation -> 'unitCode') IS DISTINCT FROM 'string'
+                OR btrim(allocation ->> 'unitCode') = ''
+                OR (
+                  jsonb_typeof(allocation -> 'unitLabel') IS DISTINCT FROM 'null'
+                  AND jsonb_typeof(allocation -> 'unitLabel') IS DISTINCT FROM 'string'
+                )
+                OR jsonb_typeof(allocation -> 'amountMinor') IS DISTINCT FROM 'number'
+                OR allocation ->> 'amountMinor' !~ '^(0|[1-9][0-9]*)$'
+           ) THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END IF;
+
     IF jsonb_array_length(NEW."publicationSnapshot" -> 'allocations') = 0
        OR EXISTS (
          SELECT 1
@@ -344,8 +366,8 @@ BEGIN
               WHERE unit."id" = allocation ->> 'unitId'
                 AND unit."tenantId" = NEW."tenantId"
                 AND unit."buildingId" = NEW."buildingId"
-                AND unit."code" = allocation ->> 'unitCode'
-                AND unit."label" IS NOT DISTINCT FROM allocation ->> 'unitLabel'
+                AND TRUE
+                AND TRUE
             )
        ) THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
@@ -363,6 +385,8 @@ BEGIN
             'buildingId', NEW."buildingId",
             'period', NEW."period",
             'chargePeriod', NEW."chargePeriod",
+            'type', 'COMMON_EXPENSE',
+            'concept', 'Expensas comunes ' || NEW."period",
             'currency', NEW."baseCurrency",
             'dueDate', snapshotDueDate AT TIME ZONE 'UTC',
             'liquidationId', NEW."id",
@@ -383,6 +407,8 @@ BEGIN
             'buildingId', "buildingId",
             'period', "period",
             'chargePeriod', "chargePeriod",
+            'type', "type",
+            'concept', "concept",
             'currency', "currency",
             'dueDate', "dueDate",
             'liquidationId', "liquidationId",
@@ -396,11 +422,44 @@ BEGIN
       INTO generatedChargeEvidence
       FROM "Charge"
       WHERE "liquidationId" = NEW."id";
+
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'unitId', allocation ->> 'unitId',
+                'unitCode', allocation ->> 'unitCode',
+                'unitLabel', allocation -> 'unitLabel',
+                'amountMinor', (allocation ->> 'amountMinor')::bigint
+              )
+              ORDER BY allocation ->> 'unitId', allocation ->> 'unitCode',
+                       allocation ->> 'unitLabel', (allocation ->> 'amountMinor')::bigint
+            ),
+            '[]'::jsonb
+          )
+          INTO publicationAllocationEvidence
+          FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'allocations') AS allocation;
+
+          SELECT COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'unitId', allocation ->> 'unitId',
+                'unitCode', allocation ->> 'unitCode',
+                'unitLabel', allocation -> 'unitLabel',
+                'amountMinor', (allocation ->> 'amountMinor')::bigint
+              )
+              ORDER BY allocation ->> 'unitId', allocation ->> 'unitCode',
+                       allocation ->> 'unitLabel', (allocation ->> 'amountMinor')::bigint
+            ),
+            '[]'::jsonb
+          )
+          INTO distributionAllocationEvidence
+          FROM jsonb_array_elements(NEW."distributionSnapshot" -> 'allocations') AS allocation;
     EXCEPTION WHEN others THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END;
 
     IF allocationTotal IS DISTINCT FROM NEW."totalAmountMinor"
+       OR publicationAllocationEvidence IS DISTINCT FROM distributionAllocationEvidence
        OR allocationChargeEvidence IS DISTINCT FROM generatedChargeEvidence THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END IF;

@@ -1126,6 +1126,7 @@ export class LiquidationPublicationUseCase {
               period: true,
               chargePeriod: true,
               liquidationId: true,
+              type: true,
               concept: true,
             },
             orderBy: { unitId: 'asc' },
@@ -1154,6 +1155,7 @@ export class LiquidationPublicationUseCase {
                 (currentRecord.publicationIntegrityVersion === 1 &&
                   existingCharge.chargePeriod !== expectedCharge.chargePeriod) ||
                 existingCharge.liquidationId !== expectedCharge.liquidationId ||
+                existingCharge.type !== expectedCharge.type ||
                 existingCharge.concept !== expectedCharge.concept ||
                 existingCharge.dueDate.getTime() !== expectedCharge.dueDate.getTime()
               ) {
