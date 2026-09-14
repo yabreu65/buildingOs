@@ -21,6 +21,10 @@ import { IncomePoliciesService } from '../../src/finanzas/income-policies.servic
 import { IncomesService } from '../../src/finanzas/incomes.service';
 import { MovementAllocationService } from '../../src/finanzas/movement-allocation.service';
 import { allocateByLargestRemainder } from '../../src/finanzas/movement-allocation.service';
+import {
+  buildLiquidationDistributionSnapshot,
+  distributeLiquidationMovements,
+} from '../../src/finanzas/liquidation-distribution';
 import { parseLiquidationPublicationSnapshot } from '../../src/finanzas/liquidation-publication-snapshot';
 import { ResidentAccessService } from '../../src/resident-access/resident-access.service';
 
@@ -2024,6 +2028,33 @@ export async function ensureLegacyIncomeBackfillFixtures(input: {
   }
 
   // R2-4: Validate conflict liquidation exact state.
+  const conflictUnits = await prisma.unit.findMany({
+    where: { tenantId, buildingId: buildingA1Id, isBillable: true },
+    select: { id: true, code: true, label: true },
+    orderBy: { code: 'asc' },
+  });
+  if (conflictUnits.length === 0) {
+    throw new Error('TEST-FIXTURE-DIRTY: Legacy conflict liquidation requires billable units');
+  }
+  const conflictDistribution = buildLiquidationDistributionSnapshot(
+    distributeLiquidationMovements({
+      tenantId,
+      buildingId: buildingA1Id,
+      totalAmountMinor: 10000,
+      movements: [{
+        movementId: 'seed-legacy-backfill-conflict-expense',
+        scope: 'BUILDING',
+        amountMinor: 10000,
+        recipients: conflictUnits.map((unit) => ({
+          unitId: unit.id,
+          unitCode: unit.code,
+          unitLabel: unit.label,
+          coefficient: null,
+          m2: null,
+        })),
+      }],
+    }),
+  );
   const existingConflictLiq = await prisma.liquidation.findUnique({
     where: { id: LEGACY_BACKFIX_CONFLICT_LIQUIDATION_ID },
     select: {
@@ -2053,7 +2084,10 @@ export async function ensureLegacyIncomeBackfillFixtures(input: {
         tenantId,
         buildingId: buildingA1Id,
         period: LEGACY_BACKFIX_CONFLICT_PERIOD,
+        chargePeriod: '2026-01',
         status: 'DRAFT',
+        publicationIntegrityVersion: 1,
+        valuationMode: 'LEGACY_NOMINAL',
         baseCurrency,
         totalAmountMinor: 10000,
         totalsByCurrency: { [baseCurrency]: 10000 },
@@ -2067,9 +2101,9 @@ export async function ensureLegacyIncomeBackfillFixtures(input: {
           description: `[FIN07D:LEGACY_BACKFILL] Conflict expense ${LEGACY_BACKFIX_CONFLICT_PERIOD}`,
           type: 'EXPENSE',
         }],
-        unitCount: 1,
+        distributionSnapshot: conflictDistribution,
+        unitCount: conflictUnits.length,
         generatedByMembershipId: adminMembershipId,
-        valuationMode: null,
         grossExpenseAmountMinor: null,
         adjustmentAmountMinor: null,
         preIncomeAmountMinor: null,
@@ -2218,33 +2252,42 @@ export async function ensureSeedFinanceFixture(
     select: { id: true },
   });
 
-  // Historical NULL liquidations are valid only as pre-existing records. They
-  // are covered by publication regressions, not created by the production seed.
-  const historical: HistoricalV1V2Result = {
-    v1LiquidationId: '',
-    v1Created: false,
-    v1ChargeCount: 0,
-    v2LiquidationId: '',
-    v2Created: false,
-    v2ChargeCount: 0,
-  };
+  // Historical NULL liquidations are test fixtures representing pre-existing
+  // records. New application rows remain blocked by the database trigger.
+  await input.prisma.$executeRawUnsafe(
+    'ALTER TABLE "Liquidation" DISABLE TRIGGER "Liquidation_publication_integrity_origin"',
+  );
+  await input.prisma.$executeRawUnsafe(
+    'ALTER TABLE "Liquidation" DISABLE TRIGGER "Liquidation_publication_integrity"',
+  );
+  let historical: HistoricalV1V2Result;
+  try {
+    historical = await ensureHistoricalV1V2Liquidations({
+      prisma: input.prisma,
+      tenantId: input.tenantId,
+      adminMembershipId: input.adminMembershipId,
+      buildingA1Id: input.buildingA1Id,
+      baseCurrency: input.baseCurrency,
+    });
+  } finally {
+    await input.prisma.$executeRawUnsafe(
+      'ALTER TABLE "Liquidation" ENABLE TRIGGER "Liquidation_publication_integrity"',
+    );
+    await input.prisma.$executeRawUnsafe(
+      'ALTER TABLE "Liquidation" ENABLE TRIGGER "Liquidation_publication_integrity_origin"',
+    );
+  }
 
-  const legacyBackfill: LegacyBackfillFixturesResult = {
-    autoOffsetIncomeId: '',
-    autoOffsetCreated: false,
-    alreadyPlanIncomeId: '',
-    alreadyPlanCreated: false,
-    alreadyPlanApplicationId: '',
-    alreadyPlanApplicationCreated: false,
-    reserveFundIncomeId: '',
-    reserveFundCreated: false,
-    specialFundIncomeId: '',
-    specialFundCreated: false,
-    conflictIncomeId: '',
-    conflictCreated: false,
-    conflictLiquidationId: '',
-    conflictLiquidationCreated: false,
-  };
+  const legacyBackfill = await ensureLegacyIncomeBackfillFixtures({
+    prisma: input.prisma,
+    tenantId: input.tenantId,
+    adminMembershipId: input.adminMembershipId,
+    adminRoles: input.adminRoles,
+    buildingA1Id: input.buildingA1Id,
+    baseCurrency: input.baseCurrency,
+    categoryIncomeId,
+    applications,
+  });
 
   return {
     categoryIncomeId,
