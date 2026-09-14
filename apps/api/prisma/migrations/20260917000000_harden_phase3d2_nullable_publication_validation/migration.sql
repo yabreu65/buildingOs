@@ -52,7 +52,7 @@ BEGIN
     $replace$jsonb_typeof(movement -> 'scope') IS DISTINCT FROM 'string'
       OR (movement ->> 'scope') IS DISTINCT FROM 'BUILDING'
          AND (movement ->> 'scope') IS DISTINCT FROM 'UNIT_GROUP'
-         AND (movement ->> 'scope') IS DISTINCT FROM 'ADJUSTMENT'$replace$
+         AND (movement ->> 'scope') IS DISTINCT FROM 'ADJUSTMENT')$replace$
   );
   rewritten_definition := replace(
     rewritten_definition,
@@ -65,7 +65,7 @@ BEGIN
     $replace$jsonb_typeof(movement -> 'weightSource') IS DISTINCT FROM 'string'
       OR (movement ->> 'weightSource') IS DISTINCT FROM 'COEFFICIENT'
          AND (movement ->> 'weightSource') IS DISTINCT FROM 'M2'
-         AND (movement ->> 'weightSource') IS DISTINCT FROM 'EQUAL'$replace$
+         AND (movement ->> 'weightSource') IS DISTINCT FROM 'EQUAL')$replace$
   );
 
   IF rewritten_definition <> function_definition THEN
