@@ -91,6 +91,13 @@ export const FIN07D_RESERVE_FUND_DESCRIPTION =
   'Fondo de reserva determinístico para E2E FIN-07D (precondición Phase 2B/legacy)';
 export const FIN07D_SPECIAL_FUND_DESCRIPTION =
   'Fondo especial determinístico para E2E FIN-07D (precondición Phase 2B/legacy)';
+const LOCAL_HISTORICAL_FIXTURE_DATABASES = new Set([
+  'buildingos_test',
+  'buildingos_local_v2_test',
+  'buildingos_phase3d2_test',
+  'buildingos_fin06_acceptance',
+]);
+const LOCAL_DATABASE_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
 export interface SeedFinanceFixtureInput {
   readonly prisma: PrismaClient;
@@ -113,14 +120,21 @@ export function assertSafeHistoricalFixtureDatabase(): void {
   }
 
   let databaseName: string;
+  let databaseHost: string;
   try {
-    databaseName = decodeURIComponent(new URL(databaseUrl).pathname.replace(/^\/+/, ''));
+    const parsedUrl = new URL(databaseUrl);
+    databaseName = decodeURIComponent(parsedUrl.pathname.replace(/^\/+/, ''));
+    databaseHost = parsedUrl.hostname.toLowerCase();
   } catch {
     throw new Error('Historical FIN07D fixtures require a valid DATABASE_URL');
   }
 
-  if (!/(^|[-_])test($|[-_])/i.test(databaseName)) {
-    throw new Error('Historical FIN07D fixtures require a disposable test database');
+  if (databaseHost && !LOCAL_DATABASE_HOSTS.has(databaseHost)) {
+    throw new Error('Historical FIN07D fixtures require a local test database host');
+  }
+
+  if (!LOCAL_HISTORICAL_FIXTURE_DATABASES.has(databaseName)) {
+    throw new Error('Historical FIN07D fixtures require an allowlisted local test database');
   }
 }
 

@@ -51,9 +51,16 @@ describe('historical finance fixture safety', () => {
       process.env.NODE_ENV = 'test';
       process.env.DATABASE_URL = `postgresql://local:local@127.0.0.1:5434/${databaseName}`;
 
-      expect(() => assertSafeHistoricalFixtureDatabase()).toThrow('disposable test database');
-    },
-  );
+       expect(() => assertSafeHistoricalFixtureDatabase()).toThrow('allowlisted local test database');
+     },
+   );
+
+  it('rejects a remote host even when the database name looks like a test database', () => {
+    process.env.NODE_ENV = 'test';
+    process.env.DATABASE_URL = 'postgresql://local:local@staging.example/buildingos_test';
+
+    expect(() => assertSafeHistoricalFixtureDatabase()).toThrow('local test database host');
+  });
 
   it('keeps historical trigger disabling transactionally isolated and restores both triggers on failure', async () => {
     process.env.NODE_ENV = 'test';
