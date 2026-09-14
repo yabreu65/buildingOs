@@ -18,6 +18,20 @@ external_blocker() {
   exit "$status"
 }
 
+review_failed() {
+  local status="${1:-1}"
+  printf 'REVIEW_FAILED: valid reported issues block READY states.\n' >&2
+  exit "$status"
+}
+
+is_external_gga_failure() {
+  local output_file="$1"
+
+  grep -Eiq \
+    '((provider|codex|opencode).*(authentication|authorization|credentials?|api[ _-]?key|token).*(failed|failure|error|denied|unauthorized|invalid|expired)|(authentication|authorization|credentials?|api[ _-]?key|token).*(failed|failure|error|denied|unauthorized|invalid|expired).*(provider|codex|opencode))|quota|rate[ -]?limit|too many requests|provider (is )?(unavailable|not available|failed|failure|error|not configured|missing)|failed to (initialize|load|connect to) (the )?provider|unable to (initialize|load|connect to) (the )?provider|network (error|failure|unavailable|unreachable)|connection (refused|reset|timed out|timeout|failed)|timed out|timeout|dns|econn[a-z_]*|tls|socket|http 5[0-9]{2}|service unavailable' \
+    "$output_file"
+}
+
 reject_dirty_tree() {
   if ! git diff --quiet || ! git diff --cached --quiet; then
     fail 'tracked changes are present; the exact-head GGA gate requires a clean tree'
@@ -63,11 +77,14 @@ if ! branch="$(git symbolic-ref --quiet --short HEAD)"; then
   fail 'HEAD is detached; exact-head verification requires a branch'
 fi
 
-if ! git rev-parse --verify --quiet main >/dev/null; then
+if ! local_main="$(git rev-parse --verify --quiet main)"; then
   fail 'main is unavailable'
 fi
-if ! git rev-parse --verify --quiet origin/main >/dev/null; then
+if ! remote_main="$(git rev-parse --verify --quiet origin/main)"; then
   fail 'origin/main is unavailable'
+fi
+if [[ "$local_main" != "$remote_main" ]]; then
+  fail 'local main does not equal freshly fetched origin/main; update local main before exact-head GGA review'
 fi
 if ! remote_head="$(git rev-parse --verify --quiet "origin/$branch")"; then
   fail "origin/$branch is unavailable"
@@ -91,8 +108,7 @@ else
 fi
 
 sed -n '1,200p' "$output_file" >&2
-if grep -Eiq 'provider|auth|authentication|authorization|credential|token|quota|rate[ -]?limit' "$output_file"; then
-  external_blocker 'GGA provider, authentication, or quota failure; resolve it and rerun the exact-head gate' "$status"
+if is_external_gga_failure "$output_file"; then
+  external_blocker 'GGA provider, authentication, quota, or transport failure; resolve it and rerun the exact-head gate' "$status"
 fi
-printf 'GGA gate failed: valid reported issues block READY states.\n' >&2
-exit "$status"
+review_failed "$status"

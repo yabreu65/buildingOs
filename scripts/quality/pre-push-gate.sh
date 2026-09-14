@@ -54,6 +54,20 @@ require_seed_test_database() {
   fi
 }
 
+is_backend_production_path() {
+  local path="$1"
+
+  case "$path" in
+    apps/api/src/*)
+      case "$path" in
+        *.spec.ts|*.test.ts|*/__tests__/*|*/test/*|*/tests/*) return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 if ! git rev-parse --verify --quiet origin/main >/dev/null; then
   fail 'origin/main is unavailable; refusing to determine changed paths'
 fi
@@ -73,10 +87,13 @@ needs_prisma_gate=0
 while IFS= read -r path; do
   [[ -n "$path" ]] || continue
   case "$path" in
-    apps/api/prisma/seed.test.ts|apps/api/prisma/seed*.ts|apps/api/prisma/lib/seed-*|apps/api/prisma/lib/*seed*|apps/api/src/finanzas/*)
+    apps/api/prisma/schema.prisma|apps/api/prisma/migrations/*|apps/api/prisma/seed.test.ts|apps/api/prisma/seed*.ts|apps/api/prisma/lib/seed-*|apps/api/prisma/lib/*seed*)
       needs_seed_test=1
       ;;
   esac
+  if is_backend_production_path "$path"; then
+    needs_seed_test=1
+  fi
   case "$path" in
     apps/api/prisma/schema.prisma|apps/api/prisma/migrations/*)
       needs_prisma_gate=1

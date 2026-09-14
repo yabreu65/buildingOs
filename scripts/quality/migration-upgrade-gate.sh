@@ -10,10 +10,20 @@ fail() {
   exit 1
 }
 
-BASE_REF="${BASE_REF:-main}"
+BASE_REF="${BASE_REF:-origin/main}"
 CURRENT_REF="${CURRENT_REF:-HEAD}"
+
+if ! git fetch origin; then
+  fail 'unable to fetch origin/main for migration baseline'
+fi
+if ! ORIGIN_MAIN_COMMIT="$(git rev-parse --verify --quiet 'origin/main^{commit}')"; then
+  fail 'origin/main does not resolve to a commit after fetch'
+fi
 if ! BASE_COMMIT="$(git rev-parse --verify --quiet "${BASE_REF}^{commit}")"; then
   fail "BASE_REF does not resolve to a commit: $BASE_REF"
+fi
+if [[ "$BASE_COMMIT" != "$ORIGIN_MAIN_COMMIT" ]]; then
+  fail 'BASE_REF must resolve to freshly fetched origin/main'
 fi
 if ! CURRENT_COMMIT="$(git rev-parse --verify --quiet "${CURRENT_REF}^{commit}")"; then
   fail "CURRENT_REF does not resolve to a commit: $CURRENT_REF"
