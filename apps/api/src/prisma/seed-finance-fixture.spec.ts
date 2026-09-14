@@ -9,12 +9,15 @@ import {
 describe('historical finance fixture safety', () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalDatabaseUrl = process.env.DATABASE_URL;
+  const originalFin07dReset = process.env.FIN07D_E2E_RESET;
 
   afterEach(() => {
     if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = originalNodeEnv;
     if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalFin07dReset === undefined) delete process.env.FIN07D_E2E_RESET;
+    else process.env.FIN07D_E2E_RESET = originalFin07dReset;
   });
 
   it('accepts only test environments and disposable test database names', () => {
@@ -32,6 +35,14 @@ describe('historical finance fixture safety', () => {
     process.env.DATABASE_URL = `postgresql://local:local@127.0.0.1:5434/${databaseName}`;
 
     expect(() => assertSafeHistoricalFixtureDatabase()).toThrow('NODE_ENV=test');
+  });
+
+  it('accepts the explicit FIN-07D E2E reset mode outside test NODE_ENV', () => {
+    process.env.NODE_ENV = 'development';
+    process.env.FIN07D_E2E_RESET = '1';
+    process.env.DATABASE_URL = 'postgresql://local:local@127.0.0.1:5434/buildingos_phase3d2_test';
+
+    expect(() => assertSafeHistoricalFixtureDatabase()).not.toThrow();
   });
 
   it.each(['buildingos', 'other_db', 'buildingos_local'])(

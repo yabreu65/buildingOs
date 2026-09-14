@@ -103,8 +103,8 @@ export interface SeedFinanceFixtureInput {
 }
 
 export function assertSafeHistoricalFixtureDatabase(): void {
-  if (process.env.NODE_ENV !== 'test') {
-    throw new Error('Historical FIN07D fixtures require NODE_ENV=test');
+  if (process.env.NODE_ENV !== 'test' && process.env.FIN07D_E2E_RESET !== '1') {
+    throw new Error('Historical FIN07D fixtures require NODE_ENV=test or FIN07D_E2E_RESET=1');
   }
 
   const databaseUrl = process.env.DATABASE_URL;
