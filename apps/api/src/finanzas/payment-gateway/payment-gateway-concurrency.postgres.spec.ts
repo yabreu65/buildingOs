@@ -244,20 +244,47 @@ describePostgres('Payment gateway PostgreSQL webhook concurrency', () => {
     return { allocation, charge, event, payment };
   }
 
-  function buildApprovalService(): FinanzasService {
-    const validators = new FinanzasValidators(
-      approvalPrisma,
-      new ResidentAccessService(approvalPrisma),
-    );
+  function buildFinanzasService(prisma: PrismaService): FinanzasService {
+    const validators = new FinanzasValidators(prisma, new ResidentAccessService(prisma));
     return new FinanzasService(
-      approvalPrisma,
+      prisma,
       validators,
       { createLog: jest.fn().mockResolvedValue(undefined) } as unknown as AuditService,
       { createNotification: jest.fn().mockResolvedValue(undefined) } as unknown as NotificationsService,
       { ensureReceiptForPayment: jest.fn().mockResolvedValue(null) } as unknown as PaymentReceiptService,
       {} as unknown as ExpensesService,
-      new CurrencyConversionService(approvalPrisma),
+      new CurrencyConversionService(prisma),
     );
+  }
+
+  function buildApprovalService(): FinanzasService {
+    return buildFinanzasService(approvalPrisma);
+  }
+
+  async function holdUnitFinancialLock(tenantId: string, unitId: string): Promise<{
+    release: () => void;
+    transaction: Promise<void>;
+  }> {
+    const unitLockKey = `buildingos:unit-financial:v1:${tenantId}:${unitId}`;
+    let release!: () => void;
+    const holdLock = new Promise<void>((resolve) => { release = resolve; });
+    let notifyAcquired!: () => void;
+    const acquired = new Promise<void>((resolve) => { notifyAcquired = resolve; });
+    const transaction = blocker.$transaction(async (tx) => {
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${unitLockKey}, 0))`,
+      );
+      notifyAcquired();
+      await holdLock;
+    });
+    await acquired;
+    return { release, transaction };
+  }
+
+  function expectEffectiveAllocationConflict(reason: unknown): void {
+    expect(reason).toEqual(expect.objectContaining({
+      response: expect.objectContaining({ error: 'CHARGE_HAS_EFFECTIVE_ALLOCATIONS' }),
+    }));
   }
 
   it('serializes duplicate paid webhooks and reuses the submitted reservation exactly once', async () => {
@@ -326,6 +353,171 @@ describePostgres('Payment gateway PostgreSQL webhook concurrency', () => {
       .resolves.toBe(1);
     await expect(observer.processedWebhookEvent.count({ where: { eventId: ctx.event.eventId } }))
       .resolves.toBe(1);
+  });
+
+  it('rejects cancellation after a PAID webhook commits an effective allocation', async () => {
+    const ctx = await fixture();
+    const provider = new DeterministicProvider(ctx.event);
+    const gateway = new PaymentGatewayService(
+      provider,
+      secondPrisma,
+      noOpIdempotency,
+      new CurrencyConversionService(secondPrisma),
+    );
+    const cancellation = buildFinanzasService(firstPrisma);
+    const eventLockKey = `webhook:${provider.providerName}:${ctx.event.eventId}`;
+    let releaseBlocker!: () => void;
+    const holdBlocker = new Promise<void>((resolve) => { releaseBlocker = resolve; });
+    let blockerReady!: () => void;
+    const blockerAcquired = new Promise<void>((resolve) => { blockerReady = resolve; });
+    const blockingTransaction = blocker.$transaction(async (tx) => {
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${eventLockKey}, 0))`,
+      );
+      blockerReady();
+      await holdBlocker;
+    });
+    await blockerAcquired;
+
+    const webhookRun = gateway.processWebhookEvent(ctx.event.rawPayload, 'sig', 'mercadopago');
+    await waitForApplicationToBlock('gateway-concurrency-second');
+    const cancellationRun = cancellation.cancelCharge(
+      ctx.payment.tenantId,
+      ctx.payment.buildingId,
+      ctx.charge.id,
+      ['TENANT_ADMIN'],
+      ctx.payment.createdByUserId,
+      { reason: 'concurrency coverage' },
+    );
+    await waitForApplicationToBlock('gateway-concurrency-first');
+
+    releaseBlocker();
+    await blockingTransaction;
+    await expect(webhookRun).resolves.toEqual(expect.objectContaining({ chargeUpdated: true }));
+    const [cancellationResult] = await Promise.allSettled([cancellationRun]);
+    expect(cancellationResult.status).toBe('rejected');
+    if (cancellationResult.status === 'rejected') {
+      expectEffectiveAllocationConflict(cancellationResult.reason);
+    }
+
+    const [payment, charge, allocations] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: ctx.payment.id } }),
+      observer.charge.findUniqueOrThrow({ where: { id: ctx.charge.id } }),
+      observer.paymentAllocation.findMany({ where: { paymentId: ctx.payment.id } }),
+    ]);
+    expect(payment.status).toBe(PaymentStatus.RECONCILED);
+    expect(charge).toMatchObject({ canceledAt: null, status: ChargeStatus.PAID });
+    expect(allocations).toEqual([expect.objectContaining({ id: ctx.allocation.id })]);
+  });
+
+  it('leaves a PAID webhook unprocessed when cancellation commits first', async () => {
+    const ctx = await fixture();
+    const provider = new DeterministicProvider(ctx.event);
+    const gateway = new PaymentGatewayService(
+      provider,
+      secondPrisma,
+      noOpIdempotency,
+      new CurrencyConversionService(secondPrisma),
+    );
+    const cancellation = buildFinanzasService(firstPrisma);
+    const [paymentBefore, allocationBefore] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: ctx.payment.id } }),
+      observer.paymentAllocation.findUniqueOrThrow({ where: { id: ctx.allocation.id } }),
+    ]);
+    const unitLock = await holdUnitFinancialLock(ctx.payment.tenantId, ctx.charge.unitId);
+    const cancellationRun = cancellation.cancelCharge(
+      ctx.payment.tenantId,
+      ctx.payment.buildingId,
+      ctx.charge.id,
+      ['TENANT_ADMIN'],
+      ctx.payment.createdByUserId,
+      { reason: 'concurrency coverage' },
+    );
+    await waitForApplicationToBlock('gateway-concurrency-first');
+    const webhookRun = gateway.processWebhookEvent(ctx.event.rawPayload, 'sig', 'mercadopago');
+    await waitForApplicationToBlock('gateway-concurrency-second');
+
+    unitLock.release();
+    await unitLock.transaction;
+    await expect(cancellationRun).resolves.toEqual(expect.objectContaining({ id: ctx.charge.id }));
+    await expect(webhookRun).resolves.toEqual(expect.objectContaining({ chargeUpdated: false }));
+
+    const [payment, charge, allocation, processedEvents] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: ctx.payment.id } }),
+      observer.charge.findUniqueOrThrow({ where: { id: ctx.charge.id } }),
+      observer.paymentAllocation.findUniqueOrThrow({ where: { id: ctx.allocation.id } }),
+      observer.processedWebhookEvent.findMany({ where: { eventId: ctx.event.eventId } }),
+    ]);
+    expect(payment).toEqual(paymentBefore);
+    expect(allocation).toEqual(allocationBefore);
+    expect(charge.canceledAt).not.toBeNull();
+    expect(charge.status).not.toBe(ChargeStatus.PAID);
+    expect(processedEvents).toHaveLength(0);
+  });
+
+  it('serializes concurrent cancellation and PAID webhook processing into one valid order', async () => {
+    const ctx = await fixture();
+    const provider = new DeterministicProvider(ctx.event);
+    const gateway = new PaymentGatewayService(
+      provider,
+      secondPrisma,
+      noOpIdempotency,
+      new CurrencyConversionService(secondPrisma),
+    );
+    const cancellation = buildFinanzasService(firstPrisma);
+    const [paymentBefore, allocationBefore] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: ctx.payment.id } }),
+      observer.paymentAllocation.findUniqueOrThrow({ where: { id: ctx.allocation.id } }),
+    ]);
+    const unitLock = await holdUnitFinancialLock(ctx.payment.tenantId, ctx.charge.unitId);
+    const cancellationRun = cancellation.cancelCharge(
+      ctx.payment.tenantId,
+      ctx.payment.buildingId,
+      ctx.charge.id,
+      ['TENANT_ADMIN'],
+      ctx.payment.createdByUserId,
+      { reason: 'concurrency coverage' },
+    );
+    const webhookRun = gateway.processWebhookEvent(ctx.event.rawPayload, 'sig', 'mercadopago');
+    await Promise.all([
+      waitForApplicationToBlock('gateway-concurrency-first'),
+      waitForApplicationToBlock('gateway-concurrency-second'),
+    ]);
+
+    unitLock.release();
+    await unitLock.transaction;
+    const [cancellationResult, webhookResult] = await Promise.allSettled([cancellationRun, webhookRun]);
+    const [payment, charge, allocation, processedEvents] = await Promise.all([
+      observer.payment.findUniqueOrThrow({ where: { id: ctx.payment.id } }),
+      observer.charge.findUniqueOrThrow({ where: { id: ctx.charge.id } }),
+      observer.paymentAllocation.findUniqueOrThrow({ where: { id: ctx.allocation.id } }),
+      observer.processedWebhookEvent.findMany({ where: { eventId: ctx.event.eventId } }),
+    ]);
+
+    if (cancellationResult.status === 'fulfilled') {
+      expect(webhookResult).toEqual(expect.objectContaining({
+        status: 'fulfilled',
+        value: expect.objectContaining({ chargeUpdated: false }),
+      }));
+      expect(payment).toEqual(paymentBefore);
+      expect(allocation).toEqual(allocationBefore);
+      expect(charge.canceledAt).not.toBeNull();
+      expect(charge.status).not.toBe(ChargeStatus.PAID);
+      expect(processedEvents).toHaveLength(0);
+    } else {
+      expectEffectiveAllocationConflict(cancellationResult.reason);
+      expect(webhookResult).toEqual(expect.objectContaining({
+        status: 'fulfilled',
+        value: expect.objectContaining({ chargeUpdated: true }),
+      }));
+      expect(payment.status).toBe(PaymentStatus.RECONCILED);
+      expect(charge).toMatchObject({ canceledAt: null, status: ChargeStatus.PAID });
+      expect(allocation).toMatchObject({ id: ctx.allocation.id });
+      expect(processedEvents).toHaveLength(1);
+    }
+
+    const paymentIsEffective = [PaymentStatus.APPROVED, PaymentStatus.RECONCILED].includes(payment.status);
+    expect(charge.canceledAt !== null && paymentIsEffective).toBe(false);
   });
 
   it('does not deadlock legacy null-unit approval against a gateway webhook', async () => {

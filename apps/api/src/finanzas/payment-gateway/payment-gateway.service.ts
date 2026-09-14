@@ -293,6 +293,12 @@ export class PaymentGatewayService {
         },
       });
       if (!lockedCharge) return false;
+      if (lockedCharge.canceledAt) {
+        this.logger.error(
+          `Webhook event ${event.eventId}: charge ${lockedCharge.id} is canceled; no financial mutation`,
+        );
+        return false;
+      }
       if (event.currency !== lockedCharge.currency) {
         throw new UnprocessableEntityException({
           statusCode: 422,
