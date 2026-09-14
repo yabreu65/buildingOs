@@ -473,6 +473,21 @@ function resolveRecipientWeights(recipients: readonly NormalizedRecipient[]): {
     };
   }
 
+  const allRecipientsHaveM2 = recipients.every((recipient) => recipient.m2Decimal !== null);
+  const m2Total = recipients.reduce(
+    (total, recipient) => total.plus(recipient.m2Decimal ?? 0),
+    new Prisma.Decimal(0),
+  );
+  if (allRecipientsHaveM2 && m2Total.greaterThan(0)) {
+    return {
+      weightSource: 'M2',
+      weights: recipients.map((recipient) => ({
+        recipient,
+        weight: recipient.m2Decimal ?? new Prisma.Decimal(0),
+      })),
+    };
+  }
+
   return {
     weightSource: 'EQUAL',
     weights: recipients.map((recipient) => ({ recipient, weight: new Prisma.Decimal(1) })),
@@ -490,6 +505,15 @@ function resolveCanonicalWeightSource(
     coefficients.reduce((total, coefficient) => total.plus(coefficient ?? 0), new Prisma.Decimal(0)).greaterThan(0)
   ) {
     return 'COEFFICIENT';
+  }
+  const m2 = recipients.map((recipient) =>
+    recipient.m2 === null ? null : new Prisma.Decimal(recipient.m2),
+  );
+  if (
+    m2.every((area) => area !== null) &&
+    m2.reduce((total, area) => total.plus(area ?? 0), new Prisma.Decimal(0)).greaterThan(0)
+  ) {
+    return 'M2';
   }
   return 'EQUAL';
 }

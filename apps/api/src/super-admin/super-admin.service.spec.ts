@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AuditAction, TenantType } from '@prisma/client';
 import { SuperAdminService } from './super-admin.service';
@@ -79,6 +79,18 @@ describe('SuperAdminService', () => {
     });
   });
 
+  it('rejects deletion when the tenant does not exist', async () => {
+    mockPrisma.tenant.findUnique.mockResolvedValue(null);
+
+    await expect(service.deleteTenant('missing-tenant', 'actor-1')).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.deleteTenant('missing-tenant', 'actor-1')).rejects.toThrow(
+      'Tenant with ID "missing-tenant" not found',
+    );
+
+    expect(mockPrisma.tenant.delete).not.toHaveBeenCalled();
+    expect(mockAuditService.createLog).not.toHaveBeenCalled();
+  });
+
   it('allows delete for demo tenants', async () => {
     const demoTenant = buildTenant({ id: 'tenant-demo', isDemo: true });
 
@@ -88,6 +100,7 @@ describe('SuperAdminService', () => {
 
     await expect(service.deleteTenant('tenant-demo', 'actor-1')).resolves.toBeUndefined();
 
+    expect(mockPrisma.tenant.findUnique).toHaveBeenCalledWith({ where: { id: 'tenant-demo' } });
     expect(mockPrisma.tenant.delete).toHaveBeenCalledWith({ where: { id: 'tenant-demo' } });
     expect(mockAuditService.createLog).toHaveBeenCalledWith(
       expect.objectContaining({

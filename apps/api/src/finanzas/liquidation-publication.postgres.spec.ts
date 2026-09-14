@@ -23,6 +23,7 @@ import {
   type LiquidationWorkflowDependencies,
 } from './liquidation-publication.use-case';
 import { ensureSeedPublishedLiquidation } from '../../prisma/lib/seed-liquidation-workflow';
+import { buildLiquidationDistributionSnapshot, distributeLiquidationMovements } from './liquidation-distribution';
 
 const describePostgresIntegration =
   process.env.RUN_POSTGRES_INTEGRATION === '1' ? describe : describe.skip;
@@ -127,6 +128,47 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
     },
   ];
 
+  const buildDistributionSnapshot = (
+    tenantId: string,
+    buildingId: string,
+    units: ReadonlyArray<{ id: string; code: string; label: string | null }>,
+    totalAmountMinor: number,
+  ): Prisma.InputJsonObject => {
+    const baseAmount = Math.floor(totalAmountMinor / units.length);
+    const remainder = totalAmountMinor % units.length;
+    const allocations = units.map((unit, index) => ({
+      unitId: unit.id,
+      unitCode: unit.code,
+      unitLabel: unit.label,
+      amountMinor: baseAmount + (index < remainder ? 1 : 0),
+    }));
+    return {
+      version: 1,
+      tenantId,
+      buildingId,
+      totalAmountMinor,
+      movements: [{
+        movementId: 'integration-distribution',
+        scope: 'BUILDING',
+        unitGroupId: null,
+        amountMinor: totalAmountMinor,
+        weightSource: 'EQUAL',
+        totalWeight: String(units.length),
+        recipientUnitIds: units.map((unit) => unit.id),
+        recipients: units.map((unit) => ({
+          unitId: unit.id,
+          unitCode: unit.code,
+          unitLabel: unit.label,
+          coefficient: null,
+          m2: null,
+          weight: '1',
+        })),
+        allocations,
+      }],
+      allocations,
+    };
+  };
+
   async function createFinanceContext(label: string, unitCount: number = 2) {
     const idSuffix = suffix();
     const tenant = await prisma.tenant.create({
@@ -199,6 +241,34 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
   }) {
     const totalAmountMinor = params.totalAmountMinor ?? 200;
     const expenseSnapshot = params.expenseSnapshot ?? buildExpenseSnapshot(params.period, totalAmountMinor);
+    const units = await prisma.unit.findMany({
+      where: { tenantId: params.tenantId, buildingId: params.buildingId, isBillable: true },
+      select: { id: true, code: true, label: true },
+      orderBy: { code: 'asc' },
+    });
+    const modernExpenseSnapshot = expenseSnapshot.map((expense) => ({
+      ...(expense as Prisma.InputJsonObject),
+      recipientUnitIds: units.map((unit) => unit.id),
+    })) as Prisma.InputJsonArray;
+    const distributionSnapshot = buildLiquidationDistributionSnapshot(
+      distributeLiquidationMovements({
+        tenantId: params.tenantId,
+        buildingId: params.buildingId,
+        totalAmountMinor,
+        movements: [{
+          movementId: `exp-${params.period}`,
+          scope: 'BUILDING',
+          amountMinor: totalAmountMinor,
+          recipients: units.map((unit) => ({
+            unitId: unit.id,
+            unitCode: unit.code,
+            unitLabel: unit.label,
+            coefficient: null,
+            m2: null,
+          })),
+        }],
+      }),
+    );
 
     const draft = await prisma.$transaction((tx) =>
       createLiquidationDraftRecord(
@@ -212,11 +282,14 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
           buildingId: params.buildingId,
           period: params.period,
           chargePeriod: params.chargePeriod ?? null,
+          publicationIntegrityVersion: 1,
+          valuationMode: 'LEGACY_NOMINAL',
           baseCurrency: 'ARS',
           totalAmountMinor,
           totalsByCurrency: { ARS: totalAmountMinor },
-          expenseSnapshot,
-          unitCount: 2,
+          expenseSnapshot: modernExpenseSnapshot,
+          distributionSnapshot,
+          unitCount: units.length,
           generatedByMembershipId: params.membershipId,
         },
       ),
@@ -284,9 +357,12 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
           chargePeriod: '2026-08',
           baseCurrency: 'ARS',
           totalAmountMinor: 200,
-          totalsByCurrency: { ARS: 200 },
-          expenseSnapshot: [],
-          unitCount: ctx.units.length,
+           totalsByCurrency: { ARS: 200 },
+           expenseSnapshot: [],
+           publicationIntegrityVersion: 1,
+           valuationMode: 'LEGACY_NOMINAL',
+           distributionSnapshot: buildDistributionSnapshot(ctx.tenant.id, ctx.building.id, ctx.units, 200),
+           unitCount: ctx.units.length,
           generatedByMembershipId: ctx.membership.id,
         },
       ),
@@ -307,9 +383,12 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
             chargePeriod: '2026-08',
             baseCurrency: 'ARS',
             totalAmountMinor: 200,
-            totalsByCurrency: { ARS: 200 },
-            expenseSnapshot: [],
-            unitCount: ctx.units.length,
+           totalsByCurrency: { ARS: 200 },
+           expenseSnapshot: [],
+           publicationIntegrityVersion: 1,
+           valuationMode: 'LEGACY_NOMINAL',
+           distributionSnapshot: buildDistributionSnapshot(ctx.tenant.id, ctx.building.id, ctx.units, 200),
+           unitCount: ctx.units.length,
             generatedByMembershipId: ctx.membership.id,
           },
         ),
@@ -340,15 +419,147 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
           chargePeriod: '2026-08',
           baseCurrency: 'ARS',
           totalAmountMinor: 200,
-          totalsByCurrency: { ARS: 200 },
-          expenseSnapshot: [],
-          unitCount: ctx.units.length,
+           totalsByCurrency: { ARS: 200 },
+           expenseSnapshot: [],
+           publicationIntegrityVersion: 1,
+           valuationMode: 'LEGACY_NOMINAL',
+           distributionSnapshot: buildDistributionSnapshot(ctx.tenant.id, ctx.building.id, ctx.units, 200),
+           unitCount: ctx.units.length,
           generatedByMembershipId: ctx.membership.id,
         },
       ),
     );
 
     expect(second.id).not.toBe(first.id);
+  });
+
+  it('rejects a modern draft whose frozen recipient belongs to another tenant/building', async () => {
+    const owner = await createFinanceContext('distribution-owner', 1);
+    const foreign = await createFinanceContext('distribution-foreign', 1);
+    const distributionSnapshot = buildDistributionSnapshot(
+      owner.tenant.id,
+      owner.building.id,
+      foreign.units,
+      200,
+    );
+
+    await expect(
+      prisma.liquidation.create({
+        data: {
+          tenantId: owner.tenant.id,
+          buildingId: owner.building.id,
+          period: '2026-08',
+          chargePeriod: '2026-09',
+          publicationIntegrityVersion: 1,
+          valuationMode: 'LEGACY_NOMINAL',
+          baseCurrency: 'ARS',
+          totalAmountMinor: 200,
+          totalsByCurrency: { ARS: 200 },
+          expenseSnapshot: [],
+          distributionSnapshot,
+          unitCount: 1,
+          generatedByMembershipId: owner.membership.id,
+        },
+      }),
+    ).rejects.toThrow(/recipients must belong/);
+  });
+
+  it('allows an unrelated modern liquidation update after a frozen recipient changes buildings', async () => {
+    const owner = await createFinanceContext('distribution-reassignment', 1);
+    const distributionSnapshot = buildDistributionSnapshot(
+      owner.tenant.id,
+      owner.building.id,
+      owner.units,
+      200,
+    );
+    const liquidation = await prisma.liquidation.create({
+      data: {
+        tenantId: owner.tenant.id,
+        buildingId: owner.building.id,
+        period: '2026-08',
+        chargePeriod: '2026-09',
+        publicationIntegrityVersion: 1,
+        valuationMode: 'LEGACY_NOMINAL',
+        baseCurrency: 'ARS',
+        totalAmountMinor: 200,
+        totalsByCurrency: { ARS: 200 },
+        expenseSnapshot: [],
+        distributionSnapshot,
+        unitCount: 1,
+        generatedByMembershipId: owner.membership.id,
+      },
+    });
+    const replacementBuilding = await prisma.building.create({
+      data: {
+        tenantId: owner.tenant.id,
+        name: `ITEST Replacement ${suffix()}`,
+        alias: `IR-${suffix().slice(0, 8)}`,
+        address: 'Integration Street 456',
+      },
+    });
+
+    await prisma.unit.update({
+      where: { id: owner.units[0]!.id },
+      data: { buildingId: replacementBuilding.id },
+    });
+
+    await expect(
+      prisma.liquidation.update({
+        where: { id: liquidation.id },
+        data: { updatedAt: new Date() },
+      }),
+    ).resolves.toMatchObject({ id: liquidation.id });
+  });
+
+  it('rejects a modern liquidation snapshot change after a frozen recipient changes buildings', async () => {
+    const owner = await createFinanceContext('distribution-snapshot-reassignment', 1);
+    const distributionSnapshot = buildDistributionSnapshot(
+      owner.tenant.id,
+      owner.building.id,
+      owner.units,
+      200,
+    );
+    const liquidation = await prisma.liquidation.create({
+      data: {
+        tenantId: owner.tenant.id,
+        buildingId: owner.building.id,
+        period: '2026-08',
+        chargePeriod: '2026-09',
+        publicationIntegrityVersion: 1,
+        valuationMode: 'LEGACY_NOMINAL',
+        baseCurrency: 'ARS',
+        totalAmountMinor: 200,
+        totalsByCurrency: { ARS: 200 },
+        expenseSnapshot: [],
+        distributionSnapshot,
+        unitCount: 1,
+        generatedByMembershipId: owner.membership.id,
+      },
+    });
+    const replacementBuilding = await prisma.building.create({
+      data: {
+        tenantId: owner.tenant.id,
+        name: `ITEST Replacement ${suffix()}`,
+        alias: `IR-${suffix().slice(0, 8)}`,
+        address: 'Integration Street 456',
+      },
+    });
+
+    await prisma.unit.update({
+      where: { id: owner.units[0]!.id },
+      data: { buildingId: replacementBuilding.id },
+    });
+
+    const changedSnapshot: Prisma.InputJsonObject = {
+      ...distributionSnapshot,
+      changedForTest: true,
+    };
+    await expect(
+      prisma.liquidation.update({
+        where: { id: liquidation.id },
+        data: { distributionSnapshot: changedSnapshot },
+      }),
+    ).rejects.toThrow(/modern liquidation (identity and evidence are immutable|distribution recipients must belong)/);
   });
 
   it('publishes through the real PostgreSQL transaction, writes snapshot V2, audit, and charges', async () => {
@@ -377,7 +588,7 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
     expect(persisted.status).toBe('PUBLISHED');
     expect(persisted.publicationSnapshot).toEqual(
       expect.objectContaining({
-        version: 2,
+        version: 4,
         valuationMode: 'LEGACY_NOMINAL',
         liquidationId: reviewed.id,
         dueDate: '2026-10-10T00:00:00.000Z',

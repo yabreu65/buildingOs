@@ -7,6 +7,7 @@ import {
   IncomeApplicationDestination,
   IncomeStatus,
   MovementScope,
+  Prisma,
   PrismaClient,
   TenantType,
 } from '@prisma/client';
@@ -120,6 +121,30 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
   });
 
   afterAll(async () => observer?.$disconnect());
+
+  async function withLiquidationTriggersDisabled<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    await observer.$executeRawUnsafe('ALTER TABLE "Liquidation" DISABLE TRIGGER USER');
+    try {
+      return await operation();
+    } finally {
+      await observer.$executeRawUnsafe('ALTER TABLE "Liquidation" ENABLE TRIGGER USER');
+    }
+  }
+
+  async function updateLiquidationForTamper(
+    id: string,
+    data: Prisma.LiquidationUpdateInput,
+  ) {
+    return withLiquidationTriggersDisabled(() =>
+      observer.liquidation.update({ where: { id }, data }),
+    );
+  }
+
+  async function createRawLiquidation(data: Prisma.LiquidationCreateInput) {
+    return withLiquidationTriggersDisabled(() => observer.liquidation.create({ data }));
+  }
 
   async function fixture(label: string) {
     const suffix = `${Date.now()}-${Math.random()}`;
@@ -313,8 +338,7 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
     await createOffsetApplications(ctx.tenant.id, income.id, [
       { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 1000 },
     ]);
-    const liq = await observer.liquidation.create({
-      data: {
+    const liq = await createRawLiquidation({
         tenantId: ctx.tenant.id,
         buildingId: buildingA.id,
         period: '2026-08',
@@ -329,8 +353,7 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
         preIncomeAmountMinor: 1000,
         incomeOffsetAmountMinor: 1000,
         netDistributableAmountMinor: 0,
-      },
-    });
+      });
 
     await expect(
       observer.liquidationIncomeOffset.create({
@@ -372,14 +395,12 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
   async function createSummaryLiquidation(overrides: Record<string, unknown>) {
     const ctx = await fixture('db-summary');
     const buildingA = await building(ctx.tenant.id, 'A');
-    return observer.liquidation.create({
-      data: {
+    return createRawLiquidation({
         ...summaryBase,
         tenantId: ctx.tenant.id,
         buildingId: buildingA.id,
         generatedByMembershipId: ctx.membership.id,
         ...overrides,
-      },
     });
   }
 
@@ -455,9 +476,8 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
     await createOffsetApplications(ctx.tenant.id, income.id, [
       { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 1000 },
     ]);
-    const liq = await observer.liquidation.create({
-      data: {
-        tenantId: ctx.tenant.id,
+    const liq = await createRawLiquidation({
+      tenantId: ctx.tenant.id,
         buildingId: buildingA.id,
         period: '2026-08',
         baseCurrency: 'ARS',
@@ -466,7 +486,6 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
         expenseSnapshot: [],
         unitCount: 1,
         generatedByMembershipId: ctx.membership.id,
-      },
     });
     const app = await observer.incomeApplication.findFirstOrThrow({ where: { incomeId: income.id } });
     await observer.liquidationIncomeOffset.create({
@@ -997,10 +1016,7 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
       mutate: async ({ ctx, reviewed, reference, snapshot }) => {
         const updated = [...snapshot];
         updated[0] = { ...updated[0]!, applicationAmountMinor: 6500 };
-        await observer.liquidation.update({
-          where: { id: reviewed.id },
-          data: { incomeOffsetSnapshot: updated as never },
-        });
+         await updateLiquidationForTamper(reviewed.id, { incomeOffsetSnapshot: updated as never });
       },
     },
     {
@@ -1008,10 +1024,7 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
       mutate: async ({ ctx, reviewed, reference, snapshot }) => {
         const updated = [...snapshot];
         updated[0] = { ...updated[0]!, valuedAmountMinor: 6500 };
-        await observer.liquidation.update({
-          where: { id: reviewed.id },
-          data: { incomeOffsetSnapshot: updated as never },
-        });
+         await updateLiquidationForTamper(reviewed.id, { incomeOffsetSnapshot: updated as never });
       },
     },
     {
@@ -1019,19 +1032,13 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
       mutate: async ({ ctx, reviewed, reference, snapshot }) => {
         const updated = [...snapshot];
         updated[0] = { ...updated[0]!, policyVersionId: 'corrupted-pv' };
-        await observer.liquidation.update({
-          where: { id: reviewed.id },
-          data: { incomeOffsetSnapshot: updated as never },
-        });
+         await updateLiquidationForTamper(reviewed.id, { incomeOffsetSnapshot: updated as never });
       },
     },
     {
       label: '13. alter incomeOffsetsByCurrency',
       mutate: async ({ ctx, reviewed }) => {
-        await observer.liquidation.update({
-          where: { id: reviewed.id },
-          data: { incomeOffsetsByCurrency: { ARS: 1 } as never },
-        });
+         await updateLiquidationForTamper(reviewed.id, { incomeOffsetsByCurrency: { ARS: 1 } as never });
       },
     },
   ];
@@ -1234,7 +1241,7 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
 
     const liq = await observer.liquidation.findUniqueOrThrow({ where: { id: published.id } });
     const snapshot = liq.publicationSnapshot as unknown as { version: number; netDistributableAmountMinor: number; allocations: Array<{ amountMinor: number }> };
-    expect(snapshot.version).toBe(3);
+     expect(snapshot.version).toBe(4);
     expect(snapshot.netDistributableAmountMinor).toBe(0);
     expect(snapshot.allocations.every((a) => a.amountMinor === 0)).toBe(true);
   }, 30000);
@@ -1427,9 +1434,8 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
     await createOffsetApplications(ctx.tenant.id, income.id, [
       { destinationType: IncomeApplicationDestination.OFFSET_EXPENSES, amountMinor: 1000 },
     ]);
-    const liq = await observer.liquidation.create({
-      data: {
-        tenantId: ctx.tenant.id,
+    const liq = await createRawLiquidation({
+      tenantId: ctx.tenant.id,
         buildingId: buildingA.id,
         period: '2026-08',
         baseCurrency: 'ARS',
@@ -1438,7 +1444,6 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
         expenseSnapshot: [],
         unitCount: 1,
         generatedByMembershipId: ctx.membership.id,
-      },
     });
     const app = await observer.incomeApplication.findFirstOrThrow({ where: { incomeId: income.id } });
     const base = {
@@ -1582,9 +1587,9 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
     expect(await observer.liquidation.count({ where: { tenantId: ctx.tenant.id } })).toBe(0);
   }, 30000);
 
-  // ── R2. Zero-offset V3 lifecycle ─────────────────────────────────────────
+  // ── R2. Zero-offset V4 lifecycle ─────────────────────────────────────────
 
-  it('R2.D. zero-offset FIN-06 draft publishes V3 with empty offsets and correct audit', async () => {
+  it('R2.D. zero-offset FIN-06 draft publishes V4 with empty offsets and correct audit', async () => {
     const ctx = await fixture('r2-zero-offset-v3');
     const buildingA = await building(ctx.tenant.id, 'A');
     await units(ctx.tenant.id, buildingA.id);
@@ -1616,7 +1621,7 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
       incomeOffsetsByCurrency: Record<string, number>;
       totalAmountMinor: number;
     };
-    expect(snapshot.version).toBe(3);
+    expect(snapshot.version).toBe(4);
     expect(snapshot.incomeOffsets).toEqual([]);
     expect(snapshot.incomeOffsetsByCurrency).toEqual({});
     expect(snapshot.totalAmountMinor).toBe(10000);
@@ -1631,7 +1636,7 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
     });
     expect(audit).not.toBeNull();
     const metadata = audit!.metadata as Record<string, unknown>;
-    expect(metadata.snapshotVersion).toBe(3);
+    expect(metadata.snapshotVersion).toBe(4);
     expect(metadata.incomeOffsetCount).toBe(0);
   }, 30000);
 
@@ -1665,12 +1670,25 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
     return { ctx, buildingA, draft, reference };
   }
 
-  async function corruptAndReview(setup: Awaited<ReturnType<typeof setupFin06WithOffsets>>, data: Record<string, unknown>) {
-    await observer.liquidation.update({
-      where: { id: setup.draft.id },
-      data,
+  async function corruptAndReview(
+    setup: Awaited<ReturnType<typeof setupFin06WithOffsets>>,
+    data: Prisma.LiquidationUpdateInput,
+  ) {
+    const reviewed = await withLiquidationTriggersDisabled(async () => {
+      await observer.liquidation.update({
+        where: { id: setup.draft.id },
+        data,
+      });
+      await observer.liquidation.update({
+        where: { id: setup.draft.id },
+        data: {
+          status: 'REVIEWED',
+          reviewedAt: new Date(),
+          reviewedByMembershipId: setup.ctx.membership.id,
+        },
+      });
+      return observer.liquidation.findUniqueOrThrow({ where: { id: setup.draft.id } });
     });
-    const reviewed = await liquidations.reviewLiquidation(setup.ctx.tenant.id, setup.draft.id, setup.ctx.membership.id);
     return { ...setup, reviewed };
   }
 
@@ -1836,25 +1854,28 @@ describePostgres('FIN-06 income offsets → liquidation (PostgreSQL)', () => {
       period: '2026-08',
       baseCurrency: 'ARS',
     });
-    await observer.liquidation.update({
-      where: { id: draft.id },
-      data: {
-        grossExpenseAmountMinor: null,
-        adjustmentAmountMinor: null,
-        preIncomeAmountMinor: null,
-        incomeOffsetAmountMinor: null,
-        netDistributableAmountMinor: null,
-        incomeOffsetSnapshot: null,
-        incomeOffsetsByCurrency: null,
-      },
-    });
-    expect(
-      await observer.liquidationIncomeOffset.count({ where: { tenantId: ctx.tenant.id } }),
-    ).toBe(0);
+    const published = await withLiquidationTriggersDisabled(async () => {
+      await observer.liquidation.update({
+        where: { id: draft.id },
+        data: {
+          grossExpenseAmountMinor: null,
+          adjustmentAmountMinor: null,
+          preIncomeAmountMinor: null,
+          incomeOffsetAmountMinor: null,
+          netDistributableAmountMinor: null,
+          incomeOffsetSnapshot: null,
+          incomeOffsetsByCurrency: null,
+          publicationIntegrityVersion: null,
+        },
+      });
+      expect(
+        await observer.liquidationIncomeOffset.count({ where: { tenantId: ctx.tenant.id } }),
+      ).toBe(0);
 
-    const reviewed = await liquidations.reviewLiquidation(ctx.tenant.id, draft.id, ctx.membership.id);
-    const published = await liquidations.publishLiquidation(ctx.tenant.id, reviewed.id, ctx.membership.id, {
-      dueDate: '2026-09-10',
+      const reviewed = await liquidations.reviewLiquidation(ctx.tenant.id, draft.id, ctx.membership.id);
+      return liquidations.publishLiquidation(ctx.tenant.id, reviewed.id, ctx.membership.id, {
+        dueDate: '2026-09-10',
+      });
     });
 
     expect(published.status).toBe('PUBLISHED');

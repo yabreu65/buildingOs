@@ -1626,6 +1626,7 @@ model Charge {
   buildingId                  String
   unitId                      String
   period                      String      // YYYY-MM format (e.g., "2026-02")
+  chargePeriod                String?     // YYYY-MM billing/debt period; nullable for historical charges
   type                        ChargeType  @default(COMMON_EXPENSE)
   concept                     String      // e.g., "Expensas Comunes Febrero 2026"
   amount                      Int         // Amount in cents (e.g., 10000 = $100.00)
@@ -1667,6 +1668,7 @@ model Charge {
 
   @@index([unitId, period, concept])
   @@index([tenantId, buildingId, period])
+  @@index([tenantId, buildingId, chargePeriod])
   @@index([tenantId, unitId, status])
   @@index([tenantId, buildingId, status])
   @@index([dueDate])
@@ -2291,6 +2293,7 @@ model Liquidation {
   buildingId               String
   period                   String            // YYYY-MM format - período de devengo
   chargePeriod             String?           // YYYY-MM - período de cobro (default: period + 1 mes)
+  publicationIntegrityVersion Int?            // null = historical legacy; 1 = Phase 3D.2 publication integrity
   status                   LiquidationStatus @default(DRAFT)
   valuationMode            LiquidationValuationMode? // NULL = histórico pre-3D / legacy
   baseCurrency             String            // Moneda base de liquidación

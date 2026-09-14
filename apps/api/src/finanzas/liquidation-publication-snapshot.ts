@@ -110,10 +110,33 @@ export interface LiquidationPublicationSnapshotV3 {
   publishedAt: string;
 }
 
+export type LiquidationPublicationSnapshotV4Base = Omit<
+  LiquidationPublicationSnapshotV2,
+  'version'
+> & {
+  version: 4;
+  chargePeriod: string;
+  publicationIntegrityVersion: 1;
+};
+
+export type LiquidationPublicationSnapshotV4Fin06 = Omit<
+  LiquidationPublicationSnapshotV3,
+  'version'
+> & {
+  version: 4;
+  chargePeriod: string;
+  publicationIntegrityVersion: 1;
+};
+
+export type LiquidationPublicationSnapshotV4 =
+  | LiquidationPublicationSnapshotV4Base
+  | LiquidationPublicationSnapshotV4Fin06;
+
 export type LiquidationPublicationSnapshot =
   | LiquidationPublicationSnapshotV1
   | LiquidationPublicationSnapshotV2
-  | LiquidationPublicationSnapshotV3;
+  | LiquidationPublicationSnapshotV3
+  | LiquidationPublicationSnapshotV4;
 
 export interface BuildLiquidationPublicationSnapshotInput {
   liquidationId: string;
@@ -129,6 +152,22 @@ export interface BuildLiquidationPublicationSnapshotInput {
   publishedAt: Date;
   valuationMode: 'FUNCTIONAL' | 'LEGACY_NOMINAL';
 }
+
+export interface BuildLiquidationPublicationSnapshotV4BaseInput
+  extends BuildLiquidationPublicationSnapshotInput {
+  chargePeriod: string;
+  publicationIntegrityVersion: 1;
+}
+
+export interface BuildLiquidationPublicationSnapshotV4Fin06Input
+  extends BuildLiquidationPublicationSnapshotV3Input {
+  chargePeriod: string;
+  publicationIntegrityVersion: 1;
+}
+
+export type BuildLiquidationPublicationSnapshotV4Input =
+  | BuildLiquidationPublicationSnapshotV4BaseInput
+  | BuildLiquidationPublicationSnapshotV4Fin06Input;
 
 export interface LiquidationDistributionUnit {
   id: string;
@@ -413,6 +452,37 @@ export function buildLiquidationPublicationSnapshotV3(
   });
 }
 
+/**
+ * Builds the modern 3D.2 publication record. V4 always preserves V2 evidence;
+ * FIN-06 evidence is included only for liquidations that carry the complete
+ * FIN-06 input contract.
+ */
+export function buildLiquidationPublicationSnapshotV4(
+  input: BuildLiquidationPublicationSnapshotV4Input,
+): Prisma.InputJsonObject {
+  assertNonEmpty(input.chargePeriod, 'chargePeriod');
+  if (input.publicationIntegrityVersion !== 1) {
+    throw new BadRequestException('Liquidation publication snapshot publicationIntegrityVersion is invalid');
+  }
+
+  const publicationSnapshot = hasFin06PublicationSnapshotInput(input)
+    ? buildLiquidationPublicationSnapshotV3(input)
+    : buildLiquidationPublicationSnapshot(input);
+
+  return createJsonObject({
+    ...publicationSnapshot,
+    version: 4,
+    chargePeriod: input.chargePeriod,
+    publicationIntegrityVersion: 1,
+  });
+}
+
+function hasFin06PublicationSnapshotInput(
+  input: BuildLiquidationPublicationSnapshotV4Input,
+): input is BuildLiquidationPublicationSnapshotV4Fin06Input {
+  return 'grossExpenseAmountMinor' in input;
+}
+
 export function distributeLiquidationAmountByLargestRemainder(
   units: readonly LiquidationDistributionUnit[],
   totalAmountMinor: number,
@@ -535,7 +605,7 @@ export function parseLiquidationPublicationSnapshot(
     throw new BadRequestException('Liquidation publication snapshot is invalid');
   }
 
-  if (value.version !== 1 && value.version !== 2 && value.version !== 3) {
+  if (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 4) {
     throw new BadRequestException('Liquidation publication snapshot version is invalid');
   }
 
@@ -588,7 +658,18 @@ export function parseLiquidationPublicationSnapshot(
 
   assertCurrencyTotalsMatch(totalsByCurrency, expenseTotalsByCurrency);
 
-  if (value.version === 3) {
+  const v4IntegrityEvidence =
+    value.version === 4
+      ? {
+          chargePeriod: parseNonEmptyString(value.chargePeriod, 'chargePeriod'),
+          publicationIntegrityVersion: value.publicationIntegrityVersion,
+        }
+      : null;
+
+  if (
+    value.version === 3 ||
+    (value.version === 4 && hasFin06PublicationSnapshotEvidence(value))
+  ) {
     const grossExpenseAmountMinor = parseSafeIntegerNonNegative(
       value.grossExpenseAmountMinor,
       'grossExpenseAmountMinor',
@@ -670,6 +751,39 @@ export function parseLiquidationPublicationSnapshot(
       );
     }
 
+    if (v4IntegrityEvidence !== null) {
+      if (v4IntegrityEvidence.publicationIntegrityVersion !== 1) {
+        throw new BadRequestException(
+          'Liquidation publication snapshot publicationIntegrityVersion is invalid',
+        );
+      }
+
+      return {
+        version: 4,
+        publicationIntegrityVersion: 1,
+        chargePeriod: v4IntegrityEvidence.chargePeriod,
+        valuationMode,
+        liquidationId,
+        tenantId,
+        buildingId,
+        period,
+        baseCurrency,
+        totalAmountMinor,
+        totalsByCurrency,
+        grossExpenseAmountMinor,
+        adjustmentAmountMinor,
+        preIncomeAmountMinor,
+        incomeOffsetAmountMinor,
+        netDistributableAmountMinor,
+        incomeOffsetsByCurrency,
+        expenses,
+        incomeOffsets,
+        allocations,
+        dueDate,
+        publishedAt,
+      };
+    }
+
     return {
       version: 3,
       valuationMode,
@@ -698,6 +812,32 @@ export function parseLiquidationPublicationSnapshot(
     throw new BadRequestException(
       'Liquidation publication snapshot totals must match the liquidation total',
     );
+  }
+
+  if (v4IntegrityEvidence !== null) {
+    if (v4IntegrityEvidence.publicationIntegrityVersion !== 1) {
+      throw new BadRequestException(
+        'Liquidation publication snapshot publicationIntegrityVersion is invalid',
+      );
+    }
+
+    return {
+      version: 4,
+      publicationIntegrityVersion: 1,
+      chargePeriod: v4IntegrityEvidence.chargePeriod,
+      valuationMode,
+      liquidationId,
+      tenantId,
+      buildingId,
+      period,
+      baseCurrency,
+      totalAmountMinor,
+      totalsByCurrency,
+      expenses,
+      allocations,
+      dueDate,
+      publishedAt,
+    };
   }
 
   if (valuationMode === 'LEGACY_NOMINAL') {
@@ -732,6 +872,18 @@ export function parseLiquidationPublicationSnapshot(
     dueDate,
     publishedAt,
   };
+}
+
+function hasFin06PublicationSnapshotEvidence(value: Record<string, unknown>): boolean {
+  return [
+    'grossExpenseAmountMinor',
+    'adjustmentAmountMinor',
+    'preIncomeAmountMinor',
+    'incomeOffsetAmountMinor',
+    'netDistributableAmountMinor',
+    'incomeOffsetsByCurrency',
+    'incomeOffsets',
+  ].some((field) => Object.prototype.hasOwnProperty.call(value, field));
 }
 
 function parseValuationMode(value: unknown): 'FUNCTIONAL' | 'LEGACY_NOMINAL' {

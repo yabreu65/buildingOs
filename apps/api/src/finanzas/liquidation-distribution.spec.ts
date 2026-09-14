@@ -265,7 +265,7 @@ describe('liquidation distribution', () => {
     expect(parseLiquidationDistributionSnapshot(distribution)).toEqual(distribution);
   });
 
-  it('uses coefficient weighting or equal fallback from frozen evidence', () => {
+  it('uses coefficient weighting, M2 weighting, or equal fallback from frozen evidence', () => {
     const coefficientDistribution = distributeLiquidationMovements({
       tenantId: 'tenant-1',
       buildingId: 'building-1',
@@ -339,10 +339,10 @@ describe('liquidation distribution', () => {
       { unitId: 'unit-4', unitCode: '4', unitLabel: null, amountMinor: 100 },
       { unitId: 'unit-6', unitCode: '6', unitLabel: null, amountMinor: 0 },
     ]);
-    expect(m2Movement.weightSource).toBe('EQUAL');
+    expect(m2Movement.weightSource).toBe('M2');
     expect(m2Distribution.allocations).toEqual([
-      { unitId: 'unit-4', unitCode: '4', unitLabel: null, amountMinor: 50 },
-      { unitId: 'unit-6', unitCode: '6', unitLabel: null, amountMinor: 50 },
+      { unitId: 'unit-4', unitCode: '4', unitLabel: null, amountMinor: 40 },
+      { unitId: 'unit-6', unitCode: '6', unitLabel: null, amountMinor: 60 },
     ]);
     expect(parseLiquidationDistributionSnapshot(m2Distribution)).toEqual(m2Distribution);
     expect(() => parseLiquidationDistributionSnapshot(alteredWeight)).toThrow(

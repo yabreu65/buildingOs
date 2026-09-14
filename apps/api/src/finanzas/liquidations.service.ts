@@ -110,6 +110,19 @@ interface CancelLiquidationOptions {
   readonly reason?: string;
 }
 
+export function deriveLiquidationChargePeriod(period: string): string {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(period);
+  if (!match) {
+    throw new BadRequestException('period must be in YYYY-MM format');
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  return `${nextYear.toString().padStart(4, '0')}-${nextMonth.toString().padStart(2, '0')}`;
+}
+
 @Injectable()
 export class LiquidationsService {
   constructor(
@@ -736,6 +749,8 @@ export class LiquidationsService {
         tenantId,
         buildingId: dto.buildingId,
         period: dto.period,
+        chargePeriod: deriveLiquidationChargePeriod(dto.period),
+        publicationIntegrityVersion: 1,
         valuationMode,
         baseCurrency: dto.baseCurrency,
         totalAmountMinor,

@@ -7,7 +7,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { LiquidationsService } from './liquidations.service';
+import { deriveLiquidationChargePeriod, LiquidationsService } from './liquidations.service';
 import { LiquidationIncomeOffsetsService } from './liquidation-income-offsets.service';
 import { LegacyIncomeBackfillService } from './legacy-income-backfill.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -50,6 +50,13 @@ const baseLiquidation = {
 };
 
 describe('LiquidationsService', () => {
+  it.each([
+    ['2026-05', '2026-06'],
+    ['2026-12', '2027-01'],
+  ])('derives the deterministic billing period for %s', (period, chargePeriod) => {
+    expect(deriveLiquidationChargePeriod(period)).toBe(chargePeriod);
+  });
+
   let service: LiquidationsService;
   let prisma: PrismaService;
   let auditService: { createLog: jest.Mock; createLogRequired: jest.Mock };
@@ -990,6 +997,7 @@ it('guards included adjustments and preserves the existing empty behavior', asyn
         period: '2026-05',
         liquidationId: 'liq-1',
         concept: 'Expensas comunes 2026-05',
+        type: 'COMMON_EXPENSE',
       },
       {
         unitId: 'unit-2',
@@ -1000,6 +1008,7 @@ it('guards included adjustments and preserves the existing empty behavior', asyn
         period: '2026-05',
         liquidationId: 'liq-1',
         concept: 'Expensas comunes 2026-05',
+        type: 'COMMON_EXPENSE',
       },
     ]);
     tx.liquidation.findFirst

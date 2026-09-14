@@ -21,6 +21,10 @@ import { IncomePoliciesService } from '../../src/finanzas/income-policies.servic
 import { IncomesService } from '../../src/finanzas/incomes.service';
 import { MovementAllocationService } from '../../src/finanzas/movement-allocation.service';
 import { allocateByLargestRemainder } from '../../src/finanzas/movement-allocation.service';
+import {
+  buildLiquidationDistributionSnapshot,
+  distributeLiquidationMovements,
+} from '../../src/finanzas/liquidation-distribution';
 import { parseLiquidationPublicationSnapshot } from '../../src/finanzas/liquidation-publication-snapshot';
 import { ResidentAccessService } from '../../src/resident-access/resident-access.service';
 
@@ -87,6 +91,13 @@ export const FIN07D_RESERVE_FUND_DESCRIPTION =
   'Fondo de reserva determinístico para E2E FIN-07D (precondición Phase 2B/legacy)';
 export const FIN07D_SPECIAL_FUND_DESCRIPTION =
   'Fondo especial determinístico para E2E FIN-07D (precondición Phase 2B/legacy)';
+const LOCAL_HISTORICAL_FIXTURE_DATABASES = new Set([
+  'buildingos_test',
+  'buildingos_local_v2_test',
+  'buildingos_phase3d2_test',
+  'buildingos_fin06_acceptance',
+]);
+const LOCAL_DATABASE_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
 export interface SeedFinanceFixtureInput {
   readonly prisma: PrismaClient;
@@ -96,6 +107,73 @@ export interface SeedFinanceFixtureInput {
   readonly buildingA1Id: string;
   readonly buildingA2Id: string;
   readonly baseCurrency: string;
+}
+
+export function assertSafeHistoricalFixtureDatabase(): void {
+  if (process.env.NODE_ENV !== 'test' && process.env.FIN07D_E2E_RESET !== '1') {
+    throw new Error('Historical FIN07D fixtures require NODE_ENV=test or FIN07D_E2E_RESET=1');
+  }
+
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('Historical FIN07D fixtures require DATABASE_URL');
+  }
+
+  let databaseName: string;
+  let databaseHost: string;
+  try {
+    const parsedUrl = new URL(databaseUrl);
+    databaseName = decodeURIComponent(parsedUrl.pathname.replace(/^\/+/, ''));
+    databaseHost = parsedUrl.hostname.toLowerCase();
+  } catch {
+    throw new Error('Historical FIN07D fixtures require a valid DATABASE_URL');
+  }
+
+  if (databaseHost && !LOCAL_DATABASE_HOSTS.has(databaseHost)) {
+    throw new Error('Historical FIN07D fixtures require a local test database host');
+  }
+
+  if (!LOCAL_HISTORICAL_FIXTURE_DATABASES.has(databaseName)) {
+    throw new Error('Historical FIN07D fixtures require an allowlisted local test database');
+  }
+}
+
+type SeedPrismaClient = PrismaClient | Prisma.TransactionClient;
+
+async function runSeedTransaction<T>(
+  prisma: SeedPrismaClient,
+  action: (tx: SeedPrismaClient) => Promise<T>,
+): Promise<T> {
+  if ('$transaction' in prisma) {
+    return (prisma as PrismaClient).$transaction((tx) => action(tx));
+  }
+
+  return action(prisma);
+}
+
+export async function withHistoricalFixtureTriggers<T>(
+  prisma: PrismaClient,
+  action: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  assertSafeHistoricalFixtureDatabase();
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "Liquidation" DISABLE TRIGGER "Liquidation_publication_integrity_origin"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "Liquidation" DISABLE TRIGGER "Liquidation_publication_integrity"',
+    );
+    try {
+      return await action(tx);
+    } finally {
+      await tx.$executeRawUnsafe(
+        'ALTER TABLE "Liquidation" ENABLE TRIGGER "Liquidation_publication_integrity"',
+      );
+      await tx.$executeRawUnsafe(
+        'ALTER TABLE "Liquidation" ENABLE TRIGGER "Liquidation_publication_integrity_origin"',
+      );
+    }
+  });
 }
 
 export interface SeedFinanceFixtureResult {
@@ -1030,7 +1108,7 @@ function buildV2FunctionalPublicationSnapshot(args: {
 }
 
 export async function ensureHistoricalV1V2Liquidations(input: {
-  readonly prisma: PrismaClient;
+  readonly prisma: PrismaClient | Prisma.TransactionClient;
   readonly tenantId: string;
   readonly adminMembershipId: string;
   readonly buildingA1Id: string;
@@ -1255,7 +1333,7 @@ export async function ensureHistoricalV1V2Liquidations(input: {
     }
   } else {
     // R2-6: Wrap entire V1 construction in one Prisma transaction for atomicity.
-    const v1Result = await prisma.$transaction(async (tx) => {
+    const v1Result = await runSeedTransaction(prisma, async (tx) => {
       const v1Draft = await tx.liquidation.create({
         data: {
           tenantId, buildingId: buildingA1Id, period: v1Period,
@@ -1548,7 +1626,7 @@ export async function ensureHistoricalV1V2Liquidations(input: {
     }
   } else {
     // R2-6: Wrap entire V2 construction in one Prisma transaction for atomicity.
-    const v2Result = await prisma.$transaction(async (tx) => {
+    const v2Result = await runSeedTransaction(prisma, async (tx) => {
       const v2Draft = await tx.liquidation.create({
         data: {
           tenantId, buildingId: buildingA1Id, period: v2Period,
@@ -2024,6 +2102,33 @@ export async function ensureLegacyIncomeBackfillFixtures(input: {
   }
 
   // R2-4: Validate conflict liquidation exact state.
+  const conflictUnits = await prisma.unit.findMany({
+    where: { tenantId, buildingId: buildingA1Id, isBillable: true },
+    select: { id: true, code: true, label: true },
+    orderBy: { code: 'asc' },
+  });
+  if (conflictUnits.length === 0) {
+    throw new Error('TEST-FIXTURE-DIRTY: Legacy conflict liquidation requires billable units');
+  }
+  const conflictDistribution = buildLiquidationDistributionSnapshot(
+    distributeLiquidationMovements({
+      tenantId,
+      buildingId: buildingA1Id,
+      totalAmountMinor: 10000,
+      movements: [{
+        movementId: 'seed-legacy-backfill-conflict-expense',
+        scope: 'BUILDING',
+        amountMinor: 10000,
+        recipients: conflictUnits.map((unit) => ({
+          unitId: unit.id,
+          unitCode: unit.code,
+          unitLabel: unit.label,
+          coefficient: null,
+          m2: null,
+        })),
+      }],
+    }),
+  );
   const existingConflictLiq = await prisma.liquidation.findUnique({
     where: { id: LEGACY_BACKFIX_CONFLICT_LIQUIDATION_ID },
     select: {
@@ -2053,7 +2158,10 @@ export async function ensureLegacyIncomeBackfillFixtures(input: {
         tenantId,
         buildingId: buildingA1Id,
         period: LEGACY_BACKFIX_CONFLICT_PERIOD,
+        chargePeriod: '2026-01',
         status: 'DRAFT',
+        publicationIntegrityVersion: 1,
+        valuationMode: 'LEGACY_NOMINAL',
         baseCurrency,
         totalAmountMinor: 10000,
         totalsByCurrency: { [baseCurrency]: 10000 },
@@ -2067,9 +2175,9 @@ export async function ensureLegacyIncomeBackfillFixtures(input: {
           description: `[FIN07D:LEGACY_BACKFILL] Conflict expense ${LEGACY_BACKFIX_CONFLICT_PERIOD}`,
           type: 'EXPENSE',
         }],
-        unitCount: 1,
+        distributionSnapshot: conflictDistribution,
+        unitCount: conflictUnits.length,
         generatedByMembershipId: adminMembershipId,
-        valuationMode: null,
         grossExpenseAmountMinor: null,
         adjustmentAmountMinor: null,
         preIncomeAmountMinor: null,
@@ -2218,16 +2326,18 @@ export async function ensureSeedFinanceFixture(
     select: { id: true },
   });
 
-  // ── Historical V1/V2 (FIN-07D Phase 2A HISTORICAL) ────────────────────────
-  const historical = await ensureHistoricalV1V2Liquidations({
-    prisma: input.prisma,
-    tenantId: input.tenantId,
-    adminMembershipId: input.adminMembershipId,
-    buildingA1Id: input.buildingA1Id,
-    baseCurrency: input.baseCurrency,
-  });
+  // Historical NULL liquidations are test fixtures representing pre-existing
+  // records. New application rows remain blocked by the database trigger.
+  const historical = await withHistoricalFixtureTriggers(input.prisma, (tx) =>
+    ensureHistoricalV1V2Liquidations({
+      prisma: tx,
+      tenantId: input.tenantId,
+      adminMembershipId: input.adminMembershipId,
+      buildingA1Id: input.buildingA1Id,
+      baseCurrency: input.baseCurrency,
+    }),
+  );
 
-  // ── Legacy Income Backfill Fixtures (FIN-07D Phase 2A LEGACY_BACKFILL) ──
   const legacyBackfill = await ensureLegacyIncomeBackfillFixtures({
     prisma: input.prisma,
     tenantId: input.tenantId,

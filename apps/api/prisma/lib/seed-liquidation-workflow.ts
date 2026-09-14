@@ -558,6 +558,8 @@ export async function ensureSeedPublishedLiquidation(
           buildingId: input.buildingId,
           period: input.period,
           chargePeriod: input.chargePeriod ?? null,
+          publicationIntegrityVersion: 1,
+          valuationMode: 'LEGACY_NOMINAL',
           baseCurrency: input.baseCurrency,
           totalAmountMinor: input.totalAmountMinor,
           totalsByCurrency: input.totalsByCurrency,

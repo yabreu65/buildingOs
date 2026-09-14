@@ -3,6 +3,7 @@ import {
   assertLiquidationMovementCurrency,
   buildLiquidationPublicationSnapshot,
   buildLiquidationPublicationSnapshotV3,
+  buildLiquidationPublicationSnapshotV4,
   distributeLiquidationAmountByLargestRemainder,
   parseLiquidationPublicationSnapshot,
 } from './liquidation-publication-snapshot';
@@ -445,6 +446,27 @@ describe('liquidation publication snapshot', () => {
     });
   });
 
+  describe('publication snapshot v4', () => {
+    it('builds and parses a modern non-FIN-06 V4 snapshot with V2 evidence', () => {
+      const snapshot = buildLiquidationPublicationSnapshotV4({
+        ...baseInput,
+        chargePeriod: '2026-06',
+        publicationIntegrityVersion: 1,
+      });
+      const parsed = parseLiquidationPublicationSnapshot(snapshot);
+
+      expect(parsed).toMatchObject({
+        version: 4,
+        period: '2026-05',
+        chargePeriod: '2026-06',
+        publicationIntegrityVersion: 1,
+        valuationMode: 'LEGACY_NOMINAL',
+        totalAmountMinor: 100,
+      });
+      expect(parsed).not.toHaveProperty('incomeOffsets');
+    });
+  });
+
   describe('publication snapshot v3 (FIN-06)', () => {
     const v3Input = {
       liquidationId: 'liq-1',
@@ -501,6 +523,23 @@ describe('liquidation publication snapshot', () => {
       dueDate: new Date('2026-09-10T00:00:00.000Z'),
       publishedAt: new Date('2026-08-16T00:00:00.000Z'),
     };
+
+    it('builds and parses version 4 with billing and integrity evidence', () => {
+      const snapshot = buildLiquidationPublicationSnapshotV4({
+        ...v3Input,
+        chargePeriod: '2026-09',
+        publicationIntegrityVersion: 1,
+      });
+      const parsed = parseLiquidationPublicationSnapshot(snapshot);
+
+      expect(parsed).toMatchObject({
+        version: 4,
+        period: '2026-08',
+        chargePeriod: '2026-09',
+        publicationIntegrityVersion: 1,
+        incomeOffsetAmountMinor: 7000,
+      });
+    });
 
     it('builds version 3 with income offsets and reconciliation', () => {
       const snapshot = buildLiquidationPublicationSnapshotV3(v3Input);
