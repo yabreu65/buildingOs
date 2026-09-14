@@ -330,7 +330,7 @@ test.describe.serial('FIN-07D modern V3 and zero-net liquidations', () => {
       expect(created.incomeOffsetsByCurrency).toEqual({ ARS: 5700 });
       expect(created.incomeOffsetSnapshot).toHaveLength(2);
       expect(created.chargesPreview).toHaveLength(5);
-      expect(created.chargesPreview.map((charge) => charge.amountMinor)).toEqual([60, 60, 60, 60, 60]);
+      expect(created.chargesPreview.map((charge) => charge.amountMinor)).toEqual([49, 55, 60, 65, 71]);
 
       const serverTruth = await readLiquidation(page, tenantId, created.id);
       expectV3Breakdown(serverTruth, {
