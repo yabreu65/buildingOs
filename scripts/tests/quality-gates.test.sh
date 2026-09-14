@@ -183,6 +183,18 @@ if grep -F 'EXTERNAL_BLOCKER:' "$TEMP_ROOT/review-failure-output" >/dev/null; th
   fail 'valid GGA finding was misclassified as EXTERNAL_BLOCKER'
 fi
 
+domain_terms_finding_repository="$(setup_repository domain-terms-finding)"
+if GGA_PROVIDER=fake GGA_MARKER="$TEMP_ROOT/domain-terms-finding-invoked" \
+  GGA_OUTPUT='Codex provider review finding: tenant quota enforcement misses DNS, TLS, and socket validation.' GGA_STATUS=21 PATH="$TEMP_ROOT/fake-bin:$PATH" \
+  bash "$domain_terms_finding_repository/scripts/quality/gga-pr-gate.sh" >"$TEMP_ROOT/domain-terms-finding-output" 2>&1; then
+  fail 'GGA gate unexpectedly passed after a domain-terms review finding'
+fi
+grep -F 'REVIEW_FAILED: valid reported issues block READY states.' "$TEMP_ROOT/domain-terms-finding-output" >/dev/null ||
+  fail 'domain-terms review finding was not classified as REVIEW_FAILED'
+if grep -F 'EXTERNAL_BLOCKER:' "$TEMP_ROOT/domain-terms-finding-output" >/dev/null; then
+  fail 'domain-terms review finding was misclassified as EXTERNAL_BLOCKER'
+fi
+
 authorization_finding_repository="$(setup_repository authorization-finding)"
 if GGA_PROVIDER=fake GGA_MARKER="$TEMP_ROOT/authorization-finding-invoked" \
   GGA_OUTPUT='Codex provider finding: missing authorization check on tenant mutation' GGA_STATUS=18 PATH="$TEMP_ROOT/fake-bin:$PATH" \
