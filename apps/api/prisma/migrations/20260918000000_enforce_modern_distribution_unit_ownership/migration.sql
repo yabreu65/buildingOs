@@ -8,7 +8,7 @@ BEGIN
     RAISE EXCEPTION 'new liquidations require publication integrity v1';
   END IF;
 
-  IF TG_OP = 'INSERT' AND NEW."publicationIntegrityVersion" = 1
+   IF TG_OP <> 'DELETE' AND NEW."publicationIntegrityVersion" = 1
      AND EXISTS (
        SELECT 1
        FROM jsonb_array_elements(COALESCE(NEW."distributionSnapshot" -> 'allocations', '[]'::jsonb)) AS item(value)
