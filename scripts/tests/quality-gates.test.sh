@@ -100,9 +100,17 @@ make_fake_git() {
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
-    'if [[ "$*" == "fetch origin"* ]]; then exit "${GIT_FETCH_STATUS:-0}"; fi' \
+    'if [[ "$*" == "fetch origin"* ]]; then' \
+    '  if [[ -n "${GIT_FETCH_MARKER:-}" ]]; then printf "%s\\n" "$*" >> "$GIT_FETCH_MARKER"; fi' \
+    '  if [[ "$*" == "fetch origin +refs/heads/main:refs/remotes/origin/main" && -n "${GIT_ORIGIN_MAIN_REFRESH_MARKER:-}" ]]; then touch "$GIT_ORIGIN_MAIN_REFRESH_MARKER"; fi' \
+    '  exit "${GIT_FETCH_STATUS:-0}"' \
+    'fi' \
     'if [[ "$*" == "worktree add --detach "* ]]; then printf "worktree:%s\\n" "$*" >> "${GIT_MARKER:?}"; exit 1; fi' \
-    'if [[ "$*" == *origin/main* ]]; then printf "%s\\n" "${GIT_ORIGIN_MAIN_COMMIT:-origin-main}"; exit 0; fi' \
+    'if [[ "$*" == *origin/main* ]]; then' \
+    '  if [[ "${GIT_REQUIRE_ORIGIN_MAIN_REFRESH:-}" == "1" && ! -e "${GIT_ORIGIN_MAIN_REFRESH_MARKER:?}" ]]; then exit 98; fi' \
+    '  printf "%s\\n" "${GIT_ORIGIN_MAIN_COMMIT:-origin-main}"; exit 0' \
+    'fi' \
+    'if [[ "$1" == "diff" || "$1" == "ls-files" ]]; then exit 0; fi' \
     'if [[ "$*" == *main* ]]; then printf "%s\\n" "${GIT_LOCAL_MAIN_COMMIT:-local-main}"; exit 0; fi' \
     'if [[ "$*" == *HEAD* ]]; then printf "%s\\n" "${GIT_HEAD_COMMIT:-head}"; exit 0; fi' \
     'printf "unexpected fake git invocation: %s\\n" "$*" >&2' \
@@ -262,6 +270,18 @@ if PATH="$fake_git_directory:$PATH" GIT_FETCH_STATUS=1 \
 fi
 grep -F 'unable to fetch origin/main; refusing to determine changed paths' "$TEMP_ROOT/pre-push-fetch-output" >/dev/null ||
   fail 'pre-push fetch failure was not reported'
+
+if ! QUALITY_GATES_INTERNAL_HARNESS=1 NPM_MARKER="$TEMP_ROOT/pre-push-refresh-npm-marker" \
+  GIT_FETCH_MARKER="$TEMP_ROOT/pre-push-fetch-marker" \
+  GIT_ORIGIN_MAIN_REFRESH_MARKER="$TEMP_ROOT/pre-push-origin-main-refresh-marker" \
+  GIT_REQUIRE_ORIGIN_MAIN_REFRESH=1 PATH="$fake_git_directory:$TEMP_ROOT/fake-bin:$PATH" \
+  bash "$PRE_PUSH_GATE" >"$TEMP_ROOT/pre-push-refresh-output" 2>&1; then
+  fail 'pre-push gate did not refresh origin/main before using it'
+fi
+grep -Fx 'fetch origin +refs/heads/main:refs/remotes/origin/main' "$TEMP_ROOT/pre-push-fetch-marker" >/dev/null ||
+  fail 'pre-push gate did not request an origin/main-refreshing fetch'
+[[ -e "$TEMP_ROOT/pre-push-origin-main-refresh-marker" ]] ||
+  fail 'pre-push gate used origin/main before refreshing it'
 
 harness_failure_repository="$(setup_repository harness-failure)"
 printf '%s\n' \

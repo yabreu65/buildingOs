@@ -92,7 +92,7 @@ is_backend_production_path() {
   esac
 }
 
-if ! git fetch origin main; then
+if ! git fetch origin +refs/heads/main:refs/remotes/origin/main; then
   fail 'unable to fetch origin/main; refusing to determine changed paths'
 fi
 
