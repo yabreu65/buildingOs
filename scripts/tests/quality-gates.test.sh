@@ -228,6 +228,31 @@ if grep -F 'EXTERNAL_BLOCKER:' "$TEMP_ROOT/authoritative-review-failure-output" 
   fail 'authoritative review failure was misclassified as EXTERNAL_BLOCKER'
 fi
 
+zero_exit_authoritative_review_failure_repository="$(setup_repository zero-exit-authoritative-review-failure)"
+if GGA_PROVIDER=fake GGA_MARKER="$TEMP_ROOT/zero-exit-authoritative-review-failure-invoked" \
+  GGA_OUTPUT=$'CODE REVIEW FAILED\nThe review command returned zero despite a valid finding.' \
+  GGA_STATUS=0 PATH="$TEMP_ROOT/fake-bin:$PATH" \
+  bash "$zero_exit_authoritative_review_failure_repository/scripts/quality/gga-pr-gate.sh" >"$TEMP_ROOT/zero-exit-authoritative-review-failure-output" 2>&1; then
+  fail 'GGA gate unexpectedly passed after a zero-exit authoritative review failure'
+fi
+grep -F 'REVIEW_FAILED: valid reported issues block READY states.' "$TEMP_ROOT/zero-exit-authoritative-review-failure-output" >/dev/null ||
+  fail 'zero-exit authoritative review failure was not classified as REVIEW_FAILED'
+if grep -F 'PASS: exact-head GGA PR gate completed.' "$TEMP_ROOT/zero-exit-authoritative-review-failure-output" >/dev/null; then
+  fail 'zero-exit authoritative review failure incorrectly reported PASS'
+fi
+
+timeout_finding_repository="$(setup_repository timeout-finding)"
+if GGA_PROVIDER=fake GGA_MARKER="$TEMP_ROOT/timeout-finding-invoked" \
+  GGA_OUTPUT='Codex provider review finding: the timed out approval workflow can apply an obsolete policy.' GGA_STATUS=22 PATH="$TEMP_ROOT/fake-bin:$PATH" \
+  bash "$timeout_finding_repository/scripts/quality/gga-pr-gate.sh" >"$TEMP_ROOT/timeout-finding-output" 2>&1; then
+  fail 'GGA gate unexpectedly passed after a timeout review finding'
+fi
+grep -F 'REVIEW_FAILED: valid reported issues block READY states.' "$TEMP_ROOT/timeout-finding-output" >/dev/null ||
+  fail 'timeout review finding was not classified as REVIEW_FAILED'
+if grep -F 'EXTERNAL_BLOCKER:' "$TEMP_ROOT/timeout-finding-output" >/dev/null; then
+  fail 'timeout review finding was misclassified as EXTERNAL_BLOCKER'
+fi
+
 external_failure_repository="$(setup_repository external-failure)"
 if GGA_PROVIDER=fake GGA_MARKER="$TEMP_ROOT/external-failure-invoked" \
   GGA_OUTPUT='authentication failed for the configured provider' GGA_STATUS=19 PATH="$TEMP_ROOT/fake-bin:$PATH" \
