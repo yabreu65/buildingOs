@@ -464,7 +464,7 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
     ).rejects.toThrow(/recipients must belong/);
   });
 
-  it('rejects a modern liquidation update after a frozen recipient changes buildings', async () => {
+  it('allows an unrelated modern liquidation update after a frozen recipient changes buildings', async () => {
     const owner = await createFinanceContext('distribution-reassignment', 1);
     const distributionSnapshot = buildDistributionSnapshot(
       owner.tenant.id,
@@ -508,7 +508,58 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
         where: { id: liquidation.id },
         data: { updatedAt: new Date() },
       }),
-    ).rejects.toThrow(/recipients must belong/);
+    ).resolves.toMatchObject({ id: liquidation.id });
+  });
+
+  it('rejects a modern liquidation snapshot change after a frozen recipient changes buildings', async () => {
+    const owner = await createFinanceContext('distribution-snapshot-reassignment', 1);
+    const distributionSnapshot = buildDistributionSnapshot(
+      owner.tenant.id,
+      owner.building.id,
+      owner.units,
+      200,
+    );
+    const liquidation = await prisma.liquidation.create({
+      data: {
+        tenantId: owner.tenant.id,
+        buildingId: owner.building.id,
+        period: '2026-08',
+        chargePeriod: '2026-09',
+        publicationIntegrityVersion: 1,
+        valuationMode: 'LEGACY_NOMINAL',
+        baseCurrency: 'ARS',
+        totalAmountMinor: 200,
+        totalsByCurrency: { ARS: 200 },
+        expenseSnapshot: [],
+        distributionSnapshot,
+        unitCount: 1,
+        generatedByMembershipId: owner.membership.id,
+      },
+    });
+    const replacementBuilding = await prisma.building.create({
+      data: {
+        tenantId: owner.tenant.id,
+        name: `ITEST Replacement ${suffix()}`,
+        alias: `IR-${suffix().slice(0, 8)}`,
+        address: 'Integration Street 456',
+      },
+    });
+
+    await prisma.unit.update({
+      where: { id: owner.units[0]!.id },
+      data: { buildingId: replacementBuilding.id },
+    });
+
+    const changedSnapshot: Prisma.InputJsonObject = {
+      ...distributionSnapshot,
+      changedForTest: true,
+    };
+    await expect(
+      prisma.liquidation.update({
+        where: { id: liquidation.id },
+        data: { distributionSnapshot: changedSnapshot },
+      }),
+    ).rejects.toThrow(/modern liquidation (identity and evidence are immutable|distribution recipients must belong)/);
   });
 
   it('publishes through the real PostgreSQL transaction, writes snapshot V2, audit, and charges', async () => {
