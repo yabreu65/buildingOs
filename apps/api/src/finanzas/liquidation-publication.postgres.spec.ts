@@ -433,6 +433,37 @@ describePostgresIntegration('Liquidation publication PostgreSQL integration', ()
     expect(second.id).not.toBe(first.id);
   });
 
+  it('rejects a modern draft whose frozen recipient belongs to another tenant/building', async () => {
+    const owner = await createFinanceContext('distribution-owner', 1);
+    const foreign = await createFinanceContext('distribution-foreign', 1);
+    const distributionSnapshot = buildDistributionSnapshot(
+      owner.tenant.id,
+      owner.building.id,
+      foreign.units,
+      200,
+    );
+
+    await expect(
+      prisma.liquidation.create({
+        data: {
+          tenantId: owner.tenant.id,
+          buildingId: owner.building.id,
+          period: '2026-08',
+          chargePeriod: '2026-09',
+          publicationIntegrityVersion: 1,
+          valuationMode: 'LEGACY_NOMINAL',
+          baseCurrency: 'ARS',
+          totalAmountMinor: 200,
+          totalsByCurrency: { ARS: 200 },
+          expenseSnapshot: [],
+          distributionSnapshot,
+          unitCount: 1,
+          generatedByMembershipId: owner.membership.id,
+        },
+      }),
+    ).rejects.toThrow(/recipients must belong/);
+  });
+
   it('publishes through the real PostgreSQL transaction, writes snapshot V2, audit, and charges', async () => {
     const ctx = await createFinanceContext('publish');
     const reviewed = await createDraftAndReview({
