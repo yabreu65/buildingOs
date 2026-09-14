@@ -306,6 +306,11 @@ describe('authorized parent cascade trigger migration preflight', () => {
     expect(liquidationTriggerSql).toContain("RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence'");
     expect(liquidationTriggerSql).toContain("NEW.\"publicationSnapshot\" ->> 'liquidationId' IS DISTINCT FROM NEW.\"id\"");
     expect(liquidationTriggerSql).toContain("NEW.\"publicationSnapshot\" -> 'incomeOffsets' IS DISTINCT FROM NEW.\"incomeOffsetSnapshot\"");
+    expect(liquidationTriggerSql).toContain('jsonb_array_elements(NEW."publicationSnapshot" -> \'expenses\')');
+    expect(liquidationTriggerSql).toContain('jsonb_each(NEW."publicationSnapshot" -> \'totalsByCurrency\')');
+    expect(liquidationTriggerSql).toContain("'tenantId', \"tenantId\"");
+    expect(liquidationTriggerSql).toContain("'dueDate', snapshotDueDate AT TIME ZONE 'UTC'");
+        expect(liquidationTriggerSql).toContain("'dueDate', \"dueDate\"");
     expect(liquidationTriggerSql).toContain('jsonb_array_elements(NEW."publicationSnapshot" -> \'allocations\')');
         expect(liquidationTriggerSql).toContain('FROM "Charge"');
         expect(chargeTriggerSql).toContain("RAISE EXCEPTION 'liquidation-generated charge economic origin is immutable'");
@@ -364,7 +369,7 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
       "id" TEXT PRIMARY KEY, "tenantId" TEXT NOT NULL REFERENCES "Tenant" ("id") ON DELETE CASCADE, "buildingId" TEXT NOT NULL REFERENCES "Building" ("id") ON DELETE CASCADE, "unitId" TEXT NOT NULL REFERENCES "Unit" ("id") ON DELETE CASCADE,
       "period" TEXT NOT NULL, "chargePeriod" TEXT, "type" TEXT NOT NULL, "concept" TEXT NOT NULL,
       "amount" BIGINT NOT NULL, "remainingAmount" BIGINT NOT NULL, "currency" TEXT NOT NULL,
-      "dueDate" TIMESTAMPTZ NOT NULL, "status" TEXT NOT NULL, "liquidationId" TEXT,
+      "dueDate" TIMESTAMP(3) NOT NULL, "status" TEXT NOT NULL, "liquidationId" TEXT,
       "createdByMembershipId" TEXT REFERENCES "Membership" ("id") ON DELETE SET NULL, "periodId" TEXT, "coefficientSnapshot" JSONB, "sumCoefSnapshot" BIGINT,
       "totalToAllocateSnapshot" BIGINT, "categorySnapshotId" TEXT, "canceledAt" TIMESTAMPTZ,
       "createdAt" TIMESTAMPTZ NOT NULL, "updatedAt" TIMESTAMPTZ NOT NULL
@@ -482,6 +487,13 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
         const publicationSnapshot = completeV4PublicationSnapshot(id, tenantId, buildingId);
     await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = '${id}'`);
   }
+  interface ChargeInsertOverrides {
+    readonly period?: string;
+    readonly chargePeriod?: string;
+    readonly currency?: string;
+    readonly dueDate?: string;
+  }
+
   async function insertCharge(
     tx: TransactionClient,
     id: string,
@@ -490,13 +502,18 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     buildingId = 'building-1',
     unitId = 'unit-1',
     canceledAt: string | null = null,
-        amount = 100,
+    amount = 100,
+    overrides: ChargeInsertOverrides = {},
   ): Promise<void> {
     const liquidationValue = liquidationId === null ? 'NULL' : `'${liquidationId}'`;
     const canceledAtValue = canceledAt === null ? 'NULL' : `'${canceledAt}'`;
+    const period = overrides.period ?? '2026-05';
+    const chargePeriod = overrides.chargePeriod ?? '2026-06';
+    const currency = overrides.currency ?? 'ARS';
+    const dueDate = overrides.dueDate ?? '2026-06-10T00:00:00Z';
     await tx.$executeRawUnsafe(`
       INSERT INTO "Charge" ("id", "tenantId", "buildingId", "unitId", "period", "chargePeriod", "type", "concept", "amount", "remainingAmount", "currency", "dueDate", "status", "liquidationId", "createdByMembershipId", "periodId", "coefficientSnapshot", "sumCoefSnapshot", "totalToAllocateSnapshot", "categorySnapshotId", "canceledAt", "createdAt", "updatedAt")
-      VALUES ('${id}', '${tenantId}', '${buildingId}', '${unitId}', '2026-05', '2026-06', 'EXPENSE', 'Monthly liquidation', ${amount}, ${amount}, 'ARS', '2026-06-10T00:00:00Z', 'PENDING', ${liquidationValue}, 'member-1', 'period-1', '{"coefficient":1}', 1, 100, 'category-1', ${canceledAtValue}, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
+      VALUES ('${id}', '${tenantId}', '${buildingId}', '${unitId}', '${period}', '${chargePeriod}', 'EXPENSE', 'Monthly liquidation', ${amount}, ${amount}, '${currency}', '${dueDate}', 'PENDING', ${liquidationValue}, 'member-1', 'period-1', '{"coefficient":1}', 1, 100, 'category-1', ${canceledAtValue}, '2026-05-01T00:00:00Z', '2026-05-01T00:00:00Z');
     `);
   }
 
@@ -597,7 +614,7 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     })).rejects.toThrow('publication integrity v1 drafts require next chargePeriod');
   });
 
-  it('requires a complete reconciled V4 snapshot for modern publication', async () => {
+  it('requires a complete reconciled V4 snapshot and accepts the workflow Charge timestamp shape for modern publication', async () => {
     await expect(sandbox(async (tx) => {
       await insertLiquidation(tx, 'modern-incomplete');
       await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-incomplete'`);
@@ -618,7 +635,88 @@ describePhase3d2Postgres('authorized parent cascade PostgreSQL trigger behavior'
     });
   });
 
-  it('requires non-empty allocations reconciled to the total and generated Charges for modern V4 publication', async () => {
+  it('rejects empty, malformed, or currency-inconsistent expense evidence for modern V4 publication', async () => {
+        await expect(sandbox(async (tx) => {
+          await insertLiquidation(tx, 'modern-empty-expenses');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-empty-expenses'`);
+          await insertCharge(tx, 'charge-modern-empty-expenses', 'modern-empty-expenses');
+          const publicationSnapshot = completeV4PublicationSnapshot('modern-empty-expenses', 'tenant-1', 'building-1')
+            .replace('"expenses":[{"expenseId":"expense-1","categoryName":"Common expenses","vendorName":null,"amountMinor":100,"currencyCode":"ARS","invoiceDate":"2026-05-01","description":null,"type":"EXPENSE"}]', '"expenses":[]');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-empty-expenses'`);
+        })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+        await expect(sandbox(async (tx) => {
+          await insertLiquidation(tx, 'modern-malformed-expense');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-malformed-expense'`);
+          await insertCharge(tx, 'charge-modern-malformed-expense', 'modern-malformed-expense');
+          const publicationSnapshot = completeV4PublicationSnapshot('modern-malformed-expense', 'tenant-1', 'building-1')
+            .replace('"categoryName":"Common expenses"', '"categoryName":""');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-malformed-expense'`);
+        })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+        await expect(sandbox(async (tx) => {
+          await insertLiquidation(tx, 'modern-inconsistent-expense-totals');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-inconsistent-expense-totals'`);
+          await insertCharge(tx, 'charge-modern-inconsistent-expense-totals', 'modern-inconsistent-expense-totals');
+          const publicationSnapshot = completeV4PublicationSnapshot('modern-inconsistent-expense-totals', 'tenant-1', 'building-1')
+            .replace('"amountMinor":100,"currencyCode":"ARS"', '"amountMinor":99,"currencyCode":"ARS"');
+          await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-inconsistent-expense-totals'`);
+        })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+
+        await sandbox(async (tx) => {
+          await publish(tx, 'modern-complete-expenses');
+          expect(await tx.$queryRawUnsafe(`SELECT "status" FROM "Liquidation" WHERE "id" = 'modern-complete-expenses'`)).toEqual([{ status: 'PUBLISHED' }]);
+        });
+      });
+
+      it('rejects generated Charges whose ownership and economic tuple differs from the V4 snapshot', async () => {
+        const mismatches: ReadonlyArray<{
+          readonly name: string;
+          readonly tenantId: string;
+          readonly buildingId: string;
+          readonly liquidationId?: string;
+          readonly amount: number;
+          readonly overrides: ChargeInsertOverrides;
+        }> = [
+          { name: 'tenant', tenantId: 'tenant-2', buildingId: 'building-1', amount: 100, overrides: {} },
+          { name: 'building', tenantId: 'tenant-1', buildingId: 'building-2', amount: 100, overrides: {} },
+          { name: 'period', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { period: '2026-04' } },
+          { name: 'charge-period', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { chargePeriod: '2026-07' } },
+          { name: 'currency', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { currency: 'USD' } },
+          { name: 'due-date', tenantId: 'tenant-1', buildingId: 'building-1', amount: 100, overrides: { dueDate: '2026-06-11T00:00:00Z' } },
+          { name: 'liquidation-id', tenantId: 'tenant-1', buildingId: 'building-1', liquidationId: 'other-liquidation', amount: 100, overrides: {} },
+          { name: 'non-payable', tenantId: 'tenant-1', buildingId: 'building-1', amount: 0, overrides: {} },
+        ];
+
+        for (const mismatch of mismatches) {
+          await expect(sandbox(async (tx) => {
+            await tx.$executeRawUnsafe(`INSERT INTO "Tenant" ("id") VALUES ('tenant-2')`);
+            await tx.$executeRawUnsafe(`INSERT INTO "Building" ("id", "tenantId") VALUES ('building-2', 'tenant-1')`);
+            await insertLiquidation(tx, `modern-charge-${mismatch.name}`);
+            await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-charge-${mismatch.name}'`);
+            await insertCharge(
+              tx,
+              `charge-modern-charge-${mismatch.name}`,
+              mismatch.liquidationId ?? `modern-charge-${mismatch.name}`,
+              mismatch.tenantId,
+              mismatch.buildingId,
+              'unit-1',
+              null,
+              mismatch.amount,
+              mismatch.overrides,
+            );
+            const publicationSnapshot = completeV4PublicationSnapshot(`modern-charge-${mismatch.name}`, 'tenant-1', 'building-1');
+            await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'PUBLISHED', "publicationSnapshot" = '${publicationSnapshot}', "publishedByMembershipId" = 'member-1', "publishedAt" = '2026-05-03T00:00:00Z' WHERE "id" = 'modern-charge-${mismatch.name}'`);
+          })).rejects.toThrow('modern liquidation publication requires complete matching V4 evidence');
+        }
+
+        await sandbox(async (tx) => {
+          await publish(tx, 'modern-matching-charge-tuple');
+          expect(await tx.$queryRawUnsafe(`SELECT "status" FROM "Liquidation" WHERE "id" = 'modern-matching-charge-tuple'`)).toEqual([{ status: 'PUBLISHED' }]);
+        });
+      });
+
+      it('requires non-empty allocations reconciled to the total and generated Charges for modern V4 publication', async () => {
         await expect(sandbox(async (tx) => {
           await insertLiquidation(tx, 'modern-empty-allocations');
           await tx.$executeRawUnsafe(`UPDATE "Liquidation" SET "status" = 'REVIEWED', "reviewedByMembershipId" = 'member-1', "reviewedAt" = '2026-05-02T00:00:00Z' WHERE "id" = 'modern-empty-allocations'`);

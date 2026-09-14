@@ -6,7 +6,9 @@ AS $$
 DECLARE
   modern boolean;
   snapshotPublishedAt timestamptz;
+  snapshotDueDate timestamptz;
   allocationTotal bigint;
+  expenseTotalsByCurrency jsonb;
   allocationChargeEvidence jsonb;
   generatedChargeEvidence jsonb;
 BEGIN
@@ -128,13 +130,81 @@ BEGIN
     END IF;
 
     BEGIN
-      PERFORM (NEW."publicationSnapshot" ->> 'dueDate')::timestamptz;
+      snapshotDueDate := (NEW."publicationSnapshot" ->> 'dueDate')::timestamptz;
       snapshotPublishedAt := (NEW."publicationSnapshot" ->> 'publishedAt')::timestamptz;
     EXCEPTION WHEN others THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END;
 
     IF snapshotPublishedAt IS DISTINCT FROM NEW."publishedAt" THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END IF;
+
+    IF (NEW."totalAmountMinor" <> 0 AND jsonb_array_length(NEW."publicationSnapshot" -> 'expenses') = 0)
+       OR EXISTS (
+         SELECT 1
+         FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense
+         WHERE jsonb_typeof(expense) IS DISTINCT FROM 'object'
+            OR jsonb_typeof(expense -> 'expenseId') IS DISTINCT FROM 'string'
+            OR btrim(expense ->> 'expenseId') = ''
+            OR jsonb_typeof(expense -> 'categoryName') IS DISTINCT FROM 'string'
+            OR btrim(expense ->> 'categoryName') = ''
+            OR (jsonb_typeof(expense -> 'vendorName') IS DISTINCT FROM 'null'
+                AND (jsonb_typeof(expense -> 'vendorName') IS DISTINCT FROM 'string'
+                     OR btrim(expense ->> 'vendorName') = ''))
+            OR jsonb_typeof(expense -> 'amountMinor') IS DISTINCT FROM 'number'
+            OR expense ->> 'amountMinor' !~ '^(0|[1-9][0-9]*)$'
+            OR jsonb_typeof(expense -> 'currencyCode') IS DISTINCT FROM 'string'
+            OR btrim(expense ->> 'currencyCode') = ''
+            OR jsonb_typeof(expense -> 'invoiceDate') IS DISTINCT FROM 'string'
+            OR (jsonb_typeof(expense -> 'description') IS DISTINCT FROM 'null'
+                AND (jsonb_typeof(expense -> 'description') IS DISTINCT FROM 'string'
+                     OR btrim(expense ->> 'description') = ''))
+            OR jsonb_typeof(expense -> 'type') IS DISTINCT FROM 'string'
+            OR expense ->> 'type' NOT IN ('EXPENSE', 'ADJUSTMENT')
+       ) THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END IF;
+
+    BEGIN
+      PERFORM (expense ->> 'invoiceDate')::timestamptz
+      FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense;
+
+      PERFORM 1
+      FROM jsonb_each(NEW."publicationSnapshot" -> 'totalsByCurrency') AS total(currencyCode, amount)
+      WHERE btrim(currencyCode) = ''
+         OR jsonb_typeof(amount) IS DISTINCT FROM 'number'
+         OR amount #>> '{}' !~ '^(0|[1-9][0-9]*)$';
+      IF FOUND THEN
+        RAISE EXCEPTION 'invalid totalsByCurrency evidence';
+      END IF;
+
+      SELECT COALESCE(jsonb_object_agg(currencyCode, totalAmount), '{}'::jsonb)
+      INTO expenseTotalsByCurrency
+      FROM (
+        SELECT expense ->> 'currencyCode' AS currencyCode,
+               SUM((expense ->> 'amountMinor')::bigint) AS totalAmount
+        FROM jsonb_array_elements(NEW."publicationSnapshot" -> 'expenses') AS expense
+        GROUP BY expense ->> 'currencyCode'
+      ) AS expenseTotals;
+    EXCEPTION WHEN others THEN
+      RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
+    END;
+
+    IF EXISTS (
+         SELECT 1
+         FROM jsonb_each(NEW."publicationSnapshot" -> 'totalsByCurrency') AS declared(currencyCode, amount)
+         LEFT JOIN jsonb_each(expenseTotalsByCurrency) AS actual(currencyCode, amount)
+           USING (currencyCode)
+         WHERE (declared.amount #>> '{}')::bigint
+               IS DISTINCT FROM COALESCE((actual.amount #>> '{}')::bigint, 0)
+       ) OR EXISTS (
+         SELECT 1
+         FROM jsonb_each(expenseTotalsByCurrency) AS actual(currencyCode, amount)
+         LEFT JOIN jsonb_each(NEW."publicationSnapshot" -> 'totalsByCurrency') AS declared(currencyCode, amount)
+           USING (currencyCode)
+         WHERE declared.currencyCode IS NULL
+       ) THEN
       RAISE EXCEPTION 'modern liquidation publication requires complete matching V4 evidence';
     END IF;
 
@@ -158,6 +228,13 @@ BEGIN
       SELECT COALESCE(
         jsonb_agg(
           jsonb_build_object(
+            'tenantId', NEW."tenantId",
+            'buildingId', NEW."buildingId",
+            'period', NEW."period",
+            'chargePeriod', NEW."chargePeriod",
+            'currency', NEW."baseCurrency",
+            'dueDate', snapshotDueDate AT TIME ZONE 'UTC',
+            'liquidationId', NEW."id",
             'unitId', allocation ->> 'unitId',
             'amountMinor', (allocation ->> 'amountMinor')::bigint
           )
@@ -170,7 +247,17 @@ BEGIN
 
       SELECT COALESCE(
         jsonb_agg(
-          jsonb_build_object('unitId', "unitId", 'amountMinor', "amount")
+          jsonb_build_object(
+            'tenantId', "tenantId",
+            'buildingId', "buildingId",
+            'period', "period",
+            'chargePeriod', "chargePeriod",
+            'currency', "currency",
+            'dueDate', "dueDate",
+            'liquidationId', "liquidationId",
+            'unitId', "unitId",
+            'amountMinor', "amount"
+          )
           ORDER BY "unitId", "amount"
         ),
         '[]'::jsonb
