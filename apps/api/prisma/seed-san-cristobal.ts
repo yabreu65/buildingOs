@@ -791,7 +791,7 @@ export async function main() {
   // Get charge counts
   for (const building of [buildingA, buildingB]) {
     for (const [, chargePeriod] of Object.entries(periodMapping)) {
-      const charges = await prisma.charge.findMany({ where: { tenantId: tenant.id, buildingId: building.id, period: chargePeriod } });
+      const charges = await prisma.charge.findMany({ where: { tenantId: tenant.id, buildingId: building.id, chargePeriod } });
       chargeResults.push({ buildingId: building.id, chargePeriod, count: charges.length, total: charges.reduce((sum, c) => sum + c.amount, 0) });
     }
   }
