@@ -131,7 +131,7 @@ describe('TenantFinanceController administrative portal access', () => {
     ];
     const metrics = {
       backlogCount: 1,
-      backlogAmount: 100,
+      backlogAmountByCurrency: [{ currency: 'ARS', amountMinor: 100 }],
       agingMedianDays: 2,
       agingP95Days: 3,
       totalReviewed: 4,

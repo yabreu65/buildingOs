@@ -3353,12 +3353,17 @@ export class FinanzasService {
     // Get pending payments
     const pendingPayments = await this.prisma.payment.findMany({
       where: pendingWhere,
-      select: { amount: true, createdAt: true, buildingId: true },
+      select: { amount: true, currency: true, createdAt: true, buildingId: true },
     });
 
     // Calculate backlog
     const backlogCount = pendingPayments.length;
-    const backlogAmount = pendingPayments.reduce((sum, p) => sum + p.amount, 0);
+    const backlogAmountByCurrency = aggregateReportBuckets(
+      pendingPayments.map((payment) => ({
+        currency: payment.currency,
+        amountMinor: payment.amount,
+      })),
+    );
 
     // Calculate aging
     const now = new Date();
@@ -3412,34 +3417,41 @@ export class FinanzasService {
     });
 
     const buildingIds = buildings.map(b => b.id);
-    const paymentsByBuilding = await this.prisma.payment.groupBy({
-      by: ['buildingId', 'status'],
+    const paymentGroupsByBuilding = await this.prisma.payment.groupBy({
+      by: ['buildingId', 'status', 'currency'],
       where: {
         tenantId,
         buildingId: { in: buildingIds },
         canceledAt: null,
+        status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED, PaymentStatus.REJECTED] },
       },
-      _count: true,
+      _count: { _all: true },
       _sum: { amount: true },
     });
 
     const byBuilding = buildings.map(b => {
-      const pending = paymentsByBuilding.find(pb => pb.buildingId === b.id && pb.status === PaymentStatus.SUBMITTED);
-      const approved = paymentsByBuilding.find(pb => pb.buildingId === b.id && pb.status === PaymentStatus.APPROVED);
-      const rejected = paymentsByBuilding.find(pb => pb.buildingId === b.id && pb.status === PaymentStatus.REJECTED);
+      const buildingPaymentGroups = paymentGroupsByBuilding.filter(payment => payment.buildingId === b.id);
+      const pendingGroups = buildingPaymentGroups.filter(payment => payment.status === PaymentStatus.SUBMITTED);
+      const approvedGroups = buildingPaymentGroups.filter(payment => payment.status === PaymentStatus.APPROVED);
+      const rejectedGroups = buildingPaymentGroups.filter(payment => payment.status === PaymentStatus.REJECTED);
       return {
         buildingId: b.id,
         buildingName: b.name,
-        pending: pending?._count || 0,
-        pendingAmount: pending?._sum?.amount || 0,
-        approved: approved?._count || 0,
-        rejected: rejected?._count || 0,
+        pending: pendingGroups.reduce((count, payment) => count + payment._count._all, 0),
+        pendingAmountByCurrency: aggregateReportBuckets(
+          pendingGroups.map((payment) => ({
+            currency: payment.currency,
+            amountMinor: payment._sum.amount ?? 0,
+          })),
+        ),
+        approved: approvedGroups.reduce((count, payment) => count + payment._count._all, 0),
+        rejected: rejectedGroups.reduce((count, payment) => count + payment._count._all, 0),
       };
     });
 
     return {
       backlogCount,
-      backlogAmount,
+      backlogAmountByCurrency,
       agingMedianDays: agingMedianDays || 0,
       agingP95Days: agingP95Days || 0,
       totalReviewed,
