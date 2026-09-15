@@ -12,8 +12,9 @@ import { useEffectiveRole } from "@/features/tenancy/hooks/useEffectiveRole";
 import { useDashboardSummary, useBuildingList } from "@/features/dashboard/hooks/useDashboardSummary";
 import { Table, THead, TBody, TR, TH, TD } from "@/shared/components/ui/Table";
 import { formatAccountingPeriodLabel, getCurrentAccountingPeriod } from "@/features/dashboard/utils/period";
-import { getTotalAccumulatedDebt } from "@/features/dashboard/utils/building-alerts";
+import { getTotalAccumulatedDebtByCurrency } from "@/features/dashboard/utils/building-alerts";
 import { formatCurrencyBuckets } from "@/shared/lib/format/currency-buckets";
+import { formatCurrency } from "@/shared/lib/format/money";
 import { ticketDetailPath } from "@/shared/lib/routes";
 import {
   AlertCircle,
@@ -37,13 +38,6 @@ interface Params {
   readonly tenantId: string;
   readonly [key: string]: string | string[];
 }
-
-const formatARS = (cents: number) =>
-  new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency: 'ARS',
-    maximumFractionDigits: 0,
-  }).format(cents / 100);
 
 const formatPercentage = (value: number) => `${Math.round(value * 100)}%`;
 
@@ -267,7 +261,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
   const kpis = summary?.kpis;
   const queues = summary?.queues;
   const buildingAlerts = summary?.buildingAlerts || [];
-  const totalAccumulatedDebt = getTotalAccumulatedDebt(buildingAlerts);
+  const totalAccumulatedDebtByCurrency = getTotalAccumulatedDebtByCurrency(buildingAlerts);
   const quickActions = summary?.quickActions || [];
 
   const cr = kpis?.collectionRateByCurrency && kpis.collectionRateByCurrency.length === 1
@@ -493,7 +487,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
                     <div key={p.id} className="flex items-center justify-between text-sm">
                       <span className="font-medium truncate">{p.unitLabel}</span>
                       <span className="text-xs text-muted-foreground ml-2">{p.buildingName}</span>
-                      <span className="font-mono text-sm ml-auto">{formatARS(p.amount)}</span>
+                      <span className="font-mono text-sm ml-auto">{formatCurrency(p.amount, p.currency)}</span>
                     </div>
                   ))}
                 </div>
@@ -571,8 +565,8 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
                   <TR key={alert.buildingId} className="hover:bg-muted/50 transition-colors">
                     <TD className="font-medium">{alert.buildingName}</TD>
                     <TD className="text-right">
-                      <span className={alert.outstandingAmount > 0 ? 'text-orange-400 font-medium' : 'text-muted-foreground'}>
-                        {alert.outstandingAmount > 0 ? formatARS(alert.outstandingAmount) : '$0'}
+                      <span className={alert.outstandingByCurrency.some((bucket) => bucket.amountMinor > 0) ? 'text-orange-400 font-medium' : 'text-muted-foreground'}>
+                        {formatCurrencyBuckets(alert.outstandingByCurrency)}
                       </span>
                     </TD>
                     <TD className="text-right">
@@ -609,7 +603,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
         {buildingAlerts.length > 0 && (
           <div className="flex justify-end mt-4 pt-4 border-t border-border">
             <p className="text-sm text-muted-foreground">
-              Total deuda acumulada: <span className="font-semibold text-foreground">{formatARS(totalAccumulatedDebt)}</span>
+              Total deuda acumulada: <span className="font-semibold text-foreground">{formatCurrencyBuckets(totalAccumulatedDebtByCurrency)}</span>
             </p>
           </div>
         )}

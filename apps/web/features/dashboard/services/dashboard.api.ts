@@ -20,6 +20,7 @@ export interface PaymentToValidateSummary {
   unitLabel: string;
   buildingName: string;
   amount: number;
+  currency: string;
   submittedAt: string;
 }
 
@@ -43,7 +44,7 @@ export interface CollectionRateBucket {
 export interface BuildingAlert {
   buildingId: string;
   buildingName: string;
-  outstandingAmount: number;
+  outstandingByCurrency: CurrencyAmountBucket[];
   overdueTickets: number;
   unitsWithoutResponsible: number;
   riskScore: 'HIGH' | 'MEDIUM' | 'LOW';

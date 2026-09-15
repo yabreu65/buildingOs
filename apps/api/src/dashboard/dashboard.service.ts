@@ -12,7 +12,8 @@ import {
   BuildingAlert,
 } from './dashboard.dto';
 import { PaymentStatus, ChargeStatus, TicketStatus, Prisma } from '@prisma/client';
-import { calculateChargeOutstandingMinor, sumByCurrency } from '../finanzas/charge-aggregation';
+import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
+import { aggregateReportBuckets } from '../finanzas/currency-buckets';
 
 interface UnitWithOccupants extends Prisma.UnitGetPayload<{
   include: { unitOccupants: true; building: { select: { name: true } } };
@@ -180,7 +181,7 @@ export class DashboardService {
     });
 
     // Currency-safe buckets: every charge keeps its own Charge.currency.
-    const outstandingByCurrency = sumByCurrency(
+    const outstandingByCurrency = aggregateReportBuckets(
       chargesWithOutstanding.map((item) => ({
         currency: item.charge.currency,
         amountMinor: item.outstanding,
@@ -188,7 +189,7 @@ export class DashboardService {
     );
     // Collected is bounded by Charge.amount: an over-allocated charge can
     // never produce collected > emitted. Same clamp contract as outstanding.
-    const collectedByCurrency = sumByCurrency(
+    const collectedByCurrency = aggregateReportBuckets(
       chargesWithOutstanding.map((item) => ({
         currency: item.charge.currency,
         amountMinor: Math.max(0, item.charge.amount - item.outstanding),
@@ -211,20 +212,19 @@ export class DashboardService {
       };
     });
 
-    // Delinquent units (units with outstanding > 0)
-    const delinquentUnitsMap = new Map<string, number>();
-    for (const item of chargesWithOutstanding.filter((entry) => entry.outstanding > 0)) {
-      delinquentUnitsMap.set(
-        item.charge.unitId,
-        (delinquentUnitsMap.get(item.charge.unitId) || 0) + item.outstanding,
-      );
+    // Delinquent units are counted by ID only; currency amounts must not be combined.
+    const delinquentUnitIds = new Set<string>();
+    for (const item of chargesWithOutstanding) {
+      if (item.outstanding > 0) {
+        delinquentUnitIds.add(item.charge.unitId);
+      }
     }
 
     return {
       outstandingByCurrency,
       collectedByCurrency,
       collectionRateByCurrency,
-      delinquentUnits: delinquentUnitsMap.size,
+      delinquentUnits: delinquentUnitIds.size,
     };
   }
 
@@ -306,6 +306,7 @@ export class DashboardService {
       unitLabel: p.unit?.label || '-',
       buildingName: p.unit?.building?.name || '-',
       amount: p.amount,
+      currency: p.currency,
       submittedAt: p.createdAt.toISOString(),
     }));
 
@@ -405,13 +406,13 @@ export class DashboardService {
 
     for (const buildingId of buildingIds) {
       const charges = chargesByBuilding.get(buildingId) || [];
-      const outstandingAmount = charges.reduce((sum, charge) => {
-        const allocated = charge.paymentAllocations.reduce((aSum, a) => {
-          const status = a.payment?.status;
-          return aSum + ((status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) ? a.amount : 0);
-        }, 0);
-        return sum + (charge.amount - allocated);
-      }, 0);
+      const outstandingByCurrency = aggregateReportBuckets(
+        charges.map((charge) => ({
+          currency: charge.currency,
+          amountMinor: calculateChargeOutstandingMinor(charge),
+        })),
+      );
+      const hasOutstanding = outstandingByCurrency.some((bucket) => bucket.amountMinor > 0);
 
       const openTickets = ticketsByBuilding.get(buildingId) || 0;
 
@@ -421,17 +422,17 @@ export class DashboardService {
       ).length;
 
       let riskScore: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
-      if (outstandingAmount > 1000000 || openTickets > 3 || unitsWithoutResponsible > 5) {
+      if (openTickets > 3 || unitsWithoutResponsible > 5) {
         riskScore = 'HIGH';
-      } else if (outstandingAmount > 500000 || openTickets > 1 || unitsWithoutResponsible > 2) {
+      } else if (openTickets > 1 || unitsWithoutResponsible > 2) {
         riskScore = 'MEDIUM';
       }
 
-      if (outstandingAmount > 0 || openTickets > 0 || unitsWithoutResponsible > 0) {
+      if (hasOutstanding || openTickets > 0 || unitsWithoutResponsible > 0) {
         alerts.push({
           buildingId,
           buildingName: buildingMap.get(buildingId) || '',
-          outstandingAmount,
+          outstandingByCurrency,
           overdueTickets: openTickets,
           unitsWithoutResponsible,
           riskScore,

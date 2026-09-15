@@ -131,6 +131,21 @@ describe('DashboardService', () => {
     expect(result.kpis.delinquentUnits).toBe(1);
   });
 
+  it('KPI counts one unit with outstanding charges in multiple currencies once', async () => {
+    (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
+      chargeFixture({ id: 'c-ars', amount: 10000, currency: 'ARS', unitId: 'unit-1' }),
+      chargeFixture({ id: 'c-usd', amount: 5000, currency: 'USD', unitId: 'unit-1' }),
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+
+    expect(result.kpis.outstandingByCurrency).toEqual([
+      { currency: 'USD', amountMinor: 5000 },
+      { currency: 'ARS', amountMinor: 10000 },
+    ]);
+    expect(result.kpis.delinquentUnits).toBe(1);
+  });
+
   it('KPI multi-currency: ARS + USD + COP buckets stay separate', async () => {
     (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
       chargeFixture({ id: 'c-ars', amount: 10000, currency: 'ARS', unitId: 'u1', paymentAllocations: [
@@ -238,5 +253,157 @@ describe('DashboardService', () => {
     expect(result.kpis.collectedByCurrency).toEqual([]);
     expect(result.kpis.collectionRateByCurrency).toEqual([]);
     expect(result.kpis.delinquentUnits).toBe(0);
+  });
+
+  it('returns a stored UYU charge as a report bucket without throwing', async () => {
+    (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
+      chargeFixture({ currency: 'UYU', amount: 15000 }),
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+
+    expect(result.kpis.outstandingByCurrency).toEqual([
+      { currency: 'UYU', amountMinor: 15000 },
+    ]);
+  });
+
+  it('keeps USD and stored UYU in separate canonical-first report buckets', async () => {
+    (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
+      chargeFixture({ id: 'uyu-charge', currency: 'UYU', amount: 15000, unitId: 'unit-1' }),
+      chargeFixture({ id: 'usd-charge', currency: 'USD', amount: 5000, unitId: 'unit-2' }),
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+
+    expect(result.kpis.outstandingByCurrency).toEqual([
+      { currency: 'USD', amountMinor: 5000 },
+      { currency: 'UYU', amountMinor: 15000 },
+    ]);
+    expect(result.kpis.collectedByCurrency).toEqual([
+      { currency: 'USD', amountMinor: 0 },
+      { currency: 'UYU', amountMinor: 0 },
+    ]);
+    expect(result.kpis.collectionRateByCurrency).toEqual([
+      { currency: 'USD', rate: 0 },
+      { currency: 'UYU', rate: 0 },
+    ]);
+    expect(result.kpis.delinquentUnits).toBe(2);
+  });
+
+  it('keeps a UYU building alert safe and currency-separated', async () => {
+    (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
+      chargeFixture({ currency: 'UYU', amount: 15000 }),
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+    const alert = result.buildingAlerts.find((item) => item.buildingId === 'building-1');
+
+    expect(alert).toMatchObject({
+      outstandingByCurrency: [{ currency: 'UYU', amountMinor: 15000 }],
+      riskScore: 'LOW',
+    });
+  });
+
+  it('keeps each pending payment stored currency in the validation queue', async () => {
+    (prisma.payment.count as unknown as jest.Mock).mockResolvedValue(1);
+    (prisma.payment.findMany as unknown as jest.Mock).mockResolvedValue([
+      {
+        id: 'payment-usd-1',
+        amount: 5000,
+        currency: 'USD',
+        createdAt: new Date('2026-05-24T12:00:00.000Z'),
+        unit: { label: 'A-101', building: { name: 'Edificio A' } },
+      },
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+
+    expect(result.queues.paymentsToValidate).toEqual({
+      count: 1,
+      top: [
+        expect.objectContaining({
+          id: 'payment-usd-1',
+          amount: 5000,
+          currency: 'USD',
+        }),
+      ],
+    });
+  });
+
+  it('keeps building-alert debt in Charge.currency and excludes submitted allocations', async () => {
+    (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
+      chargeFixture({
+        id: 'ars-charge',
+        amount: 10000,
+        currency: 'ARS',
+        paymentAllocations: [
+          allocationFixture(3000, 'APPROVED'),
+          allocationFixture(7000, 'SUBMITTED'),
+        ],
+      }),
+      chargeFixture({
+        id: 'usd-charge',
+        amount: 5000,
+        currency: 'USD',
+        paymentAllocations: [allocationFixture(1000, 'RECONCILED')],
+      }),
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+    const alert = result.buildingAlerts.find((item) => item.buildingId === 'building-1');
+
+    expect(alert).toMatchObject({
+      outstandingByCurrency: [
+        { currency: 'USD', amountMinor: 4000 },
+        { currency: 'ARS', amountMinor: 7000 },
+      ],
+    });
+    expect(alert).not.toHaveProperty('outstandingAmount');
+  });
+
+  it('keeps building-alert debt currency-safe while risk stays non-monetary', async () => {
+    (prisma.building.findMany as unknown as jest.Mock).mockResolvedValue([
+      { id: 'building-1', name: 'Edificio A' },
+      { id: 'building-2', name: 'Edificio B' },
+    ]);
+    (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
+      chargeFixture({
+        id: 'b1-ars',
+        buildingId: 'building-1',
+        amount: 2000000,
+        currency: 'ARS',
+      }),
+      chargeFixture({
+        id: 'b1-usd',
+        buildingId: 'building-1',
+        amount: 5000,
+        currency: 'USD',
+      }),
+      chargeFixture({
+        id: 'b2-ars',
+        buildingId: 'building-2',
+        amount: 10000,
+        currency: 'ARS',
+      }),
+    ]);
+    (prisma.ticket.groupBy as unknown as jest.Mock).mockResolvedValue([
+      { buildingId: 'building-2', _count: { id: 2 } },
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+    const firstBuilding = result.buildingAlerts.find((item) => item.buildingId === 'building-1');
+    const secondBuilding = result.buildingAlerts.find((item) => item.buildingId === 'building-2');
+
+    expect(firstBuilding).toMatchObject({
+      outstandingByCurrency: [
+        { currency: 'USD', amountMinor: 5000 },
+        { currency: 'ARS', amountMinor: 2000000 },
+      ],
+      riskScore: 'LOW',
+    });
+    expect(secondBuilding).toMatchObject({
+      outstandingByCurrency: [{ currency: 'ARS', amountMinor: 10000 }],
+      riskScore: 'MEDIUM',
+    });
   });
 });
