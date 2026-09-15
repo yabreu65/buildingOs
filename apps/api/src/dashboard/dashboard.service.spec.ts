@@ -255,6 +255,55 @@ describe('DashboardService', () => {
     expect(result.kpis.delinquentUnits).toBe(0);
   });
 
+  it('returns a stored UYU charge as a report bucket without throwing', async () => {
+    (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
+      chargeFixture({ currency: 'UYU', amount: 15000 }),
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+
+    expect(result.kpis.outstandingByCurrency).toEqual([
+      { currency: 'UYU', amountMinor: 15000 },
+    ]);
+  });
+
+  it('keeps USD and stored UYU in separate canonical-first report buckets', async () => {
+    (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
+      chargeFixture({ id: 'uyu-charge', currency: 'UYU', amount: 15000, unitId: 'unit-1' }),
+      chargeFixture({ id: 'usd-charge', currency: 'USD', amount: 5000, unitId: 'unit-2' }),
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+
+    expect(result.kpis.outstandingByCurrency).toEqual([
+      { currency: 'USD', amountMinor: 5000 },
+      { currency: 'UYU', amountMinor: 15000 },
+    ]);
+    expect(result.kpis.collectedByCurrency).toEqual([
+      { currency: 'USD', amountMinor: 0 },
+      { currency: 'UYU', amountMinor: 0 },
+    ]);
+    expect(result.kpis.collectionRateByCurrency).toEqual([
+      { currency: 'USD', rate: 0 },
+      { currency: 'UYU', rate: 0 },
+    ]);
+    expect(result.kpis.delinquentUnits).toBe(2);
+  });
+
+  it('keeps a UYU building alert safe and currency-separated', async () => {
+    (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
+      chargeFixture({ currency: 'UYU', amount: 15000 }),
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+    const alert = result.buildingAlerts.find((item) => item.buildingId === 'building-1');
+
+    expect(alert).toMatchObject({
+      outstandingByCurrency: [{ currency: 'UYU', amountMinor: 15000 }],
+      riskScore: 'LOW',
+    });
+  });
+
   it('keeps each pending payment stored currency in the validation queue', async () => {
     (prisma.payment.count as unknown as jest.Mock).mockResolvedValue(1);
     (prisma.payment.findMany as unknown as jest.Mock).mockResolvedValue([

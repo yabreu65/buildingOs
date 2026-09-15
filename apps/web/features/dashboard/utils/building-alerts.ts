@@ -1,3 +1,4 @@
+import { CANONICAL_CURRENCIES, isCanonicalCurrency } from '@buildingos/contracts';
 import type { BuildingAlert, CurrencyAmountBucket } from '../services/dashboard.api';
 
 export const getTotalAccumulatedDebtByCurrency = (
@@ -11,5 +12,14 @@ export const getTotalAccumulatedDebtByCurrency = (
     }
   }
 
-  return Array.from(totals, ([currency, amountMinor]) => ({ currency, amountMinor }));
+  const buckets = Array.from(totals, ([currency, amountMinor]) => ({ currency, amountMinor }));
+
+  return buckets.sort((a, b) => {
+    if (isCanonicalCurrency(a.currency)) {
+      return isCanonicalCurrency(b.currency)
+        ? CANONICAL_CURRENCIES.indexOf(a.currency) - CANONICAL_CURRENCIES.indexOf(b.currency)
+        : -1;
+    }
+    return isCanonicalCurrency(b.currency) ? 1 : a.currency.localeCompare(b.currency);
+  });
 };

@@ -33,6 +33,32 @@ describe('dashboard building alerts utils', () => {
     ]);
   });
 
+  it('orders footer buckets canonical-first when a legacy-only alert is seen first', () => {
+    expect(
+      getTotalAccumulatedDebtByCurrency([
+        {
+          buildingId: 'b-legacy',
+          buildingName: 'Edificio Histórico',
+          outstandingByCurrency: [{ currency: 'UYU', amountMinor: 15000 }],
+          overdueTickets: 0,
+          unitsWithoutResponsible: 0,
+          riskScore: 'LOW',
+        },
+        {
+          buildingId: 'b-canonical',
+          buildingName: 'Edificio Actual',
+          outstandingByCurrency: [{ currency: 'USD', amountMinor: 5000 }],
+          overdueTickets: 0,
+          unitsWithoutResponsible: 0,
+          riskScore: 'LOW',
+        },
+      ]),
+    ).toEqual([
+      { currency: 'USD', amountMinor: 5000 },
+      { currency: 'UYU', amountMinor: 15000 },
+    ]);
+  });
+
   it('returns no currency bucket when alerts have no debt', () => {
     expect(
       getTotalAccumulatedDebtByCurrency([

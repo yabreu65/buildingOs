@@ -153,6 +153,50 @@ describe('DashboardPage building alerts', () => {
     ]);
   });
 
+  it('renders USD and stored UYU buckets without crashing', () => {
+    mockedUseDashboardSummary.mockReturnValue({
+      data: {
+        kpis: {
+          outstandingByCurrency: [],
+          collectedByCurrency: [],
+          collectionRateByCurrency: [],
+          delinquentUnits: 0,
+        },
+        queues: {
+          tickets: { open: 0, inProgress: 0, overdue: 0, top: [] },
+          paymentsToValidate: { count: 0, top: [] },
+          unitsWithoutResponsible: { count: 0, top: [] },
+        },
+        buildingAlerts: [
+          {
+            buildingId: 'building-legacy',
+            buildingName: 'Edificio Histórico',
+            outstandingByCurrency: [
+              { currency: 'USD', amountMinor: 5000 },
+              { currency: 'UYU', amountMinor: 15000 },
+            ],
+            overdueTickets: 0,
+            unitsWithoutResponsible: 0,
+            riskScore: 'LOW',
+          },
+        ],
+        quickActions: [],
+        metadata: { period: '2026-05', buildingId: null, generatedAt: '2026-05-01T00:00:00.000Z' },
+      },
+      isPending: false,
+      error: null,
+      refetch: jest.fn(),
+    } as never);
+
+    expect(() => render(<DashboardPage />)).not.toThrow();
+
+    const formatted = formatCurrencyBuckets([
+      { currency: 'USD', amountMinor: 5000 },
+      { currency: 'UYU', amountMinor: 15000 },
+    ]);
+    expect(screen.getAllByText((_content, element) => element?.textContent === formatted)).not.toHaveLength(0);
+  });
+
   it('formats each pending payment with its stored currency', () => {
     mockedUseDashboardSummary.mockReturnValue({
       data: {

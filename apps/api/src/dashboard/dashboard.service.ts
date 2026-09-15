@@ -12,7 +12,8 @@ import {
   BuildingAlert,
 } from './dashboard.dto';
 import { PaymentStatus, ChargeStatus, TicketStatus, Prisma } from '@prisma/client';
-import { calculateChargeOutstandingMinor, sumByCurrency } from '../finanzas/charge-aggregation';
+import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
+import { aggregateReportBuckets } from '../finanzas/currency-buckets';
 
 interface UnitWithOccupants extends Prisma.UnitGetPayload<{
   include: { unitOccupants: true; building: { select: { name: true } } };
@@ -180,7 +181,7 @@ export class DashboardService {
     });
 
     // Currency-safe buckets: every charge keeps its own Charge.currency.
-    const outstandingByCurrency = sumByCurrency(
+    const outstandingByCurrency = aggregateReportBuckets(
       chargesWithOutstanding.map((item) => ({
         currency: item.charge.currency,
         amountMinor: item.outstanding,
@@ -188,7 +189,7 @@ export class DashboardService {
     );
     // Collected is bounded by Charge.amount: an over-allocated charge can
     // never produce collected > emitted. Same clamp contract as outstanding.
-    const collectedByCurrency = sumByCurrency(
+    const collectedByCurrency = aggregateReportBuckets(
       chargesWithOutstanding.map((item) => ({
         currency: item.charge.currency,
         amountMinor: Math.max(0, item.charge.amount - item.outstanding),
@@ -405,7 +406,7 @@ export class DashboardService {
 
     for (const buildingId of buildingIds) {
       const charges = chargesByBuilding.get(buildingId) || [];
-      const outstandingByCurrency = sumByCurrency(
+      const outstandingByCurrency = aggregateReportBuckets(
         charges.map((charge) => ({
           currency: charge.currency,
           amountMinor: calculateChargeOutstandingMinor(charge),
