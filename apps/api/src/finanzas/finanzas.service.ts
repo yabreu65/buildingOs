@@ -3417,32 +3417,35 @@ export class FinanzasService {
     });
 
     const buildingIds = buildings.map(b => b.id);
-    const paymentsByBuilding = await this.prisma.payment.findMany({
+    const paymentGroupsByBuilding = await this.prisma.payment.groupBy({
+      by: ['buildingId', 'status', 'currency'],
       where: {
         tenantId,
         buildingId: { in: buildingIds },
         canceledAt: null,
+        status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED, PaymentStatus.REJECTED] },
       },
-      select: { buildingId: true, status: true, amount: true, currency: true },
+      _count: { _all: true },
+      _sum: { amount: true },
     });
 
     const byBuilding = buildings.map(b => {
-      const buildingPayments = paymentsByBuilding.filter(payment => payment.buildingId === b.id);
-      const pendingPayments = buildingPayments.filter(payment => payment.status === PaymentStatus.SUBMITTED);
-      const approved = buildingPayments.filter(payment => payment.status === PaymentStatus.APPROVED);
-      const rejected = buildingPayments.filter(payment => payment.status === PaymentStatus.REJECTED);
+      const buildingPaymentGroups = paymentGroupsByBuilding.filter(payment => payment.buildingId === b.id);
+      const pendingGroups = buildingPaymentGroups.filter(payment => payment.status === PaymentStatus.SUBMITTED);
+      const approvedGroups = buildingPaymentGroups.filter(payment => payment.status === PaymentStatus.APPROVED);
+      const rejectedGroups = buildingPaymentGroups.filter(payment => payment.status === PaymentStatus.REJECTED);
       return {
         buildingId: b.id,
         buildingName: b.name,
-        pending: pendingPayments.length,
+        pending: pendingGroups.reduce((count, payment) => count + payment._count._all, 0),
         pendingAmountByCurrency: aggregateReportBuckets(
-          pendingPayments.map((payment) => ({
+          pendingGroups.map((payment) => ({
             currency: payment.currency,
-            amountMinor: payment.amount,
+            amountMinor: payment._sum.amount ?? 0,
           })),
         ),
-        approved: approved.length,
-        rejected: rejected.length,
+        approved: approvedGroups.reduce((count, payment) => count + payment._count._all, 0),
+        rejected: rejectedGroups.reduce((count, payment) => count + payment._count._all, 0),
       };
     });
 

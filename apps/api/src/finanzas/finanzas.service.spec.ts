@@ -71,6 +71,7 @@ describe('FinanzasService', () => {
               findFirst: jest.fn(),
               findUnique: jest.fn(),
               findMany: jest.fn(),
+              groupBy: jest.fn(),
               update: jest.fn(),
             },
             paymentAllocation: {
@@ -5007,14 +5008,12 @@ describe('FinanzasService', () => {
       pendingPayments: readonly Record<string, unknown>[],
       reviewedPayments: readonly Record<string, unknown>[],
       buildings: readonly Record<string, unknown>[],
-      buildingPayments: readonly Record<string, unknown>[],
+      buildingPaymentGroups: readonly Record<string, unknown>[],
     ) => {
       (prismaService.payment.findMany as jest.Mock)
         .mockResolvedValueOnce(pendingPayments)
-        .mockResolvedValueOnce(reviewedPayments)
-        .mockResolvedValueOnce(buildingPayments);
-      const paymentClient = prismaService.payment as unknown as { groupBy: jest.Mock };
-      paymentClient.groupBy = jest.fn().mockResolvedValue([]);
+        .mockResolvedValueOnce(reviewedPayments);
+      (prismaService.payment.groupBy as jest.Mock).mockResolvedValueOnce(buildingPaymentGroups);
       const buildingClient = prismaService.building as unknown as { findMany: jest.Mock };
       buildingClient.findMany = jest.fn().mockResolvedValue(buildings);
     };
@@ -5037,11 +5036,11 @@ describe('FinanzasService', () => {
           { id: 'building-b', name: 'Torre B' },
         ],
         [
-          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, amount: 1250, currency: 'ARS' },
-          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, amount: 2200, currency: 'USD' },
-          { buildingId: 'building-a', status: PaymentStatus.APPROVED, amount: 900, currency: 'ARS' },
-          { buildingId: 'building-b', status: PaymentStatus.SUBMITTED, amount: 3000, currency: 'UYU' },
-          { buildingId: 'building-b', status: PaymentStatus.REJECTED, amount: 100, currency: 'UYU' },
+          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, currency: 'ARS', _count: { _all: 1 }, _sum: { amount: 1250 } },
+          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, currency: 'USD', _count: { _all: 1 }, _sum: { amount: 2200 } },
+          { buildingId: 'building-a', status: PaymentStatus.APPROVED, currency: 'ARS', _count: { _all: 1 }, _sum: { amount: 900 } },
+          { buildingId: 'building-b', status: PaymentStatus.SUBMITTED, currency: 'UYU', _count: { _all: 1 }, _sum: { amount: 3000 } },
+          { buildingId: 'building-b', status: PaymentStatus.REJECTED, currency: 'UYU', _count: { _all: 1 }, _sum: { amount: 100 } },
         ],
       );
 
@@ -5094,9 +5093,8 @@ describe('FinanzasService', () => {
         [{ status: PaymentStatus.APPROVED, reference: null }],
         [{ id: 'building-a', name: 'Torre A' }],
         [
-          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, amount: 1200, currency: 'ARS' },
-          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, amount: 800, currency: 'ARS' },
-          { buildingId: 'building-a', status: PaymentStatus.APPROVED, amount: 100, currency: 'ARS' },
+          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, currency: 'ARS', _count: { _all: 2 }, _sum: { amount: 2000 } },
+          { buildingId: 'building-a', status: PaymentStatus.APPROVED, currency: 'ARS', _count: { _all: 1 }, _sum: { amount: 100 } },
         ],
       );
 
@@ -5140,6 +5138,18 @@ describe('FinanzasService', () => {
         where: { tenantId: 'tenant-1', id: 'building-a' },
         select: { id: true, name: true },
       });
+      expect(prismaService.payment.groupBy).toHaveBeenCalledWith({
+        by: ['buildingId', 'status', 'currency'],
+        where: {
+          tenantId: 'tenant-1',
+          buildingId: { in: ['building-a'] },
+          canceledAt: null,
+          status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED, PaymentStatus.REJECTED] },
+        },
+        _count: { _all: true },
+        _sum: { amount: true },
+      });
+      expect(prismaService.payment.findMany).toHaveBeenCalledTimes(2);
     });
   });
 
