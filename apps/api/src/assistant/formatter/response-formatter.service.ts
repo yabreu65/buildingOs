@@ -310,7 +310,9 @@ export class ResponseFormatterService {
     for (const [key, value] of Object.entries(record)) {
       const label = this.formatLabel(key);
       const currency = typeof record.currency === 'string' ? record.currency : undefined;
-      if (typeof value === 'number' && this.isMoneyField(key) && currency) {
+      if (this.isCurrencyBucketField(key) && this.isCurrencyBucketArray(value)) {
+        lines.push(`${label}: ${this.formatBuckets(value)}`);
+      } else if (typeof value === 'number' && this.isMoneyField(key) && currency) {
         lines.push(`${label}: ${this.formatMoney(value, currency)}`);
       } else if (typeof value === 'number') {
         lines.push(`${label}: ${value}`);
@@ -441,17 +443,13 @@ export class ResponseFormatterService {
         case 'building_payments': {
           const payments = record.payments as Array<Record<string, unknown>>;
           if (Array.isArray(payments)) {
-            const currency = (record.currency as string) || 'ARS';
-            const explicitTotalAmount = typeof record.totalAmount === 'number' ? record.totalAmount : undefined;
-            const sumByMethod = record.sumByMethod as Record<string, number> | undefined;
-            const inferredTotal =
-              explicitTotalAmount ??
-              (sumByMethod
-                ? Object.values(sumByMethod).reduce((acc, value) => acc + Number(value || 0), 0)
-                : payments.reduce((acc, payment) => acc + Number(payment.amount || 0), 0));
-
+            const totalAmountByCurrency = record.totalAmountByCurrency;
+            if (!this.isCurrencyBucketArray(totalAmountByCurrency)) {
+              break;
+            }
+            // Payment totals must be supplied as explicit currency buckets.
             const countText = `${payments.length} pago${payments.length === 1 ? '' : 's'} encontrado${payments.length === 1 ? '' : 's'}`;
-            return `${countText}. Monto total: ${this.formatMoney(inferredTotal, currency)}`;
+            return `${countText}. Monto total: ${this.formatBuckets(totalAmountByCurrency)}`;
           }
           break;
         }
@@ -483,7 +481,7 @@ export class ResponseFormatterService {
         }
 
         case 'building_stats': {
-          const stats = record.stats as Record<string, unknown>;
+          const stats = (record.stats ?? record) as Record<string, unknown>;
           if (stats) {
             const totalUnits = stats.totalUnits as number;
             const occupied = stats.occupiedUnits as number;
@@ -492,7 +490,15 @@ export class ResponseFormatterService {
             if (totalUnits !== undefined) parts.push(`${totalUnits} unidades totales`);
             if (occupied !== undefined) parts.push(`${occupied} ocupadas`);
             if (vacant !== undefined) parts.push(`${vacant} vacantes`);
-            return parts.join(' | ');
+            const totalDebtByCurrency = stats.totalDebtByCurrency;
+                const averageDebtByCurrency = stats.averageDebtByCurrency;
+                if (this.isCurrencyBucketArray(totalDebtByCurrency)) {
+                  parts.push(`Deuda total: ${this.formatBuckets(totalDebtByCurrency)}`);
+                }
+                if (this.isCurrencyBucketArray(averageDebtByCurrency)) {
+                  parts.push(`Deuda promedio: ${this.formatBuckets(averageDebtByCurrency)}`);
+                }
+                return parts.join(' | ');
           }
           break;
         }
@@ -609,6 +615,12 @@ export class ResponseFormatterService {
     }
 
     const record = data as Record<string, unknown>;
+    if (this.isCurrencyBucketArray(record.totalDebtByCurrency)
+      || this.isCurrencyBucketArray(record.averageDebtByCurrency)
+      || this.isCurrencyBucketArray(record.totalAmountByCurrency)) {
+      return true;
+    }
+
     const values = Object.values(record);
 
     // Single level object with mostly numeric values
@@ -663,5 +675,20 @@ export class ResponseFormatterService {
   private isMoneyField(fieldName: string): boolean {
     const moneyFields = ['amount', 'total', 'debt', 'balance', 'price', 'cost', 'revenue', 'income'];
     return moneyFields.some((f) => fieldName.toLowerCase().includes(f));
+  }
+
+  private isCurrencyBucketField(fieldName: string): boolean {
+    return fieldName === 'totalAmountByCurrency'
+      || fieldName === 'totalDebtByCurrency'
+      || fieldName === 'averageDebtByCurrency';
+  }
+
+  private isCurrencyBucketArray(value: unknown): value is ReportCurrencyAmountBucket[] {
+    return Array.isArray(value) && value.every((item) =>
+      typeof item === 'object'
+      && item !== null
+      && typeof (item as Record<string, unknown>).currency === 'string'
+      && typeof (item as Record<string, unknown>).amountMinor === 'number',
+    );
   }
 }

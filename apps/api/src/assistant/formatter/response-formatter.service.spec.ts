@@ -55,7 +55,14 @@ describe('ResponseFormatterService', () => {
       expect(result).toHaveProperty('type');
       expect(result).toHaveProperty('title');
       expect(result).toHaveProperty('summary');
+      expect(result.summary).toBe('1 resultado');
       expect(result).toHaveProperty('data');
+    });
+
+    it('uses the generic fallback summary for non-object data', () => {
+      const result = service.formatV2('Simple text response', 'get_balance', 0.9);
+
+      expect(result.summary).toBe('Respuesta');
     });
 
     it('sets type to table for list data', () => {
@@ -98,21 +105,53 @@ describe('ResponseFormatterService', () => {
       expect(result.meta?.confidence).toBe(0.85);
     });
 
-    it('includes total amount in building_payments summary', () => {
+    it('formats payment total buckets without a currency fallback or object coercion', () => {
       const data = {
         payments: [
-          { amount: 100000, method: 'TRANSFER' },
-          { amount: 50000, method: 'TRANSFER' },
+          { amount: 100000, currency: 'USD', method: 'TRANSFER' },
+          { amount: 50000, currency: 'UYU', method: 'TRANSFER' },
         ],
-        sumByMethod: { TRANSFER: 150000 },
-        totalAmount: 150000,
+        sumByMethod: {
+          TRANSFER: [
+            { currency: 'USD', amountMinor: 100000 },
+            { currency: 'UYU', amountMinor: 50000 },
+          ],
+        },
+        totalAmountByCurrency: [
+          { currency: 'USD', amountMinor: 100000 },
+          { currency: 'UYU', amountMinor: 50000 },
+        ],
         total: 2,
-        currency: 'ARS',
       };
       const result = service.formatV2(data, 'building_payments', 0.9);
 
       expect(result.summary).toContain('2 pagos encontrados');
       expect(result.summary).toContain('Monto total');
+      expect(result.summary).toContain('US$');
+      expect(result.summary).toContain('UYU');
+      expect(result.summary).not.toContain('[object Object]');
+      expect(result.summary).not.toContain('ARS');
+    });
+
+    it('formats building debt and average buckets without a hardcoded VES fallback', () => {
+      const result = service.formatV1({
+        totalUnits: 3,
+        totalDebtByCurrency: [
+          { currency: 'USD', amountMinor: 1001 },
+          { currency: 'UYU', amountMinor: 1002 },
+        ],
+        averageDebtByCurrency: [
+          { currency: 'USD', amountMinor: 334 },
+          { currency: 'UYU', amountMinor: 334 },
+        ],
+      }, 'building_stats');
+
+      expect(result.answer).toContain('Total Debt By Currency:');
+      expect(result.answer).toContain('Average Debt By Currency:');
+      expect(result.answer).toContain('US$');
+      expect(result.answer).toContain('UYU');
+      expect(result.answer).not.toContain('[object Object]');
+      expect(result.answer).not.toContain('VES');
     });
 
     it('renders tenant_debt summaries as administration debt', () => {

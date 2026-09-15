@@ -16,9 +16,13 @@
  * - Privacy: Read-only summary, no PII
  */
 
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Prisma, TicketStatus, PaymentStatus, ChargeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  aggregateReportBuckets,
+  type ReportCurrencyAmountBucket,
+} from '../finanzas/currency-buckets';
 
 export interface ContextSnapshot {
   now: string; // ISO timestamp
@@ -30,7 +34,7 @@ export interface ContextSnapshot {
   kpis: {
     openTickets: number;
     submittedPayments: number;
-    outstandingAmount: number; // In cents
+    outstandingByCurrency: ReportCurrencyAmountBucket[];
   };
   topTickets: Array<{
     id: string;
@@ -44,12 +48,13 @@ export interface ContextSnapshot {
     building: string;
     unit: string;
     amount: number; // In cents
+    currency: string;
     status: string;
   }>;
   topDelinquentUnits: Array<{
     building: string;
     unit: string;
-    outstanding: number; // In cents
+    outstandingByCurrency: ReportCurrencyAmountBucket[];
   }>;
   recentDocs: Array<{
     id: string;
@@ -74,16 +79,26 @@ export interface SummaryRequest {
 }
 
 @Injectable()
-export class AiContextSummaryService {
+export class AiContextSummaryService implements OnModuleDestroy {
   // Cache for summaries (in-memory LRU, separate from response cache)
   private summaryCache: Map<string, { data: ContextSummary; expiresAt: number }> = new Map();
   private readonly cacheTtlSeconds: number = 45; // 45s default
 
   private readonly logger = new Logger(AiContextSummaryService.name);
 
+  // Interval handle for cleanup on module destroy
+  private readonly intervalId: NodeJS.Timeout;
+
   constructor(private readonly prisma: PrismaService) {
     // Cleanup expired entries every 30 seconds
-    setInterval(() => this.cleanupExpiredSummaries(), 30000);
+    this.intervalId = setInterval(() => this.cleanupExpiredSummaries(), 30000);
+  }
+
+  /**
+   * Cleanup on module destroy
+   */
+  onModuleDestroy(): void {
+    clearInterval(this.intervalId);
   }
 
   /**
@@ -123,7 +138,7 @@ export class AiContextSummaryService {
       kpis: {
         openTickets: 0,
         submittedPayments: 0,
-        outstandingAmount: 0,
+        outstandingByCurrency: [],
       },
       topTickets: [],
       pendingPayments: [],
@@ -263,6 +278,7 @@ export class AiContextSummaryService {
         building: p.building.name,
         unit: p.unit?.label || 'N/A',
         amount: p.amount,
+        currency: p.currency,
         status: p.status,
       }));
     } catch (error) {
@@ -294,27 +310,33 @@ export class AiContextSummaryService {
         ...(request.unitId ? { unitId: request.unitId } : {}),
       };
 
-      // Get total outstanding amount
-      const summary = await this.prisma.charge.aggregate({
+      const outstandingGroups = await this.prisma.charge.groupBy({
+        by: ['currency'],
         where,
-        _sum: {
-          amount: true,
-        },
+        _sum: { amount: true },
       });
 
-      snapshot.kpis.outstandingAmount = summary._sum.amount || 0;
+      snapshot.kpis.outstandingByCurrency = aggregateReportBuckets(
+        outstandingGroups.map((group) => ({
+          currency: group.currency,
+          amountMinor: Number(group._sum.amount ?? 0),
+        })),
+      );
 
-      // Get top 5 delinquent units
-      // Raw query to group by unit and sum amounts
+      // Aggregate in the database per unit/currency. Unit ordering deliberately
+      // uses only due date and stable identifiers; nominal amounts are never ranked.
       const delinquent = await this.prisma.$queryRaw<Array<{
         building: string;
         unit: string | null;
+        currency: string;
         outstanding: bigint;
       }>>`
         SELECT
           b.name as building,
           u.label as unit,
-          SUM(c.amount) as outstanding
+          c.currency as currency,
+          SUM(c.amount) as outstanding,
+          MIN(c."dueDate") as "earliestDueDate"
         FROM "Charge" c
         JOIN "Building" b ON c."buildingId" = b.id AND b."tenantId" = c."tenantId"
         LEFT JOIN "Unit" u ON c."unitId" = u.id AND u."tenantId" = c."tenantId"
@@ -322,16 +344,37 @@ export class AiContextSummaryService {
           AND c.status = ${ChargeStatus.PENDING}
           ${request.buildingId ? Prisma.sql`AND c."buildingId" = ${request.buildingId}` : Prisma.empty}
           ${request.unitId ? Prisma.sql`AND c."unitId" = ${request.unitId}` : Prisma.empty}
-        GROUP BY b.id, b.name, u.id, u.label
-        ORDER BY outstanding DESC
-        LIMIT 5
+        GROUP BY b.id, b.name, u.id, u.label, c.currency
+        ORDER BY MIN(c."dueDate") ASC NULLS LAST, b.name ASC, u.label ASC, c.currency ASC
       `;
 
-      snapshot.topDelinquentUnits = (delinquent).map(d => ({
-        building: d.building,
-        unit: d.unit || 'N/A',
-        outstanding: Number(d.outstanding) || 0,
-      }));
+      const delinquentByUnit = new Map<string, {
+        building: string;
+        unit: string;
+        entries: Array<{ currency: string; amountMinor: number }>;
+      }>();
+      for (const row of delinquent) {
+        const unit = row.unit || 'N/A';
+        const unitKey = `${row.building}:${unit}`;
+        const current = delinquentByUnit.get(unitKey) ?? {
+          building: row.building,
+          unit,
+          entries: [],
+        };
+        current.entries.push({
+          currency: row.currency,
+          amountMinor: Number(row.outstanding),
+        });
+        delinquentByUnit.set(unitKey, current);
+      }
+
+      snapshot.topDelinquentUnits = Array.from(delinquentByUnit.values())
+        .slice(0, 5)
+        .map((row) => ({
+          building: row.building,
+          unit: row.unit,
+          outstandingByCurrency: aggregateReportBuckets(row.entries),
+        }));
     } catch (error) {
       this.logger.error('Failed to enrich delinquency', error);
     }
