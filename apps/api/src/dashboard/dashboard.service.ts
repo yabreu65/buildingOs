@@ -211,20 +211,19 @@ export class DashboardService {
       };
     });
 
-    // Delinquent units (units with outstanding > 0)
-    const delinquentUnitsMap = new Map<string, number>();
-    for (const item of chargesWithOutstanding.filter((entry) => entry.outstanding > 0)) {
-      delinquentUnitsMap.set(
-        item.charge.unitId,
-        (delinquentUnitsMap.get(item.charge.unitId) || 0) + item.outstanding,
-      );
+    // Delinquent units are counted by ID only; currency amounts must not be combined.
+    const delinquentUnitIds = new Set<string>();
+    for (const item of chargesWithOutstanding) {
+      if (item.outstanding > 0) {
+        delinquentUnitIds.add(item.charge.unitId);
+      }
     }
 
     return {
       outstandingByCurrency,
       collectedByCurrency,
       collectionRateByCurrency,
-      delinquentUnits: delinquentUnitsMap.size,
+      delinquentUnits: delinquentUnitIds.size,
     };
   }
 
@@ -405,13 +404,13 @@ export class DashboardService {
 
     for (const buildingId of buildingIds) {
       const charges = chargesByBuilding.get(buildingId) || [];
-      const outstandingAmount = charges.reduce((sum, charge) => {
-        const allocated = charge.paymentAllocations.reduce((aSum, a) => {
-          const status = a.payment?.status;
-          return aSum + ((status === PaymentStatus.APPROVED || status === PaymentStatus.RECONCILED) ? a.amount : 0);
-        }, 0);
-        return sum + (charge.amount - allocated);
-      }, 0);
+      const outstandingByCurrency = sumByCurrency(
+        charges.map((charge) => ({
+          currency: charge.currency,
+          amountMinor: calculateChargeOutstandingMinor(charge),
+        })),
+      );
+      const hasOutstanding = outstandingByCurrency.some((bucket) => bucket.amountMinor > 0);
 
       const openTickets = ticketsByBuilding.get(buildingId) || 0;
 
@@ -421,17 +420,17 @@ export class DashboardService {
       ).length;
 
       let riskScore: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
-      if (outstandingAmount > 1000000 || openTickets > 3 || unitsWithoutResponsible > 5) {
+      if (openTickets > 3 || unitsWithoutResponsible > 5) {
         riskScore = 'HIGH';
-      } else if (outstandingAmount > 500000 || openTickets > 1 || unitsWithoutResponsible > 2) {
+      } else if (openTickets > 1 || unitsWithoutResponsible > 2) {
         riskScore = 'MEDIUM';
       }
 
-      if (outstandingAmount > 0 || openTickets > 0 || unitsWithoutResponsible > 0) {
+      if (hasOutstanding || openTickets > 0 || unitsWithoutResponsible > 0) {
         alerts.push({
           buildingId,
           buildingName: buildingMap.get(buildingId) || '',
-          outstandingAmount,
+          outstandingByCurrency,
           overdueTickets: openTickets,
           unitsWithoutResponsible,
           riskScore,

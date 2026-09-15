@@ -12,7 +12,7 @@ import { useEffectiveRole } from "@/features/tenancy/hooks/useEffectiveRole";
 import { useDashboardSummary, useBuildingList } from "@/features/dashboard/hooks/useDashboardSummary";
 import { Table, THead, TBody, TR, TH, TD } from "@/shared/components/ui/Table";
 import { formatAccountingPeriodLabel, getCurrentAccountingPeriod } from "@/features/dashboard/utils/period";
-import { getTotalAccumulatedDebt } from "@/features/dashboard/utils/building-alerts";
+import { getTotalAccumulatedDebtByCurrency } from "@/features/dashboard/utils/building-alerts";
 import { formatCurrencyBuckets } from "@/shared/lib/format/currency-buckets";
 import { ticketDetailPath } from "@/shared/lib/routes";
 import {
@@ -267,7 +267,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
   const kpis = summary?.kpis;
   const queues = summary?.queues;
   const buildingAlerts = summary?.buildingAlerts || [];
-  const totalAccumulatedDebt = getTotalAccumulatedDebt(buildingAlerts);
+  const totalAccumulatedDebtByCurrency = getTotalAccumulatedDebtByCurrency(buildingAlerts);
   const quickActions = summary?.quickActions || [];
 
   const cr = kpis?.collectionRateByCurrency && kpis.collectionRateByCurrency.length === 1
@@ -571,8 +571,8 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
                   <TR key={alert.buildingId} className="hover:bg-muted/50 transition-colors">
                     <TD className="font-medium">{alert.buildingName}</TD>
                     <TD className="text-right">
-                      <span className={alert.outstandingAmount > 0 ? 'text-orange-400 font-medium' : 'text-muted-foreground'}>
-                        {alert.outstandingAmount > 0 ? formatARS(alert.outstandingAmount) : '$0'}
+                      <span className={alert.outstandingByCurrency.some((bucket) => bucket.amountMinor > 0) ? 'text-orange-400 font-medium' : 'text-muted-foreground'}>
+                        {formatCurrencyBuckets(alert.outstandingByCurrency)}
                       </span>
                     </TD>
                     <TD className="text-right">
@@ -609,7 +609,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
         {buildingAlerts.length > 0 && (
           <div className="flex justify-end mt-4 pt-4 border-t border-border">
             <p className="text-sm text-muted-foreground">
-              Total deuda acumulada: <span className="font-semibold text-foreground">{formatARS(totalAccumulatedDebt)}</span>
+              Total deuda acumulada: <span className="font-semibold text-foreground">{formatCurrencyBuckets(totalAccumulatedDebtByCurrency)}</span>
             </p>
           </div>
         )}
