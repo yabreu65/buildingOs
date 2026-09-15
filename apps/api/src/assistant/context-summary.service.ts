@@ -329,23 +329,54 @@ export class AiContextSummaryService implements OnModuleDestroy {
         building: string;
         unit: string | null;
         currency: string;
-        outstanding: bigint;
+        buildingId: string;
+            unitId: string | null;
+            outstanding: bigint;
       }>>`
-        SELECT
-          b.name as building,
-          u.label as unit,
-          c.currency as currency,
-          SUM(c.amount) as outstanding,
-          MIN(c."dueDate") as "earliestDueDate"
+        WITH selected_units AS (
+              SELECT
+                c."buildingId",
+                c."unitId",
+                MIN(c."dueDate") AS "earliestDueDate"
+              FROM "Charge" c
+              WHERE c."tenantId" = ${request.tenantId}
+                AND c.status = ${ChargeStatus.PENDING}
+                ${request.buildingId ? Prisma.sql`AND c."buildingId" = ${request.buildingId}` : Prisma.empty}
+                ${request.unitId ? Prisma.sql`AND c."unitId" = ${request.unitId}` : Prisma.empty}
+              GROUP BY c."buildingId", c."unitId"
+              ORDER BY "earliestDueDate" ASC NULLS LAST, "buildingId" ASC, "unitId" ASC
+              LIMIT 5
+            )
+            SELECT
+          selected_units."buildingId" AS "buildingId",
+          selected_units."unitId" AS "unitId",
+              b.name AS building,
+              u.label AS unit,
+          c.currency AS currency,
+          SUM(c.amount) AS outstanding
         FROM "Charge" c
-        JOIN "Building" b ON c."buildingId" = b.id AND b."tenantId" = c."tenantId"
+        JOIN selected_units
+              ON c."buildingId" = selected_units."buildingId"
+              AND c."unitId" IS NOT DISTINCT FROM selected_units."unitId"
+            JOIN "Building" b ON c."buildingId" = b.id AND b."tenantId" = c."tenantId"
         LEFT JOIN "Unit" u ON c."unitId" = u.id AND u."tenantId" = c."tenantId"
         WHERE c."tenantId" = ${request.tenantId}
           AND c.status = ${ChargeStatus.PENDING}
           ${request.buildingId ? Prisma.sql`AND c."buildingId" = ${request.buildingId}` : Prisma.empty}
           ${request.unitId ? Prisma.sql`AND c."unitId" = ${request.unitId}` : Prisma.empty}
-        GROUP BY b.id, b.name, u.id, u.label, c.currency
-        ORDER BY MIN(c."dueDate") ASC NULLS LAST, b.name ASC, u.label ASC, c.currency ASC
+        GROUP BY
+              selected_units."buildingId",
+              selected_units."unitId",
+              selected_units."earliestDueDate",
+              b.id,
+              b.name,
+              u.id,
+              u.label,
+              c.currency
+        ORDER BY selected_units."earliestDueDate" ASC NULLS LAST,
+              selected_units."buildingId" ASC,
+              selected_units."unitId" ASC,
+              c.currency ASC
       `;
 
       const delinquentByUnit = new Map<string, {
@@ -354,8 +385,8 @@ export class AiContextSummaryService implements OnModuleDestroy {
         entries: Array<{ currency: string; amountMinor: number }>;
       }>();
       for (const row of delinquent) {
-        const unit = row.unit || 'N/A';
-        const unitKey = `${row.building}:${unit}`;
+        const unit = row.unit ?? 'N/A';
+        const unitKey = JSON.stringify([row.buildingId, row.unitId]);
         const current = delinquentByUnit.get(unitKey) ?? {
           building: row.building,
           unit,
@@ -369,8 +400,7 @@ export class AiContextSummaryService implements OnModuleDestroy {
       }
 
       snapshot.topDelinquentUnits = Array.from(delinquentByUnit.values())
-        .slice(0, 5)
-        .map((row) => ({
+                .map((row) => ({
           building: row.building,
           unit: row.unit,
           outstandingByCurrency: aggregateReportBuckets(row.entries),
