@@ -5002,6 +5002,147 @@ describe('FinanzasService', () => {
   });
 
   // ========== 3E3: CROSS-CURRENCY PAYMENT ALLOCATION ==========
+  describe('getPaymentMetrics currency-safe backlog', () => {
+    const setupMetrics = (
+      pendingPayments: readonly Record<string, unknown>[],
+      reviewedPayments: readonly Record<string, unknown>[],
+      buildings: readonly Record<string, unknown>[],
+      buildingPayments: readonly Record<string, unknown>[],
+    ) => {
+      (prismaService.payment.findMany as jest.Mock)
+        .mockResolvedValueOnce(pendingPayments)
+        .mockResolvedValueOnce(reviewedPayments)
+        .mockResolvedValueOnce(buildingPayments);
+      const paymentClient = prismaService.payment as unknown as { groupBy: jest.Mock };
+      paymentClient.groupBy = jest.fn().mockResolvedValue([]);
+      const buildingClient = prismaService.building as unknown as { findMany: jest.Mock };
+      buildingClient.findMany = jest.fn().mockResolvedValue(buildings);
+    };
+
+    it('keeps tenant backlog currencies separate while preserving counts, aging, and review rates', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-09-10T00:00:00.000Z'));
+      setupMetrics(
+        [
+          { amount: 1250, currency: 'ARS', createdAt: new Date('2026-09-08T00:00:00.000Z'), buildingId: 'building-a' },
+          { amount: 2200, currency: 'USD', createdAt: new Date('2026-09-06T00:00:00.000Z'), buildingId: 'building-a' },
+          { amount: 3000, currency: 'UYU', createdAt: new Date('2026-09-04T00:00:00.000Z'), buildingId: 'building-b' },
+        ],
+        [
+          { status: PaymentStatus.APPROVED, reference: null },
+          { status: PaymentStatus.APPROVED, reference: null },
+          { status: PaymentStatus.REJECTED, reference: 'COMPROBANTE_ILEGIBLE' },
+        ],
+        [
+          { id: 'building-a', name: 'Torre A' },
+          { id: 'building-b', name: 'Torre B' },
+        ],
+        [
+          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, amount: 1250, currency: 'ARS' },
+          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, amount: 2200, currency: 'USD' },
+          { buildingId: 'building-a', status: PaymentStatus.APPROVED, amount: 900, currency: 'ARS' },
+          { buildingId: 'building-b', status: PaymentStatus.SUBMITTED, amount: 3000, currency: 'UYU' },
+          { buildingId: 'building-b', status: PaymentStatus.REJECTED, amount: 100, currency: 'UYU' },
+        ],
+      );
+
+      const result = await service.getPaymentMetrics('tenant-1', {});
+
+      expect(result).toMatchObject({
+        backlogCount: 3,
+        backlogAmountByCurrency: [
+          { currency: 'USD', amountMinor: 2200 },
+          { currency: 'ARS', amountMinor: 1250 },
+          { currency: 'UYU', amountMinor: 3000 },
+        ],
+        agingMedianDays: 4,
+        agingP95Days: 6,
+        totalReviewed: 3,
+        approvalRate: 66.66666666666666,
+        rejectionRate: 33.33333333333333,
+        rejectionReasons: [{ reason: 'COMPROBANTE_ILEGIBLE', count: 1 }],
+        byBuilding: [
+          {
+            buildingId: 'building-a',
+            pending: 2,
+            pendingAmountByCurrency: [
+              { currency: 'USD', amountMinor: 2200 },
+              { currency: 'ARS', amountMinor: 1250 },
+            ],
+            approved: 1,
+            rejected: 0,
+          },
+          {
+            buildingId: 'building-b',
+            pending: 1,
+            pendingAmountByCurrency: [{ currency: 'UYU', amountMinor: 3000 }],
+            approved: 0,
+            rejected: 1,
+          },
+        ],
+      });
+      expect(result).not.toHaveProperty('backlogAmount');
+      expect(result.byBuilding[0]).not.toHaveProperty('pendingAmount');
+      jest.useRealTimers();
+    });
+
+    it('sums only same-currency backlog payments and keeps scoped building buckets isolated', async () => {
+      setupMetrics(
+        [
+          { amount: 1200, currency: 'ARS', createdAt: new Date('2026-09-09T00:00:00.000Z'), buildingId: 'building-a' },
+          { amount: 800, currency: 'ARS', createdAt: new Date('2026-09-08T00:00:00.000Z'), buildingId: 'building-a' },
+        ],
+        [{ status: PaymentStatus.APPROVED, reference: null }],
+        [{ id: 'building-a', name: 'Torre A' }],
+        [
+          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, amount: 1200, currency: 'ARS' },
+          { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, amount: 800, currency: 'ARS' },
+          { buildingId: 'building-a', status: PaymentStatus.APPROVED, amount: 100, currency: 'ARS' },
+        ],
+      );
+
+      const result = await service.getPaymentMetrics('tenant-1', {
+        buildingId: 'building-a',
+        dateFrom: '2026-09-01',
+        dateTo: '2026-09-30',
+      });
+
+      expect(result.backlogAmountByCurrency).toEqual([{ currency: 'ARS', amountMinor: 2000 }]);
+      expect(result.byBuilding).toEqual([
+        {
+          buildingId: 'building-a',
+          buildingName: 'Torre A',
+          pending: 2,
+          pendingAmountByCurrency: [{ currency: 'ARS', amountMinor: 2000 }],
+          approved: 1,
+          rejected: 0,
+        },
+      ]);
+      expect(prismaService.payment.findMany).toHaveBeenNthCalledWith(1, {
+        where: {
+          tenantId: 'tenant-1',
+          status: PaymentStatus.SUBMITTED,
+          canceledAt: null,
+          buildingId: 'building-a',
+        },
+        select: { amount: true, currency: true, createdAt: true, buildingId: true },
+      });
+      expect(prismaService.payment.findMany).toHaveBeenNthCalledWith(2, {
+        where: {
+          tenantId: 'tenant-1',
+          status: { in: [PaymentStatus.APPROVED, PaymentStatus.REJECTED] },
+          updatedAt: { gte: new Date('2026-09-01'), lte: new Date('2026-09-30') },
+          canceledAt: null,
+          buildingId: 'building-a',
+        },
+        select: { status: true, reference: true },
+      });
+      expect(prismaService.building.findMany).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1', id: 'building-a' },
+        select: { id: true, name: true },
+      });
+    });
+  });
+
   describe('3E3 cross-currency payment allocation', () => {
     const tenantId = 'tenant-123';
     const buildingId = 'building-123';

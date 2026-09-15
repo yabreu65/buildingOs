@@ -215,7 +215,7 @@ export class PaymentMetricsQueryDto {
 
 export class PaymentMetricsDto {
   backlogCount!: number;
-  backlogAmount!: number;
+  backlogAmountByCurrency!: ReportCurrencyAmountBucket[];
   agingMedianDays!: number;
   agingP95Days!: number;
   totalReviewed!: number;
@@ -226,7 +226,7 @@ export class PaymentMetricsDto {
     buildingId: string;
     buildingName: string;
     pending: number;
-    pendingAmount: number;
+    pendingAmountByCurrency: ReportCurrencyAmountBucket[];
     approved: number;
     rejected: number;
   }>;

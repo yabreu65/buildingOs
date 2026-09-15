@@ -681,7 +681,7 @@ export async function rejectPaymentTenant(
 
 export interface PaymentMetrics {
   backlogCount: number;
-  backlogAmount: number;
+  backlogAmountByCurrency: CurrencyAmountBucket[];
   agingMedianDays: number;
   agingP95Days: number;
   totalReviewed: number;
@@ -692,7 +692,7 @@ export interface PaymentMetrics {
     buildingId: string;
     buildingName: string;
     pending: number;
-    pendingAmount: number;
+    pendingAmountByCurrency: CurrencyAmountBucket[];
     approved: number;
     rejected: number;
   }>;
