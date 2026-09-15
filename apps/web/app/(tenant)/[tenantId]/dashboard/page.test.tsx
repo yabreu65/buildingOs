@@ -168,7 +168,7 @@ describe('DashboardPage building alerts', () => {
             count: 2,
             top: [
               { id: 'payment-usd-1', unitLabel: 'A-101', buildingName: 'Edificio A', amount: 5000, currency: 'USD', submittedAt: '2026-05-01T00:00:00.000Z' },
-              { id: 'payment-ars-1', unitLabel: 'B-202', buildingName: 'Edificio B', amount: 198200, currency: 'ARS', submittedAt: '2026-05-01T00:00:00.000Z' },
+              { id: 'payment-cop-1', unitLabel: 'B-202', buildingName: 'Edificio B', amount: 198200, currency: 'COP', submittedAt: '2026-05-01T00:00:00.000Z' },
             ],
           },
           unitsWithoutResponsible: { count: 0, top: [] },
@@ -185,10 +185,12 @@ describe('DashboardPage building alerts', () => {
     render(<DashboardPage />);
 
     const usdPaymentAmount = screen.getByText('A-101').parentElement?.lastElementChild;
-    const arsPaymentAmount = screen.getByText('B-202').parentElement?.lastElementChild;
+    const copPaymentAmount = screen.getByText('B-202').parentElement?.lastElementChild;
 
     expect(usdPaymentAmount?.textContent).toBe(formatCurrency(5000, 'USD'));
     expect(usdPaymentAmount?.textContent).not.toBe(formatCurrency(5000, 'ARS'));
-    expect(arsPaymentAmount?.textContent).toBe(formatCurrency(198200, 'ARS'));
+    expect(copPaymentAmount?.textContent).toBe(formatCurrency(198200, 'COP'));
+    expect(copPaymentAmount?.textContent).not.toBe(formatCurrency(198200, 'ARS'));
+    expect(copPaymentAmount?.textContent).not.toBe(formatCurrency(198200, 'USD'));
   });
 });
