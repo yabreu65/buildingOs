@@ -305,6 +305,7 @@ export class DashboardService {
       unitLabel: p.unit?.label || '-',
       buildingName: p.unit?.building?.name || '-',
       amount: p.amount,
+      currency: p.currency,
       submittedAt: p.createdAt.toISOString(),
     }));
 

@@ -38,6 +38,7 @@ export interface PaymentToValidateSummary {
   unitLabel: string;
   buildingName: string;
   amount: number;
+  currency: string;
   submittedAt: string;
 }
 

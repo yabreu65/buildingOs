@@ -14,6 +14,7 @@ import { Table, THead, TBody, TR, TH, TD } from "@/shared/components/ui/Table";
 import { formatAccountingPeriodLabel, getCurrentAccountingPeriod } from "@/features/dashboard/utils/period";
 import { getTotalAccumulatedDebtByCurrency } from "@/features/dashboard/utils/building-alerts";
 import { formatCurrencyBuckets } from "@/shared/lib/format/currency-buckets";
+import { formatCurrency } from "@/shared/lib/format/money";
 import { ticketDetailPath } from "@/shared/lib/routes";
 import {
   AlertCircle,
@@ -37,13 +38,6 @@ interface Params {
   readonly tenantId: string;
   readonly [key: string]: string | string[];
 }
-
-const formatARS = (cents: number) =>
-  new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency: 'ARS',
-    maximumFractionDigits: 0,
-  }).format(cents / 100);
 
 const formatPercentage = (value: number) => `${Math.round(value * 100)}%`;
 
@@ -493,7 +487,7 @@ const AdminDashboard = ({ tenantId }: AdminDashboardProps) => {
                     <div key={p.id} className="flex items-center justify-between text-sm">
                       <span className="font-medium truncate">{p.unitLabel}</span>
                       <span className="text-xs text-muted-foreground ml-2">{p.buildingName}</span>
-                      <span className="font-mono text-sm ml-auto">{formatARS(p.amount)}</span>
+                      <span className="font-mono text-sm ml-auto">{formatCurrency(p.amount, p.currency)}</span>
                     </div>
                   ))}
                 </div>

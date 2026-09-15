@@ -255,6 +255,32 @@ describe('DashboardService', () => {
     expect(result.kpis.delinquentUnits).toBe(0);
   });
 
+  it('keeps each pending payment stored currency in the validation queue', async () => {
+    (prisma.payment.count as unknown as jest.Mock).mockResolvedValue(1);
+    (prisma.payment.findMany as unknown as jest.Mock).mockResolvedValue([
+      {
+        id: 'payment-usd-1',
+        amount: 5000,
+        currency: 'USD',
+        createdAt: new Date('2026-05-24T12:00:00.000Z'),
+        unit: { label: 'A-101', building: { name: 'Edificio A' } },
+      },
+    ]);
+
+    const result = await service.getSummary('tenant-1', { period: '2026-05' });
+
+    expect(result.queues.paymentsToValidate).toEqual({
+      count: 1,
+      top: [
+        expect.objectContaining({
+          id: 'payment-usd-1',
+          amount: 5000,
+          currency: 'USD',
+        }),
+      ],
+    });
+  });
+
   it('keeps building-alert debt in Charge.currency and excludes submitted allocations', async () => {
     (prisma.charge.findMany as unknown as jest.Mock).mockResolvedValue([
       chargeFixture({

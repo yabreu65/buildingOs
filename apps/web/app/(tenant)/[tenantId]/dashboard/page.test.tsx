@@ -11,6 +11,7 @@ import { useAuthSession, useIsSuperAdmin } from '@/features/auth/useAuthSession'
 import { useEffectiveRole } from '@/features/tenancy/hooks/useEffectiveRole';
 import { useBuildingList, useDashboardSummary } from '@/features/dashboard/hooks/useDashboardSummary';
 import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
+import { formatCurrency } from '@/shared/lib/format/money';
 
 jest.mock('next/navigation', () => ({
   useParams: jest.fn(),
@@ -150,5 +151,44 @@ describe('DashboardPage building alerts', () => {
       { currency: 'USD', amountMinor: 7500 },
       { currency: 'ARS', amountMinor: 672800 },
     ]);
+  });
+
+  it('formats each pending payment with its stored currency', () => {
+    mockedUseDashboardSummary.mockReturnValue({
+      data: {
+        kpis: {
+          outstandingByCurrency: [],
+          collectedByCurrency: [],
+          collectionRateByCurrency: [],
+          delinquentUnits: 0,
+        },
+        queues: {
+          tickets: { open: 0, inProgress: 0, overdue: 0, top: [] },
+          paymentsToValidate: {
+            count: 2,
+            top: [
+              { id: 'payment-usd-1', unitLabel: 'A-101', buildingName: 'Edificio A', amount: 5000, currency: 'USD', submittedAt: '2026-05-01T00:00:00.000Z' },
+              { id: 'payment-ars-1', unitLabel: 'B-202', buildingName: 'Edificio B', amount: 198200, currency: 'ARS', submittedAt: '2026-05-01T00:00:00.000Z' },
+            ],
+          },
+          unitsWithoutResponsible: { count: 0, top: [] },
+        },
+        buildingAlerts: [],
+        quickActions: [],
+        metadata: { period: '2026-05', buildingId: null, generatedAt: '2026-05-01T00:00:00.000Z' },
+      },
+      isPending: false,
+      error: null,
+      refetch: jest.fn(),
+    } as never);
+
+    render(<DashboardPage />);
+
+    const usdPaymentAmount = screen.getByText('A-101').parentElement?.lastElementChild;
+    const arsPaymentAmount = screen.getByText('B-202').parentElement?.lastElementChild;
+
+    expect(usdPaymentAmount?.textContent).toBe(formatCurrency(5000, 'USD'));
+    expect(usdPaymentAmount?.textContent).not.toBe(formatCurrency(5000, 'ARS'));
+    expect(arsPaymentAmount?.textContent).toBe(formatCurrency(198200, 'ARS'));
   });
 });
