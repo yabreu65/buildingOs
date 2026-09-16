@@ -1356,6 +1356,87 @@ describe('ResidentPaymentsPage', () => {
     expect(dialog.textContent).toContain('Selección');
     expect(dialog.textContent).toContain('2 períodos');
     expect(dialog.textContent).toContain('24/07/2026');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirmar pago' }));
+    await waitFor(() => {
+      expect(mockedSubmitPayment).toHaveBeenCalledWith(
+        'building-1',
+        {
+          unitId: 'unit-1',
+          chargeIds: ['charge-1', 'charge-2'],
+          amount: 12498,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          reference: undefined,
+          paidAt: '2026-07-24',
+          proofFileId: 'file-1',
+        },
+        'resident',
+      );
+    });
+  });
+
+  it('stops resident payment options at the first stored-currency boundary across three currencies', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({
+      charges: [
+        makeCharge({ id: 'usd-1', currency: 'USD', amount: 10000, dueDate: '2026-05-01', createdAt: '2026-05-01T00:00:00.000Z' }),
+        makeCharge({ id: 'usd-2', currency: 'USD', amount: 2500, dueDate: '2026-06-01', createdAt: '2026-06-01T00:00:00.000Z' }),
+        makeCharge({ id: 'cop-1', currency: 'COP', amount: 200000, dueDate: '2026-07-01', createdAt: '2026-07-01T00:00:00.000Z' }),
+        makeCharge({ id: 'uyu-1', currency: 'UYU', amount: 30000, dueDate: '2026-08-01', createdAt: '2026-08-01T00:00:00.000Z' }),
+      ],
+    }));
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
+
+    expect(screen.getAllByRole('radio', { name: /pagar/i })).toHaveLength(2);
+    expect(screen.getByRole('radio', { name: /pagar 2 períodos/i })).toBeTruthy();
+    expect(screen.queryByRole('radio', { name: /pagar 3 períodos/i })).toBeNull();
+  });
+
+  it('does not skip an intervening stored currency to offer a later matching charge', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({
+      charges: [
+        makeCharge({ id: 'usd-oldest', currency: 'USD', amount: 10000, dueDate: '2026-05-01', createdAt: '2026-05-01T00:00:00.000Z' }),
+        makeCharge({ id: 'cop-boundary', currency: 'COP', amount: 200000, dueDate: '2026-06-01', createdAt: '2026-06-01T00:00:00.000Z' }),
+        makeCharge({ id: 'usd-later', currency: 'USD', amount: 2500, dueDate: '2026-07-01', createdAt: '2026-07-01T00:00:00.000Z' }),
+      ],
+    }));
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
+
+    expect(screen.getAllByRole('radio', { name: /pagar/i })).toHaveLength(1);
+    expect(screen.queryByRole('radio', { name: /pagar 2 períodos/i })).toBeNull();
+  });
+
+  it('keeps the submitted-charge FIFO barrier before calculating same-currency options', async () => {
+    mockedGetResidentLedger.mockResolvedValueOnce(makeLedger({
+      charges: [
+        makeCharge({ id: 'charge-oldest', currency: 'USD', amount: 10000, dueDate: '2026-05-01', createdAt: '2026-05-01T00:00:00.000Z' }),
+        makeCharge({ id: 'charge-submitted', currency: 'USD', amount: 2500, dueDate: '2026-06-01', createdAt: '2026-06-01T00:00:00.000Z' }),
+        makeCharge({ id: 'charge-later', currency: 'USD', amount: 3000, dueDate: '2026-07-01', createdAt: '2026-07-01T00:00:00.000Z' }),
+      ],
+    }));
+    mockedListPayments.mockResolvedValueOnce([
+      makePayment({
+        id: 'submitted-payment',
+        status: PaymentStatus.SUBMITTED,
+        paymentAllocations: [{ id: 'allocation-1', paymentId: 'submitted-payment', chargeId: 'charge-submitted', amount: 2500 }],
+      }),
+    ]);
+
+    const Wrapper = createWrapper();
+    render(<ResidentPaymentsPage />, { wrapper: Wrapper });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reportar pago/i }));
+
+    expect(screen.getAllByRole('radio', { name: /pagar/i })).toHaveLength(1);
+    expect(screen.queryByRole('radio', { name: /pagar 2 períodos/i })).toBeNull();
   });
 
   it('surfaces backend validation failures from the proof upload pipeline', async () => {

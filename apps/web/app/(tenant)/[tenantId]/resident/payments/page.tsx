@@ -846,9 +846,25 @@ export const ResidentPaymentsPage = () => {
 
     return charges;
   }, [activeSubmittedChargeIds, pendingCharges]);
+  const sameCurrencySelectableCharges = useMemo(() => {
+    const firstSelectableCharge = selectableCharges[0];
+    if (!firstSelectableCharge) {
+      return [];
+    }
+
+    const charges: typeof selectableCharges = [];
+    for (const charge of selectableCharges) {
+      if (charge.currency !== firstSelectableCharge.currency) {
+        break;
+      }
+      charges.push(charge);
+    }
+
+    return charges;
+  }, [selectableCharges]);
   const paymentOptions = useMemo(() => (
-    selectableCharges.map((_, index) => {
-      const charges = selectableCharges.slice(0, index + 1);
+    sameCurrencySelectableCharges.map((_, index) => {
+      const charges = sameCurrencySelectableCharges.slice(0, index + 1);
       const totalMinor = charges.reduce(
         (sum, charge) => sum + (charge.amount - (charge.allocated ?? 0)),
         0,
@@ -868,7 +884,7 @@ export const ResidentPaymentsPage = () => {
         currency: charges[0]!.currency,
       };
     })
-  ), [ledger?.totals?.balanceByCurrency, selectableCharges]);
+  ), [sameCurrencySelectableCharges]);
   const selectedPaymentOption = useMemo(
     () => paymentOptions.find((option) => option.selectionKey === formData.selectedSelectionKey) ?? null,
     [formData.selectedSelectionKey, paymentOptions],
