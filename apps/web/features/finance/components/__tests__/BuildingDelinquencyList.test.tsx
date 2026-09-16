@@ -77,6 +77,100 @@ describe('BuildingDelinquencyList', () => {
     expect(screen.getByRole('columnheader', { name: 'Deuda acumulada' })).toBeTruthy();
   });
 
+  it('defaults to descending overdue periods without a currency', () => {
+    renderList();
+
+    expect(useBuildingDelinquencyMock).toHaveBeenCalledWith('building-1', expect.objectContaining({
+      sortBy: 'OVERDUE_PERIODS',
+      sortOrder: 'desc',
+      currency: undefined,
+    }));
+    expect((screen.getByRole('combobox', { name: 'Ordenar morosidad' }) as HTMLSelectElement).value).toBe('OVERDUE_PERIODS:desc');
+  });
+
+  it('derives USD, COP, and legacy UYU sort currencies from response buckets', () => {
+    useBuildingDelinquencyMock.mockReturnValue({
+      data: buildData({
+        items: [{
+          unitId: 'unit-1',
+          unitCode: 'TS-01-01',
+          unitLabel: 'Apartamento 1',
+          responsibleName: 'Ana Pérez',
+          periodDebtByCurrency: [{ currency: 'COP', amountMinor: 100 }],
+          accumulatedDebtByCurrency: [{ currency: 'UYU', amountMinor: 200 }],
+          overduePeriods: 4,
+        }],
+        totals: {
+          periodDebtByCurrency: [{ currency: 'USD', amountMinor: 300 }],
+          accumulatedDebtByCurrency: [],
+        },
+      }),
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch,
+    });
+    params = new URLSearchParams('delinquencySortBy=ACCUMULATED_DEBT&delinquencySortOrder=desc');
+
+    renderList();
+
+    expect(screen.getByText('Seleccioná una moneda para ordenar por deuda.')).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'USD' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'COP' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'UYU' })).toBeTruthy();
+  });
+
+  it.each(['USD', 'COP', 'UYU'])('uses the explicit %s currency for a monetary sort', (currency) => {
+    params = new URLSearchParams(`delinquencySortBy=PERIOD_DEBT&delinquencySortOrder=desc&delinquencySortCurrency=${currency}`);
+
+    renderList();
+
+    expect(useBuildingDelinquencyMock).toHaveBeenCalledWith('building-1', expect.objectContaining({
+      sortBy: 'PERIOD_DEBT',
+      sortOrder: 'desc',
+      currency,
+    }));
+  });
+
+  it('guards a monetary sort without currency and keeps the API query nonmonetary', () => {
+    params = new URLSearchParams('delinquencySortBy=ACCUMULATED_DEBT&delinquencySortOrder=desc');
+
+    renderList();
+
+    expect(screen.getByText('Seleccioná una moneda para ordenar por deuda.')).toBeTruthy();
+    expect(useBuildingDelinquencyMock).toHaveBeenCalledWith('building-1', expect.objectContaining({
+      sortBy: 'OVERDUE_PERIODS',
+      sortOrder: 'desc',
+      currency: undefined,
+    }));
+  });
+
+  it('omits currency when switching from a monetary sort to a nonmonetary sort', () => {
+    params = new URLSearchParams('delinquencySortBy=ACCUMULATED_DEBT&delinquencySortOrder=desc&delinquencySortCurrency=USD');
+
+    renderList();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Ordenar morosidad' }), {
+      target: { value: 'UNIT:asc' },
+    });
+
+    expect(replace).toHaveBeenCalledWith(
+      '/tenant-1/buildings/building-1/finance?delinquencySortBy=UNIT&delinquencySortOrder=asc',
+      { scroll: false },
+    );
+  });
+
+  it('normalizes a malformed monetary deep link to a safe nonmonetary query', () => {
+    params = new URLSearchParams('delinquencySortBy=PERIOD_DEBT&delinquencySortOrder=desc&delinquencySortCurrency=invalid');
+
+    renderList();
+
+    expect(useBuildingDelinquencyMock).toHaveBeenCalledWith('building-1', expect.objectContaining({
+      sortBy: 'OVERDUE_PERIODS',
+      sortOrder: 'desc',
+      currency: undefined,
+    }));
+  });
+
   it('requests the next server-side page', () => {
     renderList();
 

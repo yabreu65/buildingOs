@@ -1892,10 +1892,15 @@ export class FinanzasService {
   ): Promise<BuildingDelinquencyResponseDto> {
     await this.validators.validateBuildingBelongsToTenant(tenantId, buildingId);
 
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({
-      where: { id: tenantId },
-      select: { currency: true },
-    });
+    const isMonetarySort =
+      query.sortBy === BuildingDelinquencySortBy.ACCUMULATED_DEBT ||
+      query.sortBy === BuildingDelinquencySortBy.PERIOD_DEBT;
+    if (isMonetarySort && !query.currency) {
+      throw new BadRequestException(
+        'currency is required when sorting by monetary debt',
+      );
+    }
+
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 25;
     const skip = (page - 1) * pageSize;
@@ -1904,9 +1909,9 @@ export class FinanzasService {
 
     const searchClause = searchPattern
       ? Prisma.sql`AND (
-          unit_rows."unitCode" ILIKE ${searchPattern}
-          OR unit_rows."unitLabel" ILIKE ${searchPattern}
-          OR unit_rows."responsibleName" ILIKE ${searchPattern}
+          candidate."unitCode" ILIKE ${searchPattern}
+          OR candidate."unitLabel" ILIKE ${searchPattern}
+          OR candidate."responsibleName" ILIKE ${searchPattern}
         )`
       : Prisma.empty;
     const agingClause = this.buildDelinquencyAgingClause(query.aging);
@@ -1945,30 +1950,49 @@ export class FinanzasService {
           AND charge.period <= ${query.period}
         GROUP BY charge.id, charge."unitId", charge.period, charge.currency, charge.amount
       ),
-      unit_debts AS (
-        SELECT
-          "unitId",
-          currency,
-          SUM(CASE WHEN period = ${query.period} THEN outstanding ELSE 0 END) AS "periodDebt",
-          SUM(outstanding) AS "accumulatedDebt",
-          COUNT(DISTINCT period) FILTER (WHERE outstanding > 0) AS "overduePeriods"
+      selected_period_eligible AS (
+        SELECT DISTINCT "unitId"
         FROM charge_balances
-        GROUP BY "unitId", currency
-        HAVING SUM(CASE WHEN period = ${query.period} THEN outstanding ELSE 0 END) > 0
+        WHERE period = ${query.period}
+          AND outstanding > 0
+      ),
+      unit_overdue_periods AS (
+        SELECT balances."unitId", COUNT(DISTINCT balances.period) AS "overduePeriods"
+        FROM charge_balances AS balances
+        INNER JOIN selected_period_eligible AS eligible
+          ON eligible."unitId" = balances."unitId"
+        WHERE balances.outstanding > 0
+        GROUP BY balances."unitId"
+      ),
+      period_debts AS (
+        SELECT balances."unitId", balances.currency, SUM(balances.outstanding) AS "periodDebt"
+        FROM charge_balances AS balances
+        INNER JOIN selected_period_eligible AS eligible
+          ON eligible."unitId" = balances."unitId"
+        WHERE balances.period = ${query.period}
+          AND balances.outstanding > 0
+        GROUP BY balances."unitId", balances.currency
+      ),
+      accumulated_debts AS (
+        SELECT balances."unitId", balances.currency, SUM(balances.outstanding) AS "accumulatedDebt"
+        FROM charge_balances AS balances
+        INNER JOIN selected_period_eligible AS eligible
+          ON eligible."unitId" = balances."unitId"
+        WHERE balances.outstanding > 0
+        GROUP BY balances."unitId", balances.currency
       ),
       unit_rows AS (
         SELECT
-          debt."unitId",
+          eligible."unitId",
           unit.code AS "unitCode",
           COALESCE(unit.label, unit.code) AS "unitLabel",
           responsible.name AS "responsibleName",
-          debt.currency,
-          debt."periodDebt",
-          debt."accumulatedDebt",
-          debt."overduePeriods"
-        FROM unit_debts AS debt
+          overdue."overduePeriods"
+        FROM selected_period_eligible AS eligible
+        INNER JOIN unit_overdue_periods AS overdue
+          ON overdue."unitId" = eligible."unitId"
         INNER JOIN "Unit" AS unit
-          ON unit.id = debt."unitId"
+          ON unit.id = eligible."unitId"
           AND unit."tenantId" = ${tenantId}
           AND unit."buildingId" = ${buildingId}
         LEFT JOIN LATERAL (
@@ -1988,46 +2012,42 @@ export class FinanzasService {
       ),
       unit_debts_per_currency AS (
         SELECT
-          "unitId",
-          json_agg(
-            json_build_object(
-              'currency', currency,
-              'amountMinor', "periodDebt"
-            ) ORDER BY currency
-          ) AS "periodDebtByCurrency",
-          json_agg(
-            json_build_object(
-              'currency', currency,
-              'amountMinor', "accumulatedDebt"
-            ) ORDER BY currency
-          ) AS "accumulatedDebtByCurrency",
-          MAX("overduePeriods") AS "overduePeriods",
-          MAX(CASE WHEN currency = ${tenant.currency} THEN "periodDebt" ELSE 0 END) AS "periodDebtSort",
-          MAX(CASE WHEN currency = ${tenant.currency} THEN "accumulatedDebt" ELSE 0 END) AS "accumulatedDebtSort"
-        FROM unit_rows
-        GROUP BY "unitId"
-      ),
-      filtered_units AS (
-        SELECT
           rows."unitId",
           rows."unitCode",
           rows."unitLabel",
           rows."responsibleName",
-          buckets."periodDebtByCurrency",
-          buckets."accumulatedDebtByCurrency",
-          buckets."overduePeriods",
-          buckets."periodDebtSort",
-          buckets."accumulatedDebtSort"
-        FROM (
-          SELECT DISTINCT
-            "unitId",
-            "unitCode",
-            "unitLabel",
-            "responsibleName"
-          FROM unit_rows
-        ) AS rows
-        INNER JOIN unit_debts_per_currency AS buckets
-          ON buckets."unitId" = rows."unitId"
+          rows."overduePeriods",
+          COALESCE(period_buckets."periodDebtByCurrency", '[]'::json) AS "periodDebtByCurrency",
+          COALESCE(accumulated_buckets."accumulatedDebtByCurrency", '[]'::json) AS "accumulatedDebtByCurrency",
+          COALESCE(period_sort."periodDebt", 0) AS "periodDebtSort",
+          COALESCE(accumulated_sort."accumulatedDebt", 0) AS "accumulatedDebtSort"
+        FROM unit_rows AS rows
+        LEFT JOIN LATERAL (
+          SELECT json_agg(
+            json_build_object('currency', debt.currency, 'amountMinor', debt."periodDebt")
+            ORDER BY debt.currency
+          ) AS "periodDebtByCurrency"
+          FROM period_debts AS debt
+          WHERE debt."unitId" = rows."unitId"
+        ) AS period_buckets ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT json_agg(
+            json_build_object('currency', debt.currency, 'amountMinor', debt."accumulatedDebt")
+            ORDER BY debt.currency
+          ) AS "accumulatedDebtByCurrency"
+          FROM accumulated_debts AS debt
+          WHERE debt."unitId" = rows."unitId"
+        ) AS accumulated_buckets ON TRUE
+        LEFT JOIN period_debts AS period_sort
+          ON period_sort."unitId" = rows."unitId"
+          AND period_sort.currency = ${query.currency ?? ''}
+        LEFT JOIN accumulated_debts AS accumulated_sort
+          ON accumulated_sort."unitId" = rows."unitId"
+          AND accumulated_sort.currency = ${query.currency ?? ''}
+      ),
+      filtered_units AS (
+        SELECT candidate.*
+        FROM unit_debts_per_currency AS candidate
         WHERE TRUE
         ${searchClause}
         ${agingClause}
@@ -2078,11 +2098,24 @@ export class FinanzasService {
           ) AS "accumulatedDebtByCurrency"
         FROM (
           SELECT
-            currency,
-            SUM("periodDebt") AS "periodDebt",
-            SUM("accumulatedDebt") AS "accumulatedDebt"
-          FROM unit_rows
-          GROUP BY currency
+            COALESCE(period_totals.currency, accumulated_totals.currency) AS currency,
+            COALESCE(period_totals."periodDebt", 0) AS "periodDebt",
+            COALESCE(accumulated_totals."accumulatedDebt", 0) AS "accumulatedDebt"
+          FROM (
+            SELECT debt.currency, SUM(debt."periodDebt") AS "periodDebt"
+            FROM period_debts AS debt
+            INNER JOIN filtered_units AS filtered
+              ON filtered."unitId" = debt."unitId"
+            GROUP BY debt.currency
+          ) AS period_totals
+          FULL OUTER JOIN (
+            SELECT debt.currency, SUM(debt."accumulatedDebt") AS "accumulatedDebt"
+            FROM accumulated_debts AS debt
+            INNER JOIN filtered_units AS filtered
+              ON filtered."unitId" = debt."unitId"
+            GROUP BY debt.currency
+          ) AS accumulated_totals
+            ON accumulated_totals.currency = period_totals.currency
         ) AS totals_by_currency
       `),
     ]);
@@ -2116,11 +2149,11 @@ export class FinanzasService {
   ): Prisma.Sql {
     switch (aging) {
       case BuildingDelinquencyAging.ONE_PERIOD:
-        return Prisma.sql`AND filtered_units."overduePeriods" = 1`;
+        return Prisma.sql`AND candidate."overduePeriods" = 1`;
       case BuildingDelinquencyAging.TWO_TO_THREE_PERIODS:
-        return Prisma.sql`AND filtered_units."overduePeriods" BETWEEN 2 AND 3`;
+        return Prisma.sql`AND candidate."overduePeriods" BETWEEN 2 AND 3`;
       case BuildingDelinquencyAging.MORE_THAN_THREE_PERIODS:
-        return Prisma.sql`AND filtered_units."overduePeriods" > 3`;
+        return Prisma.sql`AND candidate."overduePeriods" > 3`;
       case BuildingDelinquencyAging.ALL:
       case undefined:
         return Prisma.empty;
@@ -2131,15 +2164,21 @@ export class FinanzasService {
     sortBy: BuildingDelinquencySortBy | undefined,
     sortOrder: BuildingDelinquencySortOrder | undefined,
   ): Prisma.Sql {
-    const direction = sortOrder === BuildingDelinquencySortOrder.ASC ? 'ASC' : 'DESC';
-    const column = {
-      [BuildingDelinquencySortBy.ACCUMULATED_DEBT]: '"accumulatedDebtSort"',
-      [BuildingDelinquencySortBy.PERIOD_DEBT]: '"periodDebtSort"',
-      [BuildingDelinquencySortBy.OVERDUE_PERIODS]: '"overduePeriods"',
-      [BuildingDelinquencySortBy.UNIT]: '"unitLabel"',
-    }[sortBy ?? BuildingDelinquencySortBy.ACCUMULATED_DEBT];
+    if (!sortBy) {
+      return Prisma.raw('"overduePeriods" DESC, "unitLabel" ASC, "unitId" ASC');
+    }
 
-    return Prisma.raw(`${column} ${direction}, "unitLabel" ASC`);
+    const direction = sortOrder === BuildingDelinquencySortOrder.ASC ? 'ASC' : 'DESC';
+    switch (sortBy) {
+      case BuildingDelinquencySortBy.ACCUMULATED_DEBT:
+        return Prisma.raw(`"accumulatedDebtSort" ${direction}, "unitLabel" ASC, "unitId" ASC`);
+      case BuildingDelinquencySortBy.PERIOD_DEBT:
+        return Prisma.raw(`"periodDebtSort" ${direction}, "unitLabel" ASC, "unitId" ASC`);
+      case BuildingDelinquencySortBy.OVERDUE_PERIODS:
+        return Prisma.raw(`"overduePeriods" ${direction}, "unitLabel" ASC, "unitId" ASC`);
+      case BuildingDelinquencySortBy.UNIT:
+        return Prisma.raw(`"unitLabel" ${direction}, "unitId" ASC`);
+    }
   }
 
   private mapDelinquencyItem(item: RawDelinquencyRow): BuildingDelinquencyItemDto {

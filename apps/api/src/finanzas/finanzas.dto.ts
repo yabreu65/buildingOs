@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsString,
   IsOptional,
@@ -523,6 +523,14 @@ export class BuildingDelinquencyQueryDto {
   @IsString()
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/)
   period!: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  @Matches(/^[A-Z]{3}$/)
+  currency?: string;
 
   @IsOptional()
   @Type(() => Number)

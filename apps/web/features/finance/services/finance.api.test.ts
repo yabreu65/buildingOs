@@ -3,7 +3,7 @@
  */
 
 import * as httpClient from '@/shared/lib/http/client';
-import { PaymentMethod, submitPayment } from './finance.api';
+import { getBuildingDelinquency, PaymentMethod, submitPayment } from './finance.api';
 
 jest.mock('@/shared/lib/http/client', () => ({
   apiClient: jest.fn(),
@@ -62,6 +62,22 @@ describe('finance.api', () => {
     }));
     expect(mockedApiClient.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
       headers: undefined,
+    }));
+  });
+
+  it.each(['USD', 'COP', 'UYU'])('serializes the selected %s monetary sort currency', async (currency) => {
+    mockedApiClient.mockResolvedValue({} as never);
+
+    await getBuildingDelinquency('building-1', {
+      period: '2026-07',
+      sortBy: 'ACCUMULATED_DEBT',
+      sortOrder: 'desc',
+      currency,
+    });
+
+    expect(mockedApiClient).toHaveBeenCalledWith(expect.objectContaining({
+      path: `/buildings/building-1/finance/delinquency?period=2026-07&sortBy=ACCUMULATED_DEBT&sortOrder=desc&currency=${currency}`,
+      method: 'GET',
     }));
   });
 });

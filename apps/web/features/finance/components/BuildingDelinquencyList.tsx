@@ -10,6 +10,7 @@ import { formatCurrencyBuckets } from '@/shared/lib/format/currency-buckets';
 import { useBuildingDelinquency } from '../hooks/useBuildingDelinquency';
 import {
   type BuildingDelinquencyAging,
+  type BuildingDelinquencyResponse,
   type BuildingDelinquencySortBy,
   type BuildingDelinquencySortOrder,
 } from '../services/finance.api';
@@ -21,6 +22,56 @@ interface BuildingDelinquencyListProps {
 }
 
 const PAGE_SIZES = [25, 50, 100] as const;
+const AGING_VALUES: readonly BuildingDelinquencyAging[] = [
+  'ALL',
+  'ONE_PERIOD',
+  'TWO_TO_THREE_PERIODS',
+  'MORE_THAN_THREE_PERIODS',
+];
+const DEFAULT_SORT_BY: BuildingDelinquencySortBy = 'OVERDUE_PERIODS';
+const DEFAULT_SORT_ORDER: BuildingDelinquencySortOrder = 'desc';
+const SORT_BY_VALUES: readonly BuildingDelinquencySortBy[] = [
+  'ACCUMULATED_DEBT',
+  'PERIOD_DEBT',
+  'OVERDUE_PERIODS',
+  'UNIT',
+];
+const SORT_ORDER_VALUES: readonly BuildingDelinquencySortOrder[] = ['asc', 'desc'];
+
+function isBuildingDelinquencyAging(value: string | null): value is BuildingDelinquencyAging {
+  return value !== null && AGING_VALUES.includes(value as BuildingDelinquencyAging);
+}
+
+function isBuildingDelinquencySortBy(value: string | null): value is BuildingDelinquencySortBy {
+  return value !== null && SORT_BY_VALUES.includes(value as BuildingDelinquencySortBy);
+}
+
+function isBuildingDelinquencySortOrder(value: string | null): value is BuildingDelinquencySortOrder {
+  return value !== null && SORT_ORDER_VALUES.includes(value as BuildingDelinquencySortOrder);
+}
+
+function isMonetarySort(sortBy: BuildingDelinquencySortBy): boolean {
+  return sortBy === 'ACCUMULATED_DEBT' || sortBy === 'PERIOD_DEBT';
+}
+
+function isCurrencyCode(value: string | null): value is string {
+  return value !== null && /^[A-Z]{3}$/.test(value);
+}
+
+function getSortCurrencies(data: BuildingDelinquencyResponse | undefined): string[] {
+  if (!data) return [];
+
+  const buckets = [
+    ...data.totals.periodDebtByCurrency,
+    ...data.totals.accumulatedDebtByCurrency,
+    ...data.items.flatMap((item) => [
+      ...item.periodDebtByCurrency,
+      ...item.accumulatedDebtByCurrency,
+    ]),
+  ];
+
+  return [...new Set(buckets.map((bucket) => bucket.currency).filter((currency) => isCurrencyCode(currency)))].sort();
+}
 
 function getMonthLabel(period: string): string {
   const label = new Intl.DateTimeFormat('es-AR', {
@@ -51,18 +102,29 @@ export function BuildingDelinquencyList({
     ? requestedPageSize
     : 25;
   const search = searchParams.get('delinquencySearch') ?? '';
-  const aging = (searchParams.get('delinquencyAging') ?? 'ALL') as BuildingDelinquencyAging;
-  const sortBy = (searchParams.get('delinquencySortBy') ?? 'ACCUMULATED_DEBT') as BuildingDelinquencySortBy;
-  const sortOrder = (searchParams.get('delinquencySortOrder') ?? 'desc') as BuildingDelinquencySortOrder;
+  const requestedAging = searchParams.get('delinquencyAging');
+  const aging = isBuildingDelinquencyAging(requestedAging) ? requestedAging : 'ALL';
+  const requestedSortBy = searchParams.get('delinquencySortBy');
+  const requestedSortOrder = searchParams.get('delinquencySortOrder');
+  const sortBy = isBuildingDelinquencySortBy(requestedSortBy) ? requestedSortBy : DEFAULT_SORT_BY;
+  const sortOrder = isBuildingDelinquencySortOrder(requestedSortOrder) ? requestedSortOrder : DEFAULT_SORT_ORDER;
+  const requestedCurrency = searchParams.get('delinquencySortCurrency');
+  const currency = isCurrencyCode(requestedCurrency) ? requestedCurrency : undefined;
+  const requiresCurrency = isMonetarySort(sortBy) && !currency;
+  const querySortBy = requiresCurrency ? DEFAULT_SORT_BY : sortBy;
+  const querySortOrder = requiresCurrency ? DEFAULT_SORT_ORDER : sortOrder;
+  const queryCurrency = requiresCurrency || !isMonetarySort(sortBy) ? undefined : currency;
   const { data, isPending, isError, error, refetch } = useBuildingDelinquency(buildingId, {
     period,
     page,
     pageSize,
     search: search || undefined,
     aging,
-    sortBy,
-    sortOrder,
+    sortBy: querySortBy,
+    sortOrder: querySortOrder,
+    currency: queryCurrency,
   });
+  const sortCurrencies = getSortCurrencies(data);
 
   const updateQuery = (updates: Record<string, string | undefined>) => {
     const nextParams = new URLSearchParams(searchParams.toString());
@@ -136,7 +198,7 @@ export function BuildingDelinquencyList({
       </div>
 
       <Card className="space-y-4 p-4">
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px_160px]">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px_220px_160px]">
           <label className="space-y-1">
             <span className="text-sm font-medium">Buscar</span>
             <input
@@ -172,16 +234,36 @@ export function BuildingDelinquencyList({
                 resetPage({
                   delinquencySortBy: nextSortBy,
                   delinquencySortOrder: nextSortOrder,
+                  delinquencySortCurrency: undefined,
                 });
               }}
             >
+              <option value="OVERDUE_PERIODS:desc">Más períodos vencidos</option>
               <option value="ACCUMULATED_DEBT:desc">Mayor deuda acumulada</option>
               <option value="PERIOD_DEBT:desc">Mayor deuda del período</option>
-              <option value="OVERDUE_PERIODS:desc">Más períodos vencidos</option>
               <option value="UNIT:asc">Unidad ascendente</option>
               <option value="UNIT:desc">Unidad descendente</option>
             </select>
           </label>
+          {isMonetarySort(sortBy) && (
+            <label className="space-y-1">
+              <span className="text-sm font-medium">Moneda para ordenar</span>
+              <select
+                aria-label="Moneda para ordenar"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={currency ?? ''}
+                onChange={(event) => resetPage({ delinquencySortCurrency: event.target.value || undefined })}
+              >
+                <option value="">Seleccioná una moneda</option>
+                {sortCurrencies.map((sortCurrency) => (
+                  <option key={sortCurrency} value={sortCurrency}>{sortCurrency}</option>
+                ))}
+              </select>
+              {requiresCurrency && (
+                <p className="text-sm text-amber-700">Seleccioná una moneda para ordenar por deuda.</p>
+              )}
+            </label>
+          )}
           <label className="space-y-1">
             <span className="text-sm font-medium">Por página</span>
             <select
