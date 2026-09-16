@@ -145,8 +145,9 @@ export class ResponseFormatterService {
    * Determine the appropriate formatter based on intent and data shape
    */
   private determineFormatter(intent: string, data: unknown): FormatterType {
-    // Single value KPIs
-    if (this.isKpiData(data)) {
+    // Payment reports contain list payloads even when their aggregate buckets
+    // are empty, so they must never be routed through the KPI formatter.
+    if (!this.isPaymentPayload(data) && this.isKpiData(data)) {
       return 'kpi';
     }
 
@@ -609,6 +610,13 @@ export class ResponseFormatterService {
   /**
    * Check if data looks like a KPI (single object with numeric values)
    */
+  private isPaymentPayload(data: unknown): boolean {
+    return typeof data === 'object'
+      && data !== null
+      && !Array.isArray(data)
+      && Array.isArray((data as Record<string, unknown>).payments);
+  }
+
   private isKpiData(data: unknown): boolean {
     if (typeof data !== 'object' || data === null || Array.isArray(data)) {
       return false;

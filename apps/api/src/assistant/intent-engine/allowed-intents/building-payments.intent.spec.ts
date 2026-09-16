@@ -49,7 +49,7 @@ describe('buildingPaymentsIntent currency-safe payment reports', () => {
     expect(where.buildingId).toBeUndefined();
   });
 
-  it('requires currency before amount filtering or amount sorting and applies the explicit currency exactly', async () => {
+  it('requires currency before amount filtering or amount sorting and applies USD exactly', async () => {
     const prisma = { payment: { findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]) } };
     const base = { tenantId: 'tenant-1', entityIds: { buildingId: 'building-1' }, prisma: prisma as never };
 
@@ -58,14 +58,14 @@ describe('buildingPaymentsIntent currency-safe payment reports', () => {
 
     await buildingPaymentsIntent.executor({
       ...base,
-      filters: { currency: 'COP', minAmount: 100, maxAmount: 500, sortField: 'amount' },
+      filters: { currency: 'USD', minAmount: 100, maxAmount: 500, sortField: 'amount' },
     });
 
     expect(prisma.payment.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         tenantId: 'tenant-1',
         buildingId: 'building-1',
-        currency: 'COP',
+        currency: 'USD',
         amount: { gte: 100, lte: 500 },
       }),
       orderBy: { amount: 'asc' },

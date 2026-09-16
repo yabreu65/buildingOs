@@ -182,6 +182,10 @@ export class QueryPlannerService {
       applied.category = filters.category;
     }
 
+    if (filters.currency !== undefined) {
+      applied.currency = filters.currency;
+    }
+
     if (filters.sortField !== undefined) {
       applied.sortField = filters.sortField;
     }

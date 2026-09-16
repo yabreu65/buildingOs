@@ -52,6 +52,7 @@ const intentFiltersSchema: z.ZodType<{
   method?: string;
   minAgeDays?: number;
   category?: string;
+  currency?: string;
   sortField?: string;
   sortOrder?: 'asc' | 'desc';
   limit?: number;
@@ -66,6 +67,7 @@ const intentFiltersSchema: z.ZodType<{
     method: z.string().optional(),
     minAgeDays: z.number().optional(),
     category: z.string().optional(),
+    currency: z.string().optional(),
     sortField: z.string().optional(),
     sortOrder: z.enum(['asc', 'desc']).optional(),
     limit: z.number().max(100).optional(),

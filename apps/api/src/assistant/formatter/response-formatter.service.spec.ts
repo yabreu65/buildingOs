@@ -133,6 +133,35 @@ describe('ResponseFormatterService', () => {
       expect(result.summary).not.toContain('ARS');
     });
 
+    it.each([
+      {
+        payments: [{ amount: 100000, currency: 'USD' }],
+        totalAmountByCurrency: [{ currency: 'USD', amountMinor: 100000 }],
+        total: 1,
+      },
+      {
+        payments: [],
+        totalAmountByCurrency: [],
+        total: 0,
+      },
+    ])('keeps payment payloads out of the KPI formatter', (data) => {
+      const v1 = service.formatV1(data, 'building_payments');
+      const v2 = service.formatV2(data, 'building_payments', 0.9);
+
+      expect(v1.answer).not.toContain('[object Object]');
+      expect(v2.type).not.toBe('kpi');
+      expect(v2.meta?.formattedWith).not.toBe('kpi');
+    });
+
+    it('keeps building stats with currency buckets as KPI data', () => {
+      const result = service.formatV2({
+        totalUnits: 3,
+        totalDebtByCurrency: [{ currency: 'USD', amountMinor: 1000 }],
+      }, 'building_stats', 0.9);
+
+      expect(result.type).toBe('kpi');
+    });
+
     it('formats building debt and average buckets without a hardcoded VES fallback', () => {
       const result = service.formatV1({
         totalUnits: 3,

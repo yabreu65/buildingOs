@@ -39,7 +39,7 @@ describe('unitPaymentsIntent currency-safe payment reports', () => {
     }));
   });
 
-  it('requires currency before amount filtering or amount sorting and applies an explicit currency exactly', async () => {
+  it('requires currency before amount filtering or amount sorting and applies USD exactly', async () => {
     const prisma = makePrisma();
     const base = {
       tenantId: 'tenant-1',
@@ -52,14 +52,14 @@ describe('unitPaymentsIntent currency-safe payment reports', () => {
 
     await unitPaymentsIntent.executor({
       ...base,
-      filters: { currency: 'UYU', minAmount: 100, maxAmount: 500, sortField: 'amount', sortOrder: 'desc' },
+      filters: { currency: 'USD', minAmount: 100, maxAmount: 500, sortField: 'amount', sortOrder: 'desc' },
     });
 
     expect(prisma.payment.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         tenantId: 'tenant-1',
         unitId: 'unit-1',
-        currency: 'UYU',
+        currency: 'USD',
         amount: { gte: 100, lte: 500 },
       }),
       orderBy: { amount: 'desc' },

@@ -53,6 +53,7 @@ const geminiExtractionResponseSchema = {
         method: { type: 'string' },
         minAgeDays: { type: 'number' },
         category: { type: 'string' },
+        currency: { type: 'string' },
         sortField: { type: 'string' },
         sortOrder: { type: 'string', enum: ['asc', 'desc'] },
             limit: { type: 'number', maximum: 100 },
@@ -313,6 +314,9 @@ export class IntentExtractorService {
         status: plan.filters.status,
         method: plan.filters.method,
         minAgeDays: plan.filters.minAgeDays,
+        currency: plan.filters.currency,
+        sortField: plan.filters.sortField,
+        sortOrder: plan.filters.sortOrder,
       },
       confidence: plan.confidence,
       source: 'deterministic',
@@ -362,7 +366,7 @@ Entidades:
 - building: requiere buildingAlias (ej: Torre A)
 - person: requiere personName (ej: Juan Perez)
 
-Filtros disponibles: period (YYYY-MM), status, minAmount, maxAmount, method, minAgeDays, sortField, sortOrder, limit
+Filtros disponibles: period (YYYY-MM), status, minAmount, maxAmount, method, minAgeDays, currency (por ejemplo USD), sortField, sortOrder, limit
 
 Responde SOLO con JSON valido sin markdown ni comentarios:
 {"intent":"nombre_intent","entity":{"type":"unit|building|person","buildingAlias":"A","unitCode":"0101","personName":""},"filters":{},"confidence":0.0-1.0}`;

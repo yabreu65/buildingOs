@@ -102,6 +102,7 @@ describe('extractedIntentSchema', () => {
           method: 'transfer',
           minAgeDays: 30,
           category: 'maintenance',
+          currency: 'USD',
           sortField: 'amount',
           sortOrder: 'asc',
           limit: 100,
@@ -257,6 +258,17 @@ describe('extractedIntentSchema', () => {
 
       const result = extractedIntentSchema.safeParse(intent);
       expect(result.success).toBe(false);
+    });
+
+    it('rejects unknown nested fields in filters', () => {
+      const intent = {
+        intent: 'list_payments',
+        entity: { type: 'building' as const },
+        filters: { currency: 'USD', unsupportedFilter: true },
+        confidence: 0.9,
+      };
+
+      expect(extractedIntentSchema.safeParse(intent).success).toBe(false);
     });
 
     it('rejects unknown nested fields in entity', () => {
