@@ -63,6 +63,19 @@ describe('calculateChargeOutstandingMinor', () => {
     ).toBe(10000);
   });
 
+  it('soft-canceled effective payment allocation does not reduce outstanding', () => {
+    expect(
+      calculateChargeOutstandingMinor(
+        charge(10000, [
+          {
+            amount: 10000,
+            payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-01-01') },
+          },
+        ]),
+      ),
+    ).toBe(10000);
+  });
+
   it('allocation without payment relation is ignored', () => {
     expect(calculateChargeOutstandingMinor(charge(10000, [{ amount: 5000 }]))).toBe(10000);
   });

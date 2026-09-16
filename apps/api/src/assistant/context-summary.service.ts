@@ -17,7 +17,7 @@
  */
 
 import { Injectable, BadRequestException, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Prisma, TicketStatus, PaymentStatus, ChargeStatus } from '@prisma/client';
+import { Prisma, TicketStatus, PaymentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   aggregateReportBuckets,
@@ -302,81 +302,144 @@ export class AiContextSummaryService implements OnModuleDestroy {
     }
 
     try {
-      // Build base where clause
-      const where: Prisma.ChargeWhereInput = {
-        tenantId: request.tenantId,
-        status: ChargeStatus.PENDING,
-        ...(request.buildingId ? { buildingId: request.buildingId } : {}),
-        ...(request.unitId ? { unitId: request.unitId } : {}),
-      };
-
-      const outstandingGroups = await this.prisma.charge.groupBy({
-        by: ['currency'],
-        where,
-        _sum: { amount: true },
-      });
+      const outstandingGroups = await this.prisma.$queryRaw<Array<{
+        currency: string;
+        outstanding: bigint;
+      }>>`
+        WITH charge_balances AS (
+          SELECT
+            charge.id,
+            charge.currency,
+            GREATEST(
+              charge.amount - COALESCE(
+                SUM(
+                  CASE
+                    WHEN payment.status IN ('APPROVED', 'RECONCILED')
+                      AND payment."canceledAt" IS NULL
+                      THEN allocation.amount
+                    ELSE 0
+                  END
+                ),
+                0
+              ),
+              0
+            ) AS outstanding
+          FROM "Charge" AS charge
+          LEFT JOIN "PaymentAllocation" AS allocation
+            ON allocation."chargeId" = charge.id
+            AND allocation."tenantId" = ${request.tenantId}
+          LEFT JOIN "Payment" AS payment
+            ON payment.id = allocation."paymentId"
+            AND payment."tenantId" = ${request.tenantId}
+          WHERE charge."tenantId" = ${request.tenantId}
+            AND charge."canceledAt" IS NULL
+            AND charge.status <> 'CANCELED'
+            ${request.buildingId ? Prisma.sql`AND charge."buildingId" = ${request.buildingId}` : Prisma.empty}
+            ${request.unitId ? Prisma.sql`AND charge."unitId" = ${request.unitId}` : Prisma.empty}
+          GROUP BY charge.id, charge.currency, charge.amount
+        )
+        SELECT currency, SUM(outstanding) AS outstanding
+        FROM charge_balances
+        WHERE outstanding > 0
+        GROUP BY currency
+        ORDER BY currency ASC
+      `;
 
       snapshot.kpis.outstandingByCurrency = aggregateReportBuckets(
         outstandingGroups.map((group) => ({
           currency: group.currency,
-          amountMinor: Number(group._sum.amount ?? 0),
+          amountMinor: Number(group.outstanding),
         })),
       );
 
-      // Aggregate in the database per unit/currency. Unit ordering deliberately
-      // uses only due date and stable identifiers; nominal amounts are never ranked.
+      // Aggregate in the database per unit/currency using the same canonical
+      // charge-side outstanding semantics as reports: charge amount minus
+      // effective non-canceled allocations, clamped at zero.
       const delinquent = await this.prisma.$queryRaw<Array<{
         building: string;
         unit: string | null;
         currency: string;
         buildingId: string;
-            unitId: string | null;
-            outstanding: bigint;
+        unitId: string | null;
+        outstanding: bigint;
       }>>`
-        WITH selected_units AS (
-              SELECT
-                c."buildingId",
-                c."unitId",
-                MIN(c."dueDate") AS "earliestDueDate"
-              FROM "Charge" c
-              WHERE c."tenantId" = ${request.tenantId}
-                AND c.status = ${ChargeStatus.PENDING}
-                ${request.buildingId ? Prisma.sql`AND c."buildingId" = ${request.buildingId}` : Prisma.empty}
-                ${request.unitId ? Prisma.sql`AND c."unitId" = ${request.unitId}` : Prisma.empty}
-              GROUP BY c."buildingId", c."unitId"
-              ORDER BY "earliestDueDate" ASC NULLS LAST, "buildingId" ASC, "unitId" ASC
-              LIMIT 5
-            )
-            SELECT
+        WITH charge_balances AS (
+          SELECT
+            charge.id,
+            charge."buildingId",
+            charge."unitId",
+            charge."dueDate",
+            charge.currency,
+            GREATEST(
+              charge.amount - COALESCE(
+                SUM(
+                  CASE
+                    WHEN payment.status IN ('APPROVED', 'RECONCILED')
+                      AND payment."canceledAt" IS NULL
+                      THEN allocation.amount
+                    ELSE 0
+                  END
+                ),
+                0
+              ),
+              0
+            ) AS outstanding
+          FROM "Charge" AS charge
+          LEFT JOIN "PaymentAllocation" AS allocation
+            ON allocation."chargeId" = charge.id
+            AND allocation."tenantId" = ${request.tenantId}
+          LEFT JOIN "Payment" AS payment
+            ON payment.id = allocation."paymentId"
+            AND payment."tenantId" = ${request.tenantId}
+          WHERE charge."tenantId" = ${request.tenantId}
+            AND charge."canceledAt" IS NULL
+            AND charge.status <> 'CANCELED'
+            ${request.buildingId ? Prisma.sql`AND charge."buildingId" = ${request.buildingId}` : Prisma.empty}
+            ${request.unitId ? Prisma.sql`AND charge."unitId" = ${request.unitId}` : Prisma.empty}
+          GROUP BY charge.id, charge."buildingId", charge."unitId", charge."dueDate", charge.currency, charge.amount
+        ),
+        selected_units AS (
+          SELECT
+            "buildingId",
+            "unitId",
+            MIN("dueDate") AS "earliestDueDate"
+          FROM charge_balances
+          WHERE outstanding > 0
+          GROUP BY "buildingId", "unitId"
+          ORDER BY "earliestDueDate" ASC NULLS LAST, "buildingId" ASC, "unitId" ASC
+          LIMIT 5
+        )
+        SELECT
           selected_units."buildingId" AS "buildingId",
           selected_units."unitId" AS "unitId",
-              b.name AS building,
-              u.label AS unit,
-          c.currency AS currency,
-          SUM(c.amount) AS outstanding
-        FROM "Charge" c
+          building.name AS building,
+          unit.label AS unit,
+          charge_balances.currency AS currency,
+          SUM(charge_balances.outstanding) AS outstanding
+        FROM charge_balances
         JOIN selected_units
-              ON c."buildingId" = selected_units."buildingId"
-              AND c."unitId" IS NOT DISTINCT FROM selected_units."unitId"
-            JOIN "Building" b ON c."buildingId" = b.id AND b."tenantId" = c."tenantId"
-        LEFT JOIN "Unit" u ON c."unitId" = u.id AND u."tenantId" = c."tenantId"
-        WHERE c."tenantId" = ${request.tenantId}
-          AND c.status = ${ChargeStatus.PENDING}
-          ${request.buildingId ? Prisma.sql`AND c."buildingId" = ${request.buildingId}` : Prisma.empty}
-          ${request.unitId ? Prisma.sql`AND c."unitId" = ${request.unitId}` : Prisma.empty}
+          ON charge_balances."buildingId" = selected_units."buildingId"
+          AND charge_balances."unitId" IS NOT DISTINCT FROM selected_units."unitId"
+        JOIN "Building" AS building
+          ON building.id = charge_balances."buildingId"
+          AND building."tenantId" = ${request.tenantId}
+        LEFT JOIN "Unit" AS unit
+          ON unit.id = charge_balances."unitId"
+          AND unit."tenantId" = ${request.tenantId}
+        WHERE charge_balances.outstanding > 0
         GROUP BY
-              selected_units."buildingId",
-              selected_units."unitId",
-              selected_units."earliestDueDate",
-              b.id,
-              b.name,
-              u.id,
-              u.label,
-              c.currency
+          selected_units."buildingId",
+          selected_units."unitId",
+          selected_units."earliestDueDate",
+          building.id,
+          building.name,
+          unit.id,
+          unit.label,
+          charge_balances.currency
         ORDER BY selected_units."earliestDueDate" ASC NULLS LAST,
-              selected_units."buildingId" ASC,
-              selected_units."unitId" ASC,
-              c.currency ASC
+          selected_units."buildingId" ASC,
+          selected_units."unitId" ASC,
+          charge_balances.currency ASC
       `;
 
       const delinquentByUnit = new Map<string, {
