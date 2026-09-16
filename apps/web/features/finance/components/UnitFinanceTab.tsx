@@ -144,7 +144,19 @@ export function UnitFinanceTab({ tenantId, unitId, buildingName, unitLabel }: Un
               const periodPending = charges.filter((c) => (c.amount - (c.allocated ?? 0)) > 0);
               if (periodPending.length === 0) return null;
 
-              const periodTotal = periodPending.reduce((sum, c) => sum + (c.amount - (c.allocated ?? 0)), 0);
+              const periodOutstandingByCurrency = periodPending.reduce<Array<{ currency: string; amountMinor: number }>>(
+                (buckets, charge) => {
+                  const outstanding = charge.amount - (charge.allocated ?? 0);
+                  const existingBucket = buckets.find((bucket) => bucket.currency === charge.currency);
+                  if (existingBucket) {
+                    existingBucket.amountMinor += outstanding;
+                  } else {
+                    buckets.push({ currency: charge.currency, amountMinor: outstanding });
+                  }
+                  return buckets;
+                },
+                [],
+              );
               const isExpanded = expandedMonth === period;
 
               return (
@@ -158,7 +170,7 @@ export function UnitFinanceTab({ tenantId, unitId, buildingName, unitLabel }: Un
                       <p className="text-sm text-muted-foreground">{periodPending.length} cargo(s) pendiente(s)</p>
                     </div>
                     <p className="font-bold text-orange-600">
-                      {formatCurrency(periodTotal, periodPending[0]?.currency || 'USD')}
+                      {formatCurrencyBuckets(periodOutstandingByCurrency)}
                     </p>
                   </button>
 
