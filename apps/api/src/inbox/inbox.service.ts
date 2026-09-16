@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
 import { aggregateReportBuckets } from '../finanzas/currency-buckets';
 import {
   InboxSummaryResponse,
@@ -12,17 +11,14 @@ import {
   DelinquentUnit,
 } from './inbox.types';
 
-type ChargeWithInboxRelations = Prisma.ChargeGetPayload<{
-  include: {
-    unit: true;
-    building: true;
-    paymentAllocations: {
-      include: {
-        payment: true;
-      };
-    };
-  };
-}>;
+interface DelinquentUnitRow {
+  readonly buildingId: string;
+  readonly buildingName: string;
+  readonly unitId: string;
+  readonly unitCode: string;
+  readonly currency: string;
+  readonly amountMinor: bigint | number;
+}
 
 @Injectable()
 export class InboxService {
@@ -271,73 +267,142 @@ export class InboxService {
     tenantId: string,
     buildingIds: string[],
   ): Promise<DelinquentUnit[]> {
-    // Find charges that are past due (not by status, but by actual outstanding)
-    const now = new Date();
+    if (buildingIds.length === 0) {
+      return [];
+    }
 
-    // Get all non-canceled charges with their allocations
-    const chargesWithAllocations = await this.prisma.charge.findMany({
-      where: {
-        tenantId,
-        building: { id: { in: buildingIds } },
-        dueDate: { lt: now },
-        canceledAt: null,
-      },
-      include: {
-        unit: true,
-        building: true,
-        paymentAllocations: {
-          include: { payment: true },
-        },
-      },
-    });
+    const rows = await this.prisma.$queryRaw<DelinquentUnitRow[]>(Prisma.sql`
+      WITH eligible_charges AS (
+        SELECT
+          charge."id",
+          charge."tenantId",
+          charge."buildingId",
+          charge."unitId",
+          charge."currency",
+          charge."amount",
+          charge."dueDate"
+        FROM "Charge" AS charge
+        INNER JOIN "Unit" AS unit
+          ON unit."id" = charge."unitId"
+          AND unit."tenantId" = charge."tenantId"
+          AND unit."buildingId" = charge."buildingId"
+        INNER JOIN "Building" AS building
+          ON building."id" = charge."buildingId"
+          AND building."tenantId" = charge."tenantId"
+        WHERE charge."tenantId" = ${tenantId}
+          AND building."id" IN (${Prisma.join(buildingIds)})
+          AND charge."dueDate" < NOW()
+          AND charge."canceledAt" IS NULL
+      ),
+      outstanding_charges AS (
+        SELECT
+          charge."tenantId",
+          charge."buildingId",
+          charge."unitId",
+          charge."currency",
+          charge."dueDate",
+          GREATEST(
+            charge."amount" - COALESCE(SUM(
+              CASE
+                WHEN payment."status" IN ('APPROVED', 'RECONCILED')
+                  AND payment."canceledAt" IS NULL
+                THEN allocation."amount"
+                ELSE 0
+              END
+            ), 0),
+            0
+          ) AS "amountMinor"
+        FROM eligible_charges AS charge
+        LEFT JOIN "PaymentAllocation" AS allocation
+          ON allocation."chargeId" = charge."id"
+          AND allocation."tenantId" = charge."tenantId"
+        LEFT JOIN "Payment" AS payment
+          ON payment."id" = allocation."paymentId"
+          AND payment."tenantId" = charge."tenantId"
+          AND payment."buildingId" = charge."buildingId"
+        GROUP BY
+          charge."id",
+          charge."tenantId",
+          charge."buildingId",
+          charge."unitId",
+          charge."currency",
+          charge."dueDate",
+          charge."amount"
+      ),
+      top_units AS (
+        SELECT
+          "tenantId",
+          "buildingId",
+          "unitId",
+          MIN("dueDate") AS "earliestDue"
+        FROM outstanding_charges
+        WHERE "amountMinor" > 0
+        GROUP BY "tenantId", "buildingId", "unitId"
+        ORDER BY "earliestDue" ASC, "unitId" ASC
+        LIMIT 5
+      )
+      SELECT
+        top_units."buildingId" AS "buildingId",
+        building."name" AS "buildingName",
+        top_units."unitId" AS "unitId",
+        unit."code" AS "unitCode",
+        charge."currency" AS "currency",
+        SUM(charge."amountMinor") AS "amountMinor"
+      FROM top_units
+      INNER JOIN outstanding_charges AS charge
+        ON charge."tenantId" = top_units."tenantId"
+        AND charge."buildingId" = top_units."buildingId"
+        AND charge."unitId" = top_units."unitId"
+        AND charge."amountMinor" > 0
+      INNER JOIN "Unit" AS unit
+        ON unit."id" = top_units."unitId"
+        AND unit."tenantId" = top_units."tenantId"
+        AND unit."buildingId" = top_units."buildingId"
+      INNER JOIN "Building" AS building
+        ON building."id" = top_units."buildingId"
+        AND building."tenantId" = top_units."tenantId"
+      GROUP BY
+        top_units."tenantId",
+        top_units."buildingId",
+        building."name",
+        top_units."unitId",
+        unit."code",
+        charge."currency",
+        top_units."earliestDue"
+      ORDER BY top_units."earliestDue" ASC, top_units."unitId" ASC
+    `);
 
-    // Aggregate per unit with explicit per-currency buckets and the
-    // earliest delinquency date.
-    const unitOutstanding = new Map<
+    const units = new Map<
       string,
-      {
-        unit: ChargeWithInboxRelations['unit'];
-        building: ChargeWithInboxRelations['building'];
-        earliestDue: Date;
+      Omit<DelinquentUnit, 'outstandingByCurrency'> & {
         entries: Array<{ currency: string; amountMinor: number }>;
       }
     >();
 
-    for (const charge of chargesWithAllocations) {
-      const outstanding = calculateChargeOutstandingMinor(charge);
-      if (outstanding <= 0) continue;
-
-      const existing = unitOutstanding.get(charge.unitId);
-      if (existing) {
-        existing.entries.push({ currency: charge.currency, amountMinor: outstanding });
-        if (charge.dueDate < existing.earliestDue) {
-          existing.earliestDue = charge.dueDate;
-        }
-      } else {
-        unitOutstanding.set(charge.unitId, {
-          unit: charge.unit,
-          building: charge.building,
-          earliestDue: charge.dueDate,
-          entries: [{ currency: charge.currency, amountMinor: outstanding }],
-        });
+    for (const row of rows) {
+      const amountMinor = Number(row.amountMinor);
+      if (!Number.isSafeInteger(amountMinor)) {
+        throw new Error('Delinquent charge aggregate exceeds the supported integer range');
       }
+
+      const existing = units.get(row.unitId);
+      if (existing) {
+        existing.entries.push({ currency: row.currency, amountMinor });
+        continue;
+      }
+
+      units.set(row.unitId, {
+        buildingId: row.buildingId,
+        buildingName: row.buildingName,
+        unitId: row.unitId,
+        unitCode: row.unitCode,
+        entries: [{ currency: row.currency, amountMinor }],
+      });
     }
 
-    // Non-monetary ordering (earliest dueDate ASC, then unitId ASC), top 5.
-    const sorted = Array.from(unitOutstanding.values())
-      .sort((a, b) => {
-        const dueDiff = a.earliestDue.getTime() - b.earliestDue.getTime();
-        if (dueDiff !== 0) return dueDiff;
-        return a.unit.id.localeCompare(b.unit.id);
-      })
-      .slice(0, 5);
-
-    return sorted.map((item) => ({
-      buildingId: item.building.id,
-      buildingName: item.building.name,
-      unitId: item.unit.id,
-      unitCode: item.unit.code,
-      outstandingByCurrency: aggregateReportBuckets(item.entries),
+    return Array.from(units.values()).map(({ entries, ...unit }) => ({
+      ...unit,
+      outstandingByCurrency: aggregateReportBuckets(entries),
     }));
   }
 }
