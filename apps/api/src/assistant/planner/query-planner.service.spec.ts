@@ -127,7 +127,7 @@ describe('QueryPlannerService', () => {
       const intent: ExtractedIntent = {
         intent: 'list_payments',
         entity: { type: 'unit', buildingAlias: 'A', unitCode: '0101' },
-        filters: { minAmount: 10000, maxAmount: 50000 },
+        filters: { minAmount: 10000, maxAmount: 50000, currency: 'USD' },
         confidence: 0.9,
       };
       const resolved: EntityResolution = {
@@ -140,6 +140,7 @@ describe('QueryPlannerService', () => {
 
       expect(plan.filters.minAmount).toBe(10000);
       expect(plan.filters.maxAmount).toBe(50000);
+      expect(plan.filters.currency).toBe('USD');
     });
 
     it('applies status and method filters', () => {

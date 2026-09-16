@@ -225,7 +225,46 @@ describe('AssistantReadOnlyQueryService', () => {
     expect(result.answer).toContain('Deuda pendiente de la administración:');
   });
 
-  it('uses finance source of truth for collections summary without touching write paths', async () => {
+  it('formats pending-payment previews from each stored currency and exposes only buckets', async () => {
+      const { service, prisma, finanzasService } = makeService();
+      prisma.membership.findUnique.mockResolvedValue({ roles: [{ role: 'TENANT_ADMIN' }] });
+      finanzasService.getPaymentMetrics.mockResolvedValue({
+        backlogCount: 2,
+        backlogAmountByCurrency: [
+          { currency: 'USD', amountMinor: 1200 },
+          { currency: 'UYU', amountMinor: 3400 },
+        ],
+      });
+      finanzasService.listPendingPayments.mockResolvedValue([
+        { amount: 1200, currency: 'USD', unit: { label: 'A-101' }, building: { name: 'Torre A' } },
+        { amount: 3400, currency: 'UYU', unit: { label: 'A-102' }, building: { name: 'Torre A' } },
+      ]);
+
+      const result = await service.execute(
+        {
+          intentCode: 'GET_PENDING_PAYMENTS',
+          question: 'pagos pendientes',
+          context: { tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+        },
+        { apiKey: 'test-readonly-key', tenantId: 'tenant-1', userId: 'user-1', role: 'TENANT_ADMIN' },
+      );
+
+      expect(result.answer).toContain('US$');
+      expect(result.answer).toContain('UYU');
+      expect(result.metadata).toEqual(expect.objectContaining({
+        previewAmountByCurrency: [
+          { currency: 'USD', amountMinor: 1200 },
+          { currency: 'UYU', amountMinor: 3400 },
+        ],
+        backlogAmountByCurrency: [
+          { currency: 'USD', amountMinor: 1200 },
+          { currency: 'UYU', amountMinor: 3400 },
+        ],
+      }));
+      expect(result.metadata).not.toHaveProperty('pendingAmountPreview');
+    });
+
+    it('uses finance source of truth for collections summary without touching write paths', async () => {
     const { service, prisma, finanzasService } = makeService();
 
     prisma.membership.findUnique.mockResolvedValue({

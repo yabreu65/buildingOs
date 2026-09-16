@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { Permission } from '../../../rbac/permissions';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
+import { aggregateReportBuckets } from '../../../finanzas/currency-buckets';
 
 export const buildingStatsIntent: IntentDefinition = {
   name: 'building_stats',
@@ -15,7 +16,7 @@ export const buildingStatsIntent: IntentDefinition = {
       throw new BadRequestException('buildingId required for building_stats intent');
     }
 
-    const [units, openTicketsCount, totalTicketsCount, totalDebt] = await Promise.all([
+    const [units, openTicketsCount, totalTicketsCount, totalDebtGroups] = await Promise.all([
       // Unit counts by type and occupancy
       prisma.unit.groupBy({
         by: ['unitType', 'occupancyStatus'],
@@ -30,8 +31,9 @@ export const buildingStatsIntent: IntentDefinition = {
       prisma.ticket.count({
         where: { buildingId, tenantId },
       }),
-      // Total debt
-      prisma.charge.aggregate({
+      // Total debt grouped by its stored currency.
+      prisma.charge.groupBy({
+        by: ['currency'],
         where: { buildingId, tenantId, status: { in: ['PENDING', 'PARTIAL'] } },
         _sum: { amount: true },
       }),
@@ -55,7 +57,16 @@ export const buildingStatsIntent: IntentDefinition = {
     });
     billableUnits = billableCount;
 
-    const averageDebt = totalUnits > 0 ? Number(totalDebt._sum.amount || 0) / totalUnits : 0;
+    const totalDebtByCurrency = aggregateReportBuckets(
+      totalDebtGroups.map((group) => ({
+        currency: group.currency,
+        amountMinor: Number(group._sum.amount ?? 0),
+      })),
+    );
+    const averageDebtByCurrency = totalDebtByCurrency.map((bucket) => ({
+      currency: bucket.currency,
+      amountMinor: totalUnits > 0 ? Math.round(bucket.amountMinor / totalUnits) : 0,
+    }));
 
     return {
       data: {
@@ -65,9 +76,8 @@ export const buildingStatsIntent: IntentDefinition = {
         occupancyCounts,
         openTickets: openTicketsCount,
         totalTickets: totalTicketsCount,
-        totalDebt: Number(totalDebt._sum.amount || 0),
-        averageDebt,
-        currency: 'VES',
+        totalDebtByCurrency,
+        averageDebtByCurrency,
       },
     };
   },

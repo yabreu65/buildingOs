@@ -33,6 +33,9 @@ export interface AssistantQueryPlanFilters {
   maxAmount?: number;
   minDebt?: number;
   minAgeDays?: number;
+  currency?: string;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
 }
 
 export interface AssistantQueryPlan {

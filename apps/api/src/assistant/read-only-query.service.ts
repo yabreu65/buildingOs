@@ -8,6 +8,7 @@ import { PaymentStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { FinanzasService } from '../finanzas/finanzas.service';
 import {
+  aggregateReportBuckets,
   formatCurrencySafe,
   type ReportCurrencyAmountBucket,
 } from '../finanzas/currency-buckets';
@@ -208,11 +209,16 @@ export class AssistantReadOnlyQueryService {
       .map((payment) => {
         const unitLabel = payment.unit?.label || 'Sin unidad';
         const buildingName = payment.building?.name || 'N/A';
-        return `${unitLabel} (${buildingName}): ${this.formatCurrency(payment.amount)}`;
+        return `${unitLabel} (${buildingName}): ${formatCurrencySafe(payment.amount, payment.currency)}`;
       })
       .join(' | ');
 
-    const totalPendingAmount = pending.reduce((sum, payment) => sum + payment.amount, 0);
+    const previewAmountByCurrency = aggregateReportBuckets(
+      pending.map((payment) => ({
+        currency: payment.currency,
+        amountMinor: payment.amount,
+      })),
+    );
 
     return {
       answer: `Hay ${count} pagos pendientes de aprobación. Vista previa: ${preview}.`,
@@ -220,7 +226,8 @@ export class AssistantReadOnlyQueryService {
       actions: [{ key: 'open-payments', label: 'Open Payments' }],
       metadata: {
         itemCount: count,
-        pendingAmountPreview: totalPendingAmount,
+        previewAmountByCurrency,
+        backlogAmountByCurrency: metrics.backlogAmountByCurrency,
       },
     };
   }
@@ -552,16 +559,7 @@ export class AssistantReadOnlyQueryService {
     };
   }
 
-  private formatCurrency(cents: number, currency = 'ARS'): string {
-    return new Intl.NumberFormat('es-AR', {
-      style: 'currency',
-      currency,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(cents / 100);
-  }
-
-  /**
+    /**
    * Render currency buckets as an explicit enumeration (canonical first,
    * legacy after). Never produces a mixed nominal total.
    */

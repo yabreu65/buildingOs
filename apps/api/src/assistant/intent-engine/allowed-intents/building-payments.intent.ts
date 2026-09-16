@@ -1,10 +1,15 @@
+import { BadRequestException } from '@nestjs/common';
 import { Permission } from '../../../rbac/permissions';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
+import {
+  aggregateReportBuckets,
+  type ReportCurrencyAmountBucket,
+} from '../../../finanzas/currency-buckets';
 
 export const buildingPaymentsIntent: IntentDefinition = {
   name: 'building_payments',
   requiredPermission: 'payments.review' as Permission,
-  supportedFilters: ['period', 'status', 'method', 'minAmount', 'maxAmount', 'limit', 'sortField', 'sortOrder'],
+  supportedFilters: ['period', 'status', 'method', 'currency', 'minAmount', 'maxAmount', 'limit', 'sortField', 'sortOrder'],
   supportedResponseTypes: ['table', 'text'],
   executor: async (params): Promise<IntentExecutionResult> => {
     const { tenantId, entityIds, filters, pagination, prisma } = params;
@@ -34,11 +39,21 @@ export const buildingPaymentsIntent: IntentDefinition = {
       }
     }
 
-    if (filters?.minAmount) {
+    const needsCurrency = filters?.minAmount !== undefined
+      || filters?.maxAmount !== undefined
+      || filters?.sortField === 'amount';
+    if (needsCurrency && !filters?.currency) {
+      throw new BadRequestException('currency is required for amount filters and amount sorting');
+    }
+    if (filters?.currency) {
+      whereClause.currency = filters.currency;
+    }
+
+    if (filters?.minAmount !== undefined) {
       whereClause.amount = { ...((whereClause.amount as Record<string, number>) || {}), gte: filters.minAmount };
     }
 
-    if (filters?.maxAmount) {
+    if (filters?.maxAmount !== undefined) {
       whereClause.amount = { ...((whereClause.amount as Record<string, number>) || {}), lte: filters.maxAmount };
     }
 
@@ -49,16 +64,13 @@ export const buildingPaymentsIntent: IntentDefinition = {
       orderBy.paidAt = 'desc';
     }
 
-    const [tenant, payments, methodSummary] = await Promise.all([
-      prisma.tenant.findUniqueOrThrow({
-        where: { id: tenantId },
-        select: { currency: true },
-      }),
+    const [payments, methodSummary] = await Promise.all([
       prisma.payment.findMany({
         where: whereClause,
         select: {
           id: true,
           amount: true,
+          currency: true,
           method: true,
           status: true,
           paidAt: true,
@@ -68,36 +80,48 @@ export const buildingPaymentsIntent: IntentDefinition = {
         take: pagination?.limit || 50,
         orderBy,
       }),
-      // Sum by method
+      // Sum by method and stored currency.
       prisma.payment.groupBy({
-        by: ['method'],
+        by: ['method', 'currency'],
         where: whereClause,
         _sum: { amount: true },
       }),
     ]);
 
-    const sumByMethod: Record<string, number> = {};
+    const sumByMethodEntries: Record<string, Array<{ currency: string; amountMinor: number }>> = {};
     for (const group of methodSummary) {
-      if (group._sum.amount) {
-        sumByMethod[group.method] = group._sum.amount;
-      }
+      const entries = sumByMethodEntries[group.method] ?? [];
+      entries.push({
+        currency: group.currency,
+        amountMinor: Number(group._sum.amount ?? 0),
+      });
+      sumByMethodEntries[group.method] = entries;
+    }
+    const sumByMethod: Record<string, ReportCurrencyAmountBucket[]> = {};
+    for (const [method, entries] of Object.entries(sumByMethodEntries)) {
+      sumByMethod[method] = aggregateReportBuckets(entries);
     }
 
-    const totalAmount = payments.reduce((acc, payment) => acc + Number(payment.amount || 0), 0);
+    const totalAmountByCurrency = aggregateReportBuckets(
+      payments.map((payment) => ({
+        currency: payment.currency,
+        amountMinor: Number(payment.amount ?? 0),
+      })),
+    );
 
     return {
       data: {
         payments: payments.map((p) => ({
           amount: p.amount,
+          currency: p.currency,
           method: p.method,
           paidAt: p.paidAt,
           status: p.status,
           isUnitSpecific: !!p.unitId,
         })),
         sumByMethod,
-        totalAmount,
+        totalAmountByCurrency,
         total: payments.length,
-        currency: tenant.currency,
       },
     };
   },

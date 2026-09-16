@@ -118,7 +118,15 @@ describe('IntentExtractorService', () => {
         module: 'payments',
         scope: 'building',
         executor: 'building_payments',
-        filters: { buildingToken: 'A', period: '2026-04', method: 'TRANSFER' },
+        filters: {
+          buildingToken: 'A',
+          period: '2026-04',
+          method: 'TRANSFER',
+          minAmount: 100,
+          currency: 'USD',
+          sortField: 'amount',
+          sortOrder: 'desc',
+        },
         confidence: 0.9,
         source: 'deterministic_rules',
       });
@@ -128,6 +136,12 @@ describe('IntentExtractorService', () => {
       expect(result.intent).toBe('building_payments');
       expect(result.entity.type).toBe('building');
       expect(result.entity.buildingAlias).toBe('A');
+      expect(result.filters).toEqual(expect.objectContaining({
+        minAmount: 100,
+        currency: 'USD',
+        sortField: 'amount',
+        sortOrder: 'desc',
+      }));
     });
 
     it('keeps tenant_debt as a deterministic extraction result', async () => {
@@ -198,6 +212,8 @@ describe('IntentExtractorService', () => {
       const requestBody = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body ?? '{}');
       expect(requestBody.generationConfig.responseMimeType).toBe('application/json');
       expect(requestBody.generationConfig.responseSchema).toBeDefined();
+      expect(requestBody.generationConfig.responseSchema.properties.filters.properties.currency).toEqual({ type: 'string' });
+      expect(requestBody.systemInstruction.parts[0].text).toContain('currency (por ejemplo USD)');
       expect(JSON.stringify(requestBody.generationConfig.responseSchema)).not.toContain('additionalProperties');
     });
 
@@ -408,7 +424,7 @@ describe('IntentExtractorService', () => {
                         text: JSON.stringify({
                           intent: 'building_payments',
                           entity: { type: 'building' },
-                          filters: { period: '2026-06', method: 'TRANSFER' },
+                          filters: { period: '2026-06', method: 'TRANSFER', currency: 'USD' },
                           confidence: 0.91,
                         }),
                       },

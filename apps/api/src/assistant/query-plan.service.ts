@@ -28,7 +28,6 @@ export class AssistantQueryPlanService {
     const buildingReference = this.extractBuildingReference(message);
     const extractedFilters = this.extractCommonFilters(normalized);
     const personName = this.extractPersonName(message, normalized);
-    const referencesSomeone = this.hasAny(normalized, ['alguien', 'persona', 'quien', 'quién']);
     const debtInterpretation = this.debtInterpreter.interpret(message);
     const tenantDebtPeriod = this.extractTenantDebtPeriod(normalized);
     const canonicalPeriod = this.periodNormalizer.normalize(message);
@@ -41,7 +40,6 @@ export class AssistantQueryPlanService {
       parsedUnitToken &&
       !(
         (typeof extractedFilters.minAmount === 'number' || typeof extractedFilters.minDebt === 'number') &&
-        referencesSomeone &&
         !hasExplicitUnitSyntax
       ) &&
       !(
@@ -250,9 +248,13 @@ export class AssistantQueryPlanService {
     }
 
     const amountFilters = this.extractAmountFilters(normalized);
+    const currency = this.extractCurrency(normalized);
+    const sortFilters = this.extractSortFilters(normalized);
     return {
       ...filters,
       ...amountFilters,
+      ...(currency ? { currency } : {}),
+      ...sortFilters,
     };
   }
 
@@ -451,6 +453,34 @@ export class AssistantQueryPlanService {
     }
 
     return result;
+  }
+
+  private extractCurrency(normalized: string): string | undefined {
+    if (/\b(usd|dolares|dólares)\b|u\$s/.test(normalized)) return 'USD';
+    if (/\b(ars|pesos argentinos)\b/.test(normalized)) return 'ARS';
+    if (/\b(ves|bolivares|bolívares)\b/.test(normalized)) return 'VES';
+    if (/\b(cop|pesos colombianos)\b/.test(normalized)) return 'COP';
+    if (/\b(uyu|pesos uruguayos)\b/.test(normalized)) return 'UYU';
+    return undefined;
+  }
+
+  private extractSortFilters(
+    normalized: string,
+  ): Pick<AssistantQueryPlan['filters'], 'sortField' | 'sortOrder'> {
+    const sortsByAmount = /\b(?:ordenad\w*|ordenar|orden|clasificad\w*|ranking|top)\b[^.]*\b(?:monto|importe|amount)\b|\b(?:monto|importe|amount)\s+(?:ascendente|descendente)\b/.test(normalized);
+    if (!sortsByAmount) {
+      return {};
+    }
+
+    if (/\b(descendente|de mayor a menor|mayor a menor|highest|mayores primero)\b/.test(normalized)) {
+      return { sortField: 'amount', sortOrder: 'desc' };
+    }
+
+    if (/\b(ascendente|de menor a mayor|menor a mayor|lowest|menores primero)\b/.test(normalized)) {
+      return { sortField: 'amount', sortOrder: 'asc' };
+    }
+
+    return { sortField: 'amount' };
   }
 
   private extractPersonName(message: string, normalized: string): string | undefined {

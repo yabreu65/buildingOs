@@ -398,6 +398,36 @@ describe('AssistantQueryPlanService', () => {
     expect(plan?.filters.minAgeDays).toBe(7);
   });
 
+  it('extracts USD and amount sorting for building payments', () => {
+    const plan = service.createPlan('Pagos mayores a 100 USD ordenados por monto descendente de Torre A');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'building_payments',
+    }));
+    expect(plan?.filters).toEqual(expect.objectContaining({
+      buildingAlias: 'A',
+      minAmount: 100,
+      currency: 'USD',
+      sortField: 'amount',
+      sortOrder: 'desc',
+    }));
+  });
+
+  it('extracts USD and amount sorting for unit payments', () => {
+    const plan = service.createPlan('Pagos de la unidad A-0101 mayores a 100 USD ordenados por monto ascendente');
+
+    expect(plan).toEqual(expect.objectContaining({
+      intent: 'unit_payments',
+    }));
+    expect(plan?.filters).toEqual(expect.objectContaining({
+      unitCode: 'A-0101',
+      minAmount: 100,
+      currency: 'USD',
+      sortField: 'amount',
+      sortOrder: 'asc',
+    }));
+  });
+
   it('classifies debt comparison with someone as delinquents and extracts minDebt', () => {
     const plan = service.createPlan('¿Hay alguien con deuda mayor a 500?');
 
