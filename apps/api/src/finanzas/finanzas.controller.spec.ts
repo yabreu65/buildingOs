@@ -196,4 +196,39 @@ describe('FinanzasController administrative portal access', () => {
       { period: '2026-05', page: 1, pageSize: 10 },
     );
   });
+
+  it('forwards the normalized explicit currency needed by a monetary delinquency sort', async () => {
+    const delinquency = {
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 25,
+      totalPages: 0,
+      totals: {
+        periodDebtByCurrency: [],
+        accumulatedDebtByCurrency: [],
+      },
+    } as BuildingDelinquencyResponseDto;
+    const query = {
+      period: '2026-05',
+      currency: 'UYU',
+      sortBy: 'PERIOD_DEBT',
+      sortOrder: 'asc',
+    } as never;
+    service.getBuildingDelinquency.mockResolvedValue(delinquency);
+
+    await expect(
+      controller.getBuildingDelinquency(
+        { buildingId: 'building-1' },
+        query,
+        stubReq(['TENANT_ADMIN']),
+      ),
+    ).resolves.toBe(delinquency);
+
+    expect(service.getBuildingDelinquency).toHaveBeenCalledWith(
+      'tenant-1',
+      'building-1',
+      query,
+    );
+  });
 });

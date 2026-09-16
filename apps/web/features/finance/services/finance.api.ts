@@ -169,6 +169,7 @@ export interface BuildingDelinquencyQuery {
   aging?: BuildingDelinquencyAging;
   sortBy?: BuildingDelinquencySortBy;
   sortOrder?: BuildingDelinquencySortOrder;
+  currency?: string;
 }
 
 export interface BuildingDelinquencyItem {
@@ -489,6 +490,7 @@ export async function getBuildingDelinquency(
   if (query.aging && query.aging !== 'ALL') params.set('aging', query.aging);
   if (query.sortBy) params.set('sortBy', query.sortBy);
   if (query.sortOrder) params.set('sortOrder', query.sortOrder);
+  if (query.currency) params.set('currency', query.currency);
 
   return apiClient<BuildingDelinquencyResponse>({
     path: `/buildings/${buildingId}/finance/delinquency?${params.toString()}`,

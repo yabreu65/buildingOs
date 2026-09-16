@@ -1,4 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import {
   BadRequestException,
   ConflictException,
@@ -12,7 +14,11 @@ import { Prisma } from '@prisma/client';
 import { CurrencyConversionService } from './currency-conversion.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
-import { CreateChargeDto, UpdateChargeDto } from './finanzas.dto';
+import {
+  BuildingDelinquencyQueryDto,
+  CreateChargeDto,
+  UpdateChargeDto,
+} from './finanzas.dto';
 import { ExpensesService } from './expenses.service';
 import { ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, ScopeType } from '@prisma/client';
 
@@ -3321,6 +3327,7 @@ describe('FinanzasService', () => {
         period: '2026-07',
         page: 1,
         pageSize: 25,
+        currency: 'ARS',
         sortBy: 'ACCUMULATED_DEBT' as never,
         sortOrder: 'desc' as never,
       });
@@ -3362,7 +3369,64 @@ describe('FinanzasService', () => {
       });
     });
 
-    it('preserves the selected period boundary and resets an empty result to zero pages', async () => {
+    it('normalizes any three-letter stored currency code for read-side sorting without widening write currencies', async () => {
+        const legacyCurrency = plainToInstance(BuildingDelinquencyQueryDto, {
+          period: '2026-07',
+          currency: ' uyu ',
+        });
+        const invalidCurrency = plainToInstance(BuildingDelinquencyQueryDto, {
+          period: '2026-07',
+          currency: 'USDX',
+        });
+
+        expect(legacyCurrency.currency).toBe('UYU');
+            const storedCurrency = plainToInstance(BuildingDelinquencyQueryDto, {
+              period: '2026-07',
+              currency: ' pen ',
+            });
+            expect(storedCurrency.currency).toBe('PEN');
+        await expect(validate(legacyCurrency)).resolves.toEqual([]);
+            await expect(validate(storedCurrency)).resolves.toEqual([]);
+        await expect(validate(invalidCurrency)).resolves.not.toEqual([]);
+      });
+
+      it.each(['ACCUMULATED_DEBT', 'PERIOD_DEBT'] as const)(
+        'requires an explicit currency for %s sorting before querying',
+        async (sortBy) => {
+          await expect(service.getBuildingDelinquency('tenant-1', 'building-1', {
+            period: '2026-07',
+            sortBy: sortBy as never,
+          })).rejects.toThrow(BadRequestException);
+
+          expect(prismaService.$transaction).not.toHaveBeenCalled();
+          expect(prismaService.tenant.findUniqueOrThrow).not.toHaveBeenCalled();
+        },
+      );
+
+      it('defaults to overdue periods with deterministic non-monetary tie-breaks', async () => {
+        jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
+        jest.spyOn(prismaService, '$transaction').mockResolvedValue([
+          [],
+          [{ total: 0n }],
+          [{ periodDebtByCurrency: [], accumulatedDebtByCurrency: [] }],
+        ] as never);
+
+        await service.getBuildingDelinquency('tenant-1', 'building-1', {
+          period: '2026-07',
+          sortOrder: 'asc' as never,
+        });
+
+        const [itemsQuery] = (prismaService.$queryRaw as jest.Mock).mock.calls;
+        const rawSql = itemsQuery[0].strings.join(' ');
+        expect(rawSql).toContain(
+          'ORDER BY "overduePeriods" DESC, "unitLabel" ASC, "unitId" ASC',
+        );
+        expect(rawSql).toContain('selected_period_eligible AS');
+        expect(rawSql).toContain('FROM unit_debts_per_currency AS candidate');
+        expect(prismaService.tenant.findUniqueOrThrow).not.toHaveBeenCalled();
+      });
+
+      it('preserves the selected period boundary and resets an empty result to zero pages', async () => {
       jest.spyOn(validators, 'validateBuildingBelongsToTenant').mockResolvedValue(undefined);
       jest.spyOn(prismaService.tenant, 'findUniqueOrThrow').mockResolvedValue({ currency: 'ARS' } as never);
       jest.spyOn(prismaService, '$transaction').mockResolvedValue([
