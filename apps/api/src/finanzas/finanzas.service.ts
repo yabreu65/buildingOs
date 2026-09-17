@@ -606,6 +606,7 @@ export class FinanzasService {
           chargeId,
           payment: {
             status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED] },
+            canceledAt: null,
           },
         },
         select: { id: true },
@@ -1377,7 +1378,7 @@ export class FinanzasService {
 
     const allocationsSum = charge.paymentAllocations.reduce(
       (sum, a) => {
-        if (this.isEffectivePaymentStatus(a.payment?.status)) {
+        if (this.isEffectivePaymentStatus(a.payment?.status) && !a.payment?.canceledAt) {
           return sum + a.amount;
         }
         return sum;
@@ -1539,7 +1540,10 @@ export class FinanzasService {
         return sum;
       }
 
-      if (allocation.payment?.status === PaymentStatus.SUBMITTED) {
+      if (
+        allocation.payment?.status === PaymentStatus.SUBMITTED &&
+        !allocation.payment.canceledAt
+      ) {
         return sum + allocation.amount;
       }
 
@@ -1568,6 +1572,7 @@ export class FinanzasService {
               select: {
                 id: true,
                 status: true,
+                canceledAt: true,
               },
             },
           },
@@ -2315,7 +2320,7 @@ export class FinanzasService {
     // and only for charges with real outstanding > 0.
     const chargesWithApprovedAllocated = charges.map((charge) => {
       const approvedAllocated = charge.paymentAllocations.reduce((sum, allocation) => {
-        if (this.isEffectivePaymentStatus(allocation.payment?.status)) {
+        if (this.isEffectivePaymentStatus(allocation.payment?.status) && !allocation.payment?.canceledAt) {
           return sum + allocation.amount;
         }
         return sum;

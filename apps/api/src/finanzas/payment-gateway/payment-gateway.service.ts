@@ -176,7 +176,10 @@ export class PaymentGatewayService {
       include: {
         paymentAllocations: {
           where: {
-            payment: { status: { in: [...EFFECTIVE_PAYMENT_STATUSES] } },
+            payment: {
+              status: { in: [...EFFECTIVE_PAYMENT_STATUSES] },
+              canceledAt: null,
+            },
           },
           select: { amount: true },
         },
@@ -256,6 +259,7 @@ export class PaymentGatewayService {
         where: {
           tenantId: charge.tenantId,
           reference: providerReference,
+          canceledAt: null,
         },
         select: { id: true },
         take: 2,
@@ -283,6 +287,12 @@ export class PaymentGatewayService {
         },
       });
       if (!payment) return false;
+      if (payment.canceledAt) {
+        this.logger.error(
+          `Webhook event ${event.eventId}: payment ${payment.id} is canceled; no financial mutation`,
+        );
+        return false;
+      }
       await lockUnitChargesForAllocation(tx, charge.tenantId, charge.buildingId, charge.unitId);
       const lockedCharge = await tx.charge.findFirst({
         where: { id: charge.id, tenantId: charge.tenantId, buildingId: charge.buildingId },

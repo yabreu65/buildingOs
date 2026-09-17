@@ -3688,6 +3688,125 @@ describe('FinanzasService', () => {
     });
   });
 
+  describe('resident charge selection reservation cancellation semantics (3F-R6)', () => {
+    const loadResidentChargeSelection = (
+      tx: Prisma.TransactionClient,
+    ): Promise<Array<{ charge: { id: string }; approvedOutstanding: number }>> => (
+      service as unknown as {
+        loadResidentChargeSelection(
+          client: Prisma.TransactionClient,
+          tenantId: string,
+          buildingId: string,
+          unitId: string,
+        ): Promise<Array<{ charge: { id: string }; approvedOutstanding: number }>>;
+      }
+    ).loadResidentChargeSelection(tx, 'tenant-1', 'building-1', 'unit-1');
+
+    const selectableCharge = (canceledAt: Date | null) => ({
+      id: 'charge-1',
+      tenantId: 'tenant-1',
+      buildingId: 'building-1',
+      unitId: 'unit-1',
+      amount: 1000,
+      currency: 'ARS',
+      status: ChargeStatus.PENDING,
+      dueDate: new Date('2026-08-15T00:00:00.000Z'),
+      createdAt: new Date('2026-08-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-01T00:00:00.000Z'),
+      canceledAt: null,
+      paymentAllocations: [{
+        amount: 1000,
+        payment: { id: 'submitted-payment', status: PaymentStatus.SUBMITTED, canceledAt },
+      }],
+    });
+
+    it('keeps a canceled SUBMITTED reservation selectable at its full approved outstanding amount', async () => {
+      const findMany = jest.fn().mockResolvedValue([
+        selectableCharge(new Date('2026-08-11T00:00:00.000Z')),
+      ]);
+      const tx = { charge: { findMany } } as unknown as Prisma.TransactionClient;
+
+      await expect(loadResidentChargeSelection(tx)).resolves.toEqual([
+        expect.objectContaining({
+          charge: expect.objectContaining({ id: 'charge-1' }),
+          approvedOutstanding: 1000,
+        }),
+      ]);
+      expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+        include: expect.objectContaining({
+          paymentAllocations: expect.objectContaining({
+            include: { payment: { select: { id: true, status: true, canceledAt: true } } },
+          }),
+        }),
+      }));
+    });
+
+    it('keeps an active SUBMITTED reservation blocking resident charge selection', async () => {
+      const tx = {
+        charge: { findMany: jest.fn().mockResolvedValue([selectableCharge(null)]) },
+      } as unknown as Prisma.TransactionClient;
+
+      await expect(loadResidentChargeSelection(tx)).resolves.toEqual([]);
+    });
+  });
+
+  describe('recalculateChargeStatus cancellation semantics (3F-R6)', () => {
+    const recalculate = () => (
+      service as unknown as { recalculateChargeStatus(chargeId: string): Promise<void> }
+    ).recalculateChargeStatus('charge-1');
+
+    it.each([PaymentStatus.APPROVED, PaymentStatus.RECONCILED])(
+      'sets a charge with a canceled full %s allocation back to PENDING',
+      async (status) => {
+        jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue({
+          id: 'charge-1', amount: 1000, status: ChargeStatus.PAID,
+          paymentAllocations: [{
+            amount: 1000,
+            payment: { status, canceledAt: new Date('2026-08-11T00:00:00.000Z') },
+          }],
+        } as never);
+
+        await recalculate();
+
+        expect(prismaService.charge.update).toHaveBeenCalledWith({
+          where: { id: 'charge-1' },
+          data: { status: ChargeStatus.PENDING, updatedAt: expect.any(Date) },
+        });
+      },
+    );
+
+    it('counts an active 300 allocation but excludes a canceled 700 allocation', async () => {
+      jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue({
+        id: 'charge-1', amount: 1000, status: ChargeStatus.PAID,
+        paymentAllocations: [
+          { amount: 300, payment: { status: PaymentStatus.APPROVED, canceledAt: null } },
+          { amount: 700, payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-08-11T00:00:00.000Z') } },
+        ],
+      } as never);
+
+      await recalculate();
+
+      expect(prismaService.charge.update).toHaveBeenCalledWith({
+        where: { id: 'charge-1' },
+        data: { status: ChargeStatus.PARTIAL, updatedAt: expect.any(Date) },
+      });
+    });
+
+    it('preserves active effective allocation behavior', async () => {
+      jest.spyOn(prismaService.charge, 'findUnique').mockResolvedValue({
+        id: 'charge-1', amount: 1000, status: ChargeStatus.PENDING,
+        paymentAllocations: [{ amount: 1000, payment: { status: PaymentStatus.RECONCILED, canceledAt: null } }],
+      } as never);
+
+      await recalculate();
+
+      expect(prismaService.charge.update).toHaveBeenCalledWith({
+        where: { id: 'charge-1' },
+        data: { status: ChargeStatus.PAID, updatedAt: expect.any(Date) },
+      });
+    });
+  });
+
   describe('getUnitLedger currency-safe totals (3F7)', () => {
     const tenantId = 'tenant-1';
     const buildingId = 'building-1';
@@ -3886,6 +4005,43 @@ describe('FinanzasService', () => {
         { currency: 'USD', amountMinor: 6000 },
         { currency: 'ARS', amountMinor: 1500000 },
       ]);
+    });
+
+    it('excludes canceled approved allocations and payments from USD ledger totals and history', async () => {
+      mockLedgerBase([
+        {
+          id: 'c-usd', unitId, period: '2026-08', concept: 'Exp', amount: 1000, currency: 'USD',
+          type: 'COMMON_EXPENSE', status: ChargeStatus.PARTIAL, dueDate: new Date('2026-08-15T00:00:00Z'),
+          canceledAt: null, tenantId, buildingId,
+          paymentAllocations: [
+            { amount: 200, payment: { status: PaymentStatus.APPROVED, canceledAt: null } },
+            { amount: 300, payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-08-11T00:00:00.000Z') } },
+          ],
+        },
+      ], [
+        {
+          id: 'active-payment', amount: 200, currency: 'USD', method: PaymentMethod.TRANSFER,
+          status: PaymentStatus.APPROVED, createdAt: new Date('2026-08-11T00:00:00.000Z'),
+          functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+          exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+          conversionDate: null,
+          paymentAllocations: [{ amount: 200, paymentOriginalAmountMinor: 200, charge: { currency: 'USD' } }],
+        },
+      ]);
+
+      const ledger = await service.getUnitLedger(
+        tenantId, unitId, undefined, undefined, ['TENANT_ADMIN'], 'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+
+      expect(ledger.charges).toEqual([expect.objectContaining({ id: 'c-usd', allocated: 200 })]);
+      expect(ledger.payments).toEqual([expect.objectContaining({ id: 'active-payment', allocated: 200 })]);
+      expect(ledger.totals.totalPaidByCurrency).toEqual([{ currency: 'USD', amountMinor: 200 }]);
+      expect(ledger.totals.totalAllocatedByCurrency).toEqual([{ currency: 'USD', amountMinor: 200 }]);
+      expect(ledger.totals.balanceByCurrency).toEqual([{ currency: 'USD', amountMinor: 800 }]);
+      expect(prismaService.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ canceledAt: null }),
+      }));
     });
 
     it('empty ledger -> empty buckets', async () => {
@@ -4517,7 +4673,7 @@ describe('FinanzasService', () => {
         );
       };
 
-      it('cancels a charge without effective allocations', async () => {
+      it('cancels a charge without active effective allocations', async () => {
         jest.spyOn(prismaService.charge, 'update').mockResolvedValue(baseCharge as never);
 
         await expect(cancel(null)).resolves.toBeDefined();
@@ -4526,13 +4682,16 @@ describe('FinanzasService', () => {
           expect.objectContaining({
             where: expect.objectContaining({
               chargeId: 'charge-1',
-              payment: { status: { in: ['APPROVED', 'RECONCILED'] } },
+              payment: {
+                status: { in: ['APPROVED', 'RECONCILED'] },
+                canceledAt: null,
+              },
             }),
           }),
         );
       });
 
-      it('treats a SUBMITTED reservation as non-blocking (DB filter excludes it)', async () => {
+      it('treats SUBMITTED and canceled effective allocations as non-blocking', async () => {
         jest.spyOn(prismaService.charge, 'update').mockResolvedValue(baseCharge as never);
         jest.spyOn(prismaService.paymentAllocation, 'findFirst').mockResolvedValue(null);
 
@@ -4541,7 +4700,10 @@ describe('FinanzasService', () => {
         expect(prismaService.paymentAllocation.findFirst).toHaveBeenCalledWith(
           expect.objectContaining({
             where: expect.objectContaining({
-              payment: { status: { in: ['APPROVED', 'RECONCILED'] } },
+              payment: {
+                status: { in: ['APPROVED', 'RECONCILED'] },
+                canceledAt: null,
+              },
             }),
           }),
         );
