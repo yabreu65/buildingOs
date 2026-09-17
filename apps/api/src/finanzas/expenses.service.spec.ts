@@ -642,7 +642,7 @@ describe('ExpensesService', () => {
         { id: 'building-1', name: 'Torre A' },
       ]);
       (prisma.expenseLedgerCategory.findMany as jest.Mock).mockResolvedValue([
-        { id: 'category-1', name: 'impuestos' },
+        { id: 'category-1', name: 'impuestos', catalogScope: 'BUILDING' },
       ]);
       (prisma.vendor.findMany as jest.Mock).mockResolvedValue([]);
       (prisma.expense.create as jest.Mock).mockResolvedValue({ id: 'expense-1' });
@@ -677,6 +677,59 @@ describe('ExpensesService', () => {
       expect(result.successCount).toBe(0);
       expect(result.failureCount).toBe(1);
       expect(result.errors[0]).toMatchObject({ rowIndex: 1, reason: expect.stringContaining('Moneda inválida') });
+      expect(prisma.expense.create).not.toHaveBeenCalled();
+    });
+
+    it('stores the UTC invoice period as both period fields for DRAFT imports', async () => {
+      await service.importExpensesFromExcel(
+        'tenant-1',
+        'member-1',
+        ['TENANT_ADMIN'],
+        '2026-08',
+        [{ ...row, monto: 12.34 }],
+      );
+
+      expect(prisma.expense.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          period: '2026-08',
+          liquidationPeriod: '2026-08',
+          amountMinor: 1234,
+          scopeType: 'BUILDING',
+          status: 'DRAFT',
+          invoiceDate: new Date('2026-08-10T00:00:00.000Z'),
+        }),
+      }));
+    });
+
+    it.each([
+      ['invoice period differs from the request', { fecha: '10/09/2026' }],
+      ['a shared-expense alias is supplied', { edificio: 'Áreas comunes' }],
+      ['the amount has more than two decimals', { monto: 12.345 }],
+    ])('rejects a row when %s', async (_reason, invalidRow) => {
+      const result = await service.importExpensesFromExcel(
+        'tenant-1',
+        'member-1',
+        ['TENANT_ADMIN'],
+        '2026-08',
+        [{ ...row, ...invalidRow }],
+      );
+
+      expect(result).toMatchObject({ successCount: 0, failureCount: 1 });
+      expect(prisma.expense.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a BUILDING import after its invoice period is published', async () => {
+      (prisma.liquidation.findFirst as jest.Mock).mockResolvedValue({ id: 'liq-1' });
+
+      const result = await service.importExpensesFromExcel(
+        'tenant-1',
+        'member-1',
+        ['TENANT_ADMIN'],
+        '2026-08',
+        [row],
+      );
+
+      expect(result).toMatchObject({ successCount: 0, failureCount: 1 });
       expect(prisma.expense.create).not.toHaveBeenCalled();
     });
   });

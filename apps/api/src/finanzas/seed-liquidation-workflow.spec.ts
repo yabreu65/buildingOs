@@ -150,6 +150,7 @@ describe('ensureSeedPublishedLiquidation', () => {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           auditLog: { create: jest.fn().mockResolvedValue(undefined) },
+          $executeRaw: jest.fn().mockResolvedValue(1),
         } as unknown as Prisma.TransactionClient),
       ),
       __setActive: (next: typeof active) => {
@@ -661,7 +662,11 @@ describe('ensureSeedPublishedLiquidation', () => {
         findMany: jest.fn().mockResolvedValue([]),
         createMany: jest.fn().mockResolvedValue({ count: 2 }),
       },
+      expense: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'expense-1', status: 'VALIDATED' }]),
+      },
       auditLog: { create: jest.fn().mockResolvedValue(undefined) },
+      $executeRaw: jest.fn().mockResolvedValue(1),
       $queryRaw: jest.fn().mockResolvedValue([]),
     };
     prisma.__setActive(reviewedLiquidation);
