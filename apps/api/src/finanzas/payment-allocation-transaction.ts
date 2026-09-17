@@ -419,6 +419,7 @@ export async function reconcilePaymentWhenConsumed(
   });
   if (
     !payment ||
+    payment.canceledAt ||
     (payment.status !== PaymentStatus.APPROVED && payment.status !== PaymentStatus.RECONCILED)
   ) return;
   if (classifyFunctionalSnapshot(payment) === 'PARTIAL_INVALID') return;
@@ -467,6 +468,7 @@ async function reconcilePaymentAfterAllocationDelete(
   });
   if (
     !payment ||
+    payment.canceledAt ||
     (payment.status !== PaymentStatus.APPROVED && payment.status !== PaymentStatus.RECONCILED)
   ) return;
 
@@ -531,6 +533,9 @@ export async function createLockedAllocation(
   await lockUnitFinancialMutations(tx, scope.tenantId, scope.unitId);
   await lockPaymentForAllocation(tx, scope);
   const payment = await loadLockedPayment(tx, scope);
+  if (payment.canceledAt) {
+    throw new ConflictException('Cannot allocate a canceled payment');
+  }
   if (payment.unitId !== scope.unitId) {
     throw new ConflictException('Payment and allocation unit do not match');
   }

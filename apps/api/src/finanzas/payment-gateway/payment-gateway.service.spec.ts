@@ -423,6 +423,44 @@ describe('PaymentGatewayService (3E1 ledger)', () => {
     });
   });
 
+  describe('canceled payments', () => {
+    it('does not qualify canceled payments during provider-reference discovery', async () => {
+      currentPayment = payment({ canceledAt: new Date('2026-08-11T00:00:00.000Z') });
+      mockPrisma.payment.findMany.mockResolvedValue([]);
+
+      const result = await run(paidEvent());
+
+      expect(result.chargeUpdated).toBe(false);
+      expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ canceledAt: null }),
+      }));
+      expect(mockPrisma.payment.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+      expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+      expect(mockPrisma.processedWebhookEvent.create).not.toHaveBeenCalled();
+      expect(mockIdempotencyService.cacheProcessed).not.toHaveBeenCalled();
+    });
+
+    it.each(['SUBMITTED', 'APPROVED', 'RECONCILED'] as const)(
+      'leaves a late PAID event for a canceled %s payment unprocessed after reload',
+      async (status) => {
+        const canceledAt = new Date('2026-08-11T00:00:00.000Z');
+        currentPayment = payment({ status, canceledAt });
+        const paymentBefore = { ...currentPayment, paymentAllocations: [...currentPayment.paymentAllocations] };
+
+        const result = await run(paidEvent());
+
+        expect(result.chargeUpdated).toBe(false);
+        expect(currentPayment).toEqual(paymentBefore);
+        expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+        expect(mockPrisma.paymentAllocation.create).not.toHaveBeenCalled();
+        expect(mockPrisma.charge.update).not.toHaveBeenCalled();
+        expect(mockPrisma.processedWebhookEvent.create).not.toHaveBeenCalled();
+        expect(mockIdempotencyService.cacheProcessed).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   describe('tenant isolation', () => {
     it('matches the local payment tenant-scoped by reference', async () => {
       await run(paidEvent());

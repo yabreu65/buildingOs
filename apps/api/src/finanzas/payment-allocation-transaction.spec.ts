@@ -268,6 +268,28 @@ describe('payment allocation transaction semantics', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it.each([PaymentStatus.APPROVED, PaymentStatus.RECONCILED])(
+    'does not reconcile a canceled %s payment or create audit evidence',
+    async (status) => {
+      const { tx, update, paymentAuditLog } = transaction({
+        id: 'payment', amount: 10000, currency: 'ARS', status,
+        canceledAt: new Date('2026-08-11T00:00:00.000Z'),
+        functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+        exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+        conversionDate: null,
+        paymentAllocations: [{
+          amount: 10000, paymentOriginalAmountMinor: 10000,
+          charge: { currency: 'ARS', status: ChargeStatus.PAID },
+        }],
+      });
+
+      await reconcilePaymentWhenConsumed(tx, 'payment');
+
+      expect(update).not.toHaveBeenCalled();
+      expect(paymentAuditLog.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('counts effective and SUBMITTED reservations while excluding the current payment once', () => {
     const allocations = [
       { amount: 2000, payment: { id: 'effective', status: PaymentStatus.APPROVED, canceledAt: null } },
@@ -309,6 +331,42 @@ describe('payment allocation transaction semantics', () => {
       id: 'allocation', paymentId: 'payment', chargeId: 'charge', amount: 10000,
     });
     expect(calls).toEqual(['lock', 'lock', 'delete', 'charge', 'payment']);
+  });
+
+  it('does not downgrade a canceled RECONCILED payment after allocation deletion', async () => {
+    const paymentUpdate = jest.fn();
+    const paymentAuditLog = { create: jest.fn() };
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      paymentAllocation: {
+        findFirst: jest.fn()
+          .mockResolvedValueOnce({ paymentId: 'payment', chargeId: 'charge', payment: { unitId: 'unit' } })
+          .mockResolvedValueOnce({ id: 'allocation', paymentId: 'payment', chargeId: 'charge', amount: 10000 }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      charge: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'charge', amount: 10000, status: ChargeStatus.PAID, paymentAllocations: [],
+        }),
+        update: jest.fn(),
+      },
+      payment: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'payment', amount: 10000, currency: 'ARS', status: PaymentStatus.RECONCILED,
+          canceledAt: new Date('2026-08-11T00:00:00.000Z'),
+          functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+          exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+          conversionDate: null, paymentAllocations: [],
+        }),
+        update: paymentUpdate,
+      },
+      paymentAuditLog,
+    } as unknown as Prisma.TransactionClient;
+
+    await deleteLockedAllocation(tx, 'tenant', 'building', 'allocation');
+
+    expect(paymentUpdate).not.toHaveBeenCalled();
+    expect(paymentAuditLog.create).not.toHaveBeenCalled();
   });
 
   it('progressively cleans a mixed ledger without deriving malformed capacity, then resumes canonical reconciliation', async () => {
@@ -467,6 +525,32 @@ describe('payment allocation transaction semantics', () => {
     } });
     expect(create).not.toHaveBeenCalled();
   });
+
+  it.each([PaymentStatus.APPROVED, PaymentStatus.RECONCILED])(
+    'rejects a canceled %s payment before allocation capacity is calculated',
+    async (status) => {
+      const create = jest.fn();
+      const chargeFindFirst = jest.fn();
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        payment: { findFirst: jest.fn().mockResolvedValue({
+          id: 'payment', unitId: 'unit', amount: 10000, currency: 'ARS', status,
+          canceledAt: new Date('2026-08-11T00:00:00.000Z'),
+          paymentAllocations: [],
+        }) },
+        charge: { findFirst: chargeFindFirst },
+        paymentAllocation: { create },
+      } as unknown as Prisma.TransactionClient;
+
+      await expect(createLockedAllocation(tx, {
+        tenantId: 'tenant', buildingId: 'building', paymentId: 'payment', chargeId: 'charge', unitId: 'unit',
+      }, 10000)).rejects.toMatchObject({
+        response: { statusCode: 409, message: 'Cannot allocate a canceled payment' },
+      });
+      expect(chargeFindFirst).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects create when an existing legacy CROSS share is NULL without mutation', async () => {
     const create = jest.fn();
