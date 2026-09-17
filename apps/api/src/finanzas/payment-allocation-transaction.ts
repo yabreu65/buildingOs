@@ -256,7 +256,7 @@ export async function assertFifoNoPartialAllocation(
       }
       if (isEffectivePaymentStatus(status) && !allocation.payment?.canceledAt) {
         effectiveConsumed += allocation.amount;
-      } else if (status === PaymentStatus.SUBMITTED) {
+      } else if (status === PaymentStatus.SUBMITTED && !allocation.payment?.canceledAt) {
         reservedByOtherPayments += allocation.amount;
       }
     }
@@ -376,7 +376,9 @@ export async function recalculateLockedCharge(
   if (!charge) return;
   const consumed = charge.paymentAllocations.reduce(
     (sum, allocation) =>
-      isEffectivePaymentStatus(allocation.payment.status) ? sum + allocation.amount : sum,
+      isEffectivePaymentStatus(allocation.payment.status) && !allocation.payment.canceledAt
+        ? sum + allocation.amount
+        : sum,
     0,
   );
   const status = consumed === 0

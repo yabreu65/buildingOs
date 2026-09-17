@@ -7,6 +7,7 @@ import {
   classifyPaymentSideAllocations,
   createLockedAllocation,
   deleteLockedAllocation,
+  recalculateLockedCharge,
   reconcilePaymentWhenConsumed,
 } from './payment-allocation-transaction';
 
@@ -622,7 +623,7 @@ describe('assertFifoNoPartialAllocation (product contract: no partial + oldest-f
   const charge = (
     id: string,
     amount: number,
-    allocations: Array<{ paymentId: string; status: PaymentStatus; amount: number }>,
+    allocations: Array<{ paymentId: string; status: PaymentStatus; amount: number; canceledAt?: Date | null }>,
     overrides: Record<string, unknown> = {},
   ) => ({
     id,
@@ -636,7 +637,11 @@ describe('assertFifoNoPartialAllocation (product contract: no partial + oldest-f
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     paymentAllocations: allocations.map((allocation) => ({
       amount: allocation.amount,
-      payment: { id: allocation.paymentId, status: allocation.status },
+      payment: {
+        id: allocation.paymentId,
+        status: allocation.status,
+        canceledAt: allocation.canceledAt ?? null,
+      },
     })),
     ...overrides,
   });
@@ -742,12 +747,79 @@ describe('assertFifoNoPartialAllocation (product contract: no partial + oldest-f
     ).resolves.toBeUndefined();
   });
 
+  it('ignores a soft-canceled SUBMITTED reservation and continues FIFO', async () => {
+    const tx = txWithCharges([
+      charge('c1', 3000, [{ paymentId: 'other', status: PaymentStatus.SUBMITTED, amount: 3000, canceledAt: new Date('2026-01-01') }]),
+      charge('c2', 4000, []),
+    ]);
+    await expect(
+      assertFifoNoPartialAllocation(tx, scope, 4000),
+    ).rejects.toMatchObject({
+      response: { statusCode: 409, message: 'Solo puedes asignar pagos siguiendo la obligación más antigua pendiente.' },
+    });
+  });
+
   it('I: rejects when the unit has no eligible charges', async () => {
     const tx = txWithCharges([]);
     await expect(
       assertFifoNoPartialAllocation(tx, scope, 4000),
     ).rejects.toMatchObject({
       response: { statusCode: 409, message: 'No hay cargos elegibles para asignar a este pago.' },
+    });
+  });
+});
+
+describe('recalculateLockedCharge cancellation semantics', () => {
+  it.each([PaymentStatus.APPROVED, PaymentStatus.RECONCILED])(
+    'does not count a soft-canceled %s allocation as consumed',
+    async (status) => {
+      const update = jest.fn().mockResolvedValue(undefined);
+      const tx = {
+        charge: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'charge-1',
+            amount: 10000,
+            status: ChargeStatus.PAID,
+            paymentAllocations: [{
+              amount: 10000,
+              payment: { status, canceledAt: new Date('2026-01-01') },
+            }],
+          }),
+          update,
+        },
+      } as unknown as Prisma.TransactionClient;
+
+      await recalculateLockedCharge(tx, 'charge-1');
+
+      expect(update).toHaveBeenCalledWith({
+        where: { id: 'charge-1' },
+        data: { status: ChargeStatus.PENDING, updatedAt: expect.any(Date) },
+      });
+    },
+  );
+
+  it('counts active effective allocations as consumed', async () => {
+    const update = jest.fn().mockResolvedValue(undefined);
+    const tx = {
+      charge: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'charge-1',
+          amount: 10000,
+          status: ChargeStatus.PENDING,
+          paymentAllocations: [{
+            amount: 4000,
+            payment: { status: PaymentStatus.RECONCILED, canceledAt: null },
+          }],
+        }),
+        update,
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await recalculateLockedCharge(tx, 'charge-1');
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'charge-1' },
+      data: { status: ChargeStatus.PARTIAL, updatedAt: expect.any(Date) },
     });
   });
 });
