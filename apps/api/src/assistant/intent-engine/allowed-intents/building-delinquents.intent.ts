@@ -57,7 +57,7 @@ export const buildingDelinquentsIntent: IntentDefinition = {
       where: {
         buildingId,
         tenantId,
-        status: ChargeStatus.PENDING, // PENDING includes overdue when overdueSince is set
+        status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
         overdueSince: { not: null },
         canceledAt: null,
       },

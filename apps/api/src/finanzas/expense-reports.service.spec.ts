@@ -303,28 +303,44 @@ describe('ExpenseReportsService.getExpenseHistory (3F6 buckets)', () => {
 });
 
 describe('ExpenseReportsService.getNotasRevelatorias (3F6 line items)', () => {
-  function makeNotasPrisma(commonExps: unknown[]) {
+  function makeNotasPrisma(
+    commonExps: unknown[],
+    options: {
+      buildings?: unknown[];
+      buildingExps?: unknown[];
+      unitCategories?: unknown[];
+    } = {},
+  ) {
+    const expenseFindMany = jest.fn().mockImplementation(
+      async (args: { where: { scopeType: string } }) =>
+        args.where.scopeType === 'TENANT_SHARED' ? commonExps : (options.buildingExps ?? []),
+    );
     return {
       tenant: { findUnique: async () => ({ name: 'T1' }) },
-      building: { findMany: async () => [{ id: 'b-1', name: 'B1' }] },
+      building: { findMany: async () => options.buildings ?? [{ id: 'b-1', name: 'B1' }] },
       income: { findMany: async () => [] },
-      expense: {
-        findMany: async (args: { where: { scopeType: string } }) =>
-          args.where.scopeType === 'TENANT_SHARED' ? commonExps : [],
-      },
-      unitCategory: { findMany: async () => [] },
+      expense: { findMany: expenseFindMany },
+      unitCategory: { findMany: async () => options.unitCategories ?? [] },
       liquidation: { findMany: async () => [] },
       adjustment: { findMany: async () => [] },
     };
   }
 
-  function notaExpense(o: { currencyCode: string; amountMinor: number; invoiceDate?: Date }) {
+  function notaExpense(o: {
+    currencyCode: string;
+    amountMinor: number;
+    invoiceDate?: Date;
+    buildingId?: string;
+    allocations?: Array<{ buildingId: string | null; amountMinor: number | null; percentage: number | null }>;
+  }) {
     return {
       id: 'e-1',
       currencyCode: o.currencyCode,
       amountMinor: o.amountMinor,
       description: 'Exp',
       invoiceDate: o.invoiceDate ?? new Date('2026-07-02T00:00:00Z'),
+      buildingId: o.buildingId ?? null,
+      allocations: o.allocations ?? [],
     };
   }
 
@@ -368,5 +384,68 @@ describe('ExpenseReportsService.getNotasRevelatorias (3F6 line items)', () => {
     for (const alicuota of report.alicuotas) {
       expect(alicuota.baseCurrency).toBe('USD');
     }
+  });
+
+  it('uses persisted unequal shared VES and USD allocations per building, independent of building count', async () => {
+    const svc = makeService(makeNotasPrisma(
+      [
+        notaExpense({ currencyCode: 'VES', amountMinor: 5000, allocations: [{ buildingId: 'b-1', amountMinor: 3500, percentage: null }, { buildingId: 'b-2', amountMinor: 1500, percentage: null }] }),
+        notaExpense({ currencyCode: 'VES', amountMinor: 5000, allocations: [{ buildingId: 'b-1', amountMinor: 3500, percentage: null }, { buildingId: 'b-2', amountMinor: 1500, percentage: null }] }),
+        notaExpense({ currencyCode: 'USD', amountMinor: 10000, allocations: [{ buildingId: 'b-1', amountMinor: 7000, percentage: null }, { buildingId: 'b-2', amountMinor: 3000, percentage: null }] }),
+        notaExpense({ currencyCode: 'ARS', amountMinor: 20000, allocations: [{ buildingId: 'b-1', amountMinor: 20000, percentage: null }], }),
+      ],
+      {
+        buildings: [{ id: 'b-1', name: 'B1' }, { id: 'b-2', name: 'B2' }, { id: 'b-3', name: 'B3' }],
+        buildingExps: [notaExpense({ currencyCode: 'VES', amountMinor: 1000, buildingId: 'b-1' })],
+        unitCategories: [
+          { buildingId: 'b-1', name: 'B1 category', coefficient: 100, units: [{ id: 'u-1', buildingId: 'b-1' }] },
+          { buildingId: 'b-2', name: 'B2 category', coefficient: 100, units: [{ id: 'u-2', buildingId: 'b-2' }] },
+        ],
+      },
+    ));
+
+    const report = await svc.getNotasRevelatorias('t-1', '2026-07', ['TENANT_ADMIN']);
+
+    expect(report.reservaLegal).toEqual([
+      { buildingName: 'B1', byCurrency: [{ currency: 'VES', amountMinor: 800 }] },
+      { buildingName: 'B2', byCurrency: [{ currency: 'VES', amountMinor: 300 }] },
+      { buildingName: 'B3', byCurrency: [] },
+    ]);
+    expect(report.alicuotas.find((a) => a.buildingId === 'b-1')!.rows[0]!.gastosComunesPerUnit).toBe(7000);
+    expect(report.alicuotas.find((a) => a.buildingId === 'b-2')!.rows[0]!.gastosComunesPerUnit).toBe(3000);
+  });
+
+  it('uses percentage only when a shared allocation has no persisted amountMinor', async () => {
+    const svc = makeService(makeNotasPrisma(
+      [notaExpense({
+        currencyCode: 'VES',
+        amountMinor: 10000,
+        allocations: [{ buildingId: 'b-1', amountMinor: null, percentage: 25 }],
+      })],
+    ));
+
+    const report = await svc.getNotasRevelatorias('t-1', '2026-07', ['TENANT_ADMIN']);
+
+    expect(report.reservaLegal).toEqual([
+      { buildingName: 'B1', byCurrency: [{ currency: 'VES', amountMinor: 250 }] },
+    ]);
+  });
+
+  it('loads tenant-scoped shared allocations for the requested period', async () => {
+    const prisma = makeNotasPrisma([]);
+    const svc = makeService(prisma);
+
+    await svc.getNotasRevelatorias('t-1', '2026-07', ['TENANT_ADMIN']);
+
+    expect(prisma.expense.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 't-1', period: '2026-07', scopeType: 'TENANT_SHARED', status: 'VALIDATED' },
+      include: {
+        allocations: {
+          where: { tenantId: 't-1' },
+          select: { buildingId: true, amountMinor: true, percentage: true },
+        },
+      },
+      orderBy: { invoiceDate: 'asc' },
+    });
   });
 });

@@ -252,6 +252,12 @@ export class ExpenseReportsService {
 
         this.prisma.expense.findMany({
           where: { tenantId, period, scopeType: 'TENANT_SHARED', status: 'VALIDATED' },
+          include: {
+            allocations: {
+              where: { tenantId },
+              select: { buildingId: true, amountMinor: true, percentage: true },
+            },
+          },
           orderBy: { invoiceDate: 'asc' },
         }),
 
@@ -334,6 +340,24 @@ export class ExpenseReportsService {
       ),
     };
 
+    const sharedAmountsByBuilding = new Map<string, ReportCurrencyInput[]>();
+    for (const expense of commonExps) {
+      for (const allocation of expense.allocations) {
+        if (!allocation.buildingId) continue;
+
+        const amountMinor =
+          allocation.amountMinor ??
+          Math.floor(expense.amountMinor * ((allocation.percentage ?? 0) / 100));
+        const amounts = sharedAmountsByBuilding.get(allocation.buildingId) ?? [];
+        amounts.push({ currency: expense.currencyCode, amountMinor });
+        sharedAmountsByBuilding.set(allocation.buildingId, amounts);
+      }
+    }
+    const getSharedAmountForBuilding = (buildingId: string, currency: string): number =>
+      (sharedAmountsByBuilding.get(buildingId) ?? [])
+        .filter((amount) => amount.currency === currency)
+        .reduce((sum, amount) => sum + amount.amountMinor, 0);
+
     // ── Building-specific expenses ─────────────────────────────────────────
     const buildingExpenses: BuildingExpenseSection[] = buildings.map((b) => {
       const bExps = buildingExps.filter((e) => e.buildingId === b.id);
@@ -370,8 +394,8 @@ export class ExpenseReportsService {
       const bVesTotal = buildingExps
         .filter((e) => e.buildingId === b.id && e.currencyCode === 'VES')
         .reduce((s, e) => s + e.amountMinor, 0);
-      const sharedVes = commonExps.filter((e) => e.currencyCode === 'VES').reduce((s, e) => s + e.amountMinor, 0);
-      const reservaVES = Math.floor((bVesTotal + sharedVes / Math.max(buildings.length, 1)) * 0.1);
+      const sharedVes = getSharedAmountForBuilding(b.id, 'VES');
+      const reservaVES = Math.floor((bVesTotal + sharedVes) * 0.1);
       if (reservaVES > 0) {
         reservaByCurrency.push({ currency: 'VES', amountMinor: reservaVES });
       }
@@ -384,9 +408,7 @@ export class ExpenseReportsService {
     // ── Alícuotas per building ─────────────────────────────────────────────
     const alicuotas: BuildingAlicuota[] = buildings.map((b) => {
       const bCategories = unitCategories.filter((uc) => uc.buildingId === b.id);
-      const bComunesUSD = commonExps
-        .filter((e) => e.currencyCode === 'USD')
-        .reduce((s, e) => s + e.amountMinor, 0);
+      const bComunesUSD = getSharedAmountForBuilding(b.id, 'USD');
       const bPropiosUSD = buildingExps
         .filter((e) => e.buildingId === b.id && e.currencyCode === 'USD')
         .reduce((s, e) => s + e.amountMinor, 0);

@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { PaymentStatus } from '@prisma/client';
+import { ChargeStatus, PaymentStatus } from '@prisma/client';
 import { buildingDelinquentsIntent } from './building-delinquents.intent';
 import { IntentExecutionResult } from '../intent.types';
 
@@ -189,5 +189,98 @@ describe('building_delinquents intent (3F5 decision B)', () => {
       ],
       totalUnitsWithDebt: 3,
     });
+  });
+
+  it('includes PENDING full debt and PARTIAL active approved outstanding debt', async () => {
+    const prisma = makePrisma([
+      chg({
+        unitId: 'unit-pending',
+        amount: 10000,
+        currency: 'USD',
+        dueDate: '2026-01-01T00:00:00Z',
+        status: ChargeStatus.PENDING,
+      }),
+      chg({
+        unitId: 'unit-partial',
+        amount: 10000,
+        currency: 'USD',
+        dueDate: '2026-01-02T00:00:00Z',
+        status: ChargeStatus.PARTIAL,
+        allocations: [{ amount: 4000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }],
+      }),
+    ]);
+
+    const result = await buildingDelinquentsIntent.executor({
+      tenantId: 'tenant-1',
+      entityIds: { buildingId: 'building-1' },
+      filters: {},
+      pagination: { limit: 20 },
+      prisma: prisma as never,
+      userRoles: ['TENANT_ADMIN'],
+    } as never);
+
+    expect(result.data).toEqual({
+      delinquents: [
+        { label: 'Label unit-pending', unitCode: 'code-unit-pending', outstandingByCurrency: [{ currency: 'USD', amountMinor: 10000 }], earliestDue: new Date('2026-01-01T00:00:00Z') },
+        { label: 'Label unit-partial', unitCode: 'code-unit-partial', outstandingByCurrency: [{ currency: 'USD', amountMinor: 6000 }], earliestDue: new Date('2026-01-02T00:00:00Z') },
+      ],
+      totalUnitsWithDebt: 2,
+    });
+  });
+
+  it('excludes a fully consumed PARTIAL charge through the canonical outstanding filter', async () => {
+    const result = await run(undefined, [
+      chg({
+        unitId: 'unit-consumed',
+        amount: 10000,
+        dueDate: '2026-01-01T00:00:00Z',
+        status: ChargeStatus.PARTIAL,
+        allocations: [{ amount: 10000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }],
+      }),
+    ]);
+
+    expect(result.data).toEqual({ delinquents: [], totalUnitsWithDebt: 0 });
+  });
+
+  it('counts a soft-canceled allocation as full PARTIAL debt', async () => {
+    const result = await run(undefined, [
+      chg({
+        unitId: 'unit-canceled-allocation',
+        amount: 10000,
+        dueDate: '2026-01-01T00:00:00Z',
+        status: ChargeStatus.PARTIAL,
+        allocations: [{ amount: 10000, payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-01-03T00:00:00Z') } }],
+      }),
+    ]);
+
+    expect(result.data).toEqual({
+      delinquents: [
+        { label: 'Label unit-canceled-allocation', unitCode: 'code-unit-canceled-allocation', outstandingByCurrency: [{ currency: 'ARS', amountMinor: 10000 }], earliestDue: new Date('2026-01-01T00:00:00Z') },
+      ],
+      totalUnitsWithDebt: 1,
+    });
+  });
+
+  it('scopes the candidate query to active overdue charges in the tenant and building', async () => {
+    const prisma = makePrisma([]);
+
+    await buildingDelinquentsIntent.executor({
+      tenantId: 'tenant-1',
+      entityIds: { buildingId: 'building-1' },
+      filters: {},
+      pagination: { limit: 20 },
+      prisma: prisma as never,
+      userRoles: ['TENANT_ADMIN'],
+    } as never);
+
+    expect(prisma.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        tenantId: 'tenant-1',
+        buildingId: 'building-1',
+        status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
+        overdueSince: { not: null },
+        canceledAt: null,
+      },
+    }));
   });
 });
