@@ -2540,7 +2540,7 @@ export class AssistantService implements OnModuleInit {
           paymentAllocations: {
             include: {
               payment: {
-                select: { status: true },
+                select: { status: true, canceledAt: true },
               },
             },
           },
@@ -2887,7 +2887,7 @@ export class AssistantService implements OnModuleInit {
         paymentAllocations: {
           include: {
             payment: {
-              select: { status: true },
+              select: { status: true, canceledAt: true },
             },
           },
         },
@@ -3121,7 +3121,7 @@ export class AssistantService implements OnModuleInit {
         paymentAllocations: {
           include: {
             payment: {
-              select: { status: true },
+              select: { status: true, canceledAt: true },
             },
           },
         },
@@ -3249,7 +3249,7 @@ export class AssistantService implements OnModuleInit {
           paymentAllocations: {
             include: {
               payment: {
-                select: { status: true },
+                select: { status: true, canceledAt: true },
               },
             },
           },

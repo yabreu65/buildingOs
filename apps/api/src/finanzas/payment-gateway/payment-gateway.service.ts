@@ -288,7 +288,7 @@ export class PaymentGatewayService {
         where: { id: charge.id, tenantId: charge.tenantId, buildingId: charge.buildingId },
         include: {
           paymentAllocations: {
-            include: { payment: { select: { id: true, status: true } } },
+            include: { payment: { select: { id: true, status: true, canceledAt: true } } },
           },
         },
       });

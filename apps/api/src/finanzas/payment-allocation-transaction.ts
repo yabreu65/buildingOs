@@ -64,7 +64,11 @@ export type PaymentSideAllocationClassification =
 
 interface ChargeAvailabilityAllocation {
   readonly amount: number;
-  readonly payment: { readonly id?: string; readonly status: PaymentStatus };
+  readonly payment: {
+    readonly id?: string;
+    readonly status: PaymentStatus;
+    readonly canceledAt: Date | string | null;
+  };
 }
 
 export interface DeletedAllocationMetadata {
@@ -232,7 +236,7 @@ export async function assertFifoNoPartialAllocation(
     include: {
       paymentAllocations: {
         include: {
-          payment: { select: { id: true, status: true } },
+          payment: { select: { id: true, status: true, canceledAt: true } },
         },
       },
     },
@@ -250,9 +254,9 @@ export async function assertFifoNoPartialAllocation(
         claimedByCurrentPayment += allocation.amount;
         continue;
       }
-      if (isEffectivePaymentStatus(status)) {
+      if (isEffectivePaymentStatus(status) && !allocation.payment?.canceledAt) {
         effectiveConsumed += allocation.amount;
-      } else if (status === PaymentStatus.SUBMITTED) {
+      } else if (status === PaymentStatus.SUBMITTED && !allocation.payment?.canceledAt) {
         reservedByOtherPayments += allocation.amount;
       }
     }
@@ -347,7 +351,7 @@ async function loadLockedCharge(tx: Prisma.TransactionClient, scope: AllocationS
     },
     include: {
       paymentAllocations: {
-        include: { payment: { select: { status: true } } },
+        include: { payment: { select: { status: true, canceledAt: true } } },
       },
     },
   });
@@ -365,14 +369,16 @@ export async function recalculateLockedCharge(
     where: { id: chargeId },
     include: {
       paymentAllocations: {
-        include: { payment: { select: { status: true } } },
+        include: { payment: { select: { status: true, canceledAt: true } } },
       },
     },
   });
   if (!charge) return;
   const consumed = charge.paymentAllocations.reduce(
     (sum, allocation) =>
-      isEffectivePaymentStatus(allocation.payment.status) ? sum + allocation.amount : sum,
+      isEffectivePaymentStatus(allocation.payment.status) && !allocation.payment.canceledAt
+        ? sum + allocation.amount
+        : sum,
     0,
   );
   const status = consumed === 0
@@ -392,8 +398,9 @@ export function calculateChargeAvailableOutstanding(
 ): number {
   const consumed = allocations.reduce((sum, allocation) => {
     if (currentPaymentId !== undefined && allocation.payment.id === currentPaymentId) return sum;
-    return isEffectivePaymentStatus(allocation.payment.status) ||
-      allocation.payment.status === PaymentStatus.SUBMITTED
+    return !allocation.payment.canceledAt &&
+      (isEffectivePaymentStatus(allocation.payment.status) ||
+        allocation.payment.status === PaymentStatus.SUBMITTED)
       ? sum + allocation.amount
       : sum;
   }, 0);

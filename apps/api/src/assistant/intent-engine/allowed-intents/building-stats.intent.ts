@@ -1,7 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
+import { ChargeStatus } from '@prisma/client';
 import { Permission } from '../../../rbac/permissions';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
 import { aggregateReportBuckets } from '../../../finanzas/currency-buckets';
+import { calculateChargeOutstandingMinor } from '../../../finanzas/charge-aggregation';
 
 export const buildingStatsIntent: IntentDefinition = {
   name: 'building_stats',
@@ -16,7 +18,7 @@ export const buildingStatsIntent: IntentDefinition = {
       throw new BadRequestException('buildingId required for building_stats intent');
     }
 
-    const [units, openTicketsCount, totalTicketsCount, totalDebtGroups] = await Promise.all([
+    const [units, openTicketsCount, totalTicketsCount, charges] = await Promise.all([
       // Unit counts by type and occupancy
       prisma.unit.groupBy({
         by: ['unitType', 'occupancyStatus'],
@@ -31,11 +33,25 @@ export const buildingStatsIntent: IntentDefinition = {
       prisma.ticket.count({
         where: { buildingId, tenantId },
       }),
-      // Total debt grouped by its stored currency.
-      prisma.charge.groupBy({
-        by: ['currency'],
-        where: { buildingId, tenantId, status: { in: ['PENDING', 'PARTIAL'] } },
-        _sum: { amount: true },
+      // Total debt by stored charge currency, using canonical outstanding:
+      // charge amount minus effective non-canceled allocations, clamped at zero.
+      prisma.charge.findMany({
+        where: {
+          buildingId,
+          tenantId,
+          canceledAt: null,
+          status: { not: ChargeStatus.CANCELED },
+        },
+        select: {
+          amount: true,
+          currency: true,
+          paymentAllocations: {
+            select: {
+              amount: true,
+              payment: { select: { status: true, canceledAt: true } },
+            },
+          },
+        },
       }),
     ]);
 
@@ -58,10 +74,12 @@ export const buildingStatsIntent: IntentDefinition = {
     billableUnits = billableCount;
 
     const totalDebtByCurrency = aggregateReportBuckets(
-      totalDebtGroups.map((group) => ({
-        currency: group.currency,
-        amountMinor: Number(group._sum.amount ?? 0),
-      })),
+      charges
+        .map((charge) => ({
+          currency: charge.currency,
+          amountMinor: calculateChargeOutstandingMinor(charge),
+        }))
+        .filter((bucket) => bucket.amountMinor > 0),
     );
     const averageDebtByCurrency = totalDebtByCurrency.map((bucket) => ({
       currency: bucket.currency,

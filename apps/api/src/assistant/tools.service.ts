@@ -260,7 +260,7 @@ export class AssistantToolsService {
         status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
       },
       include: {
-        paymentAllocations: { include: { payment: { select: { status: true } } } },
+        paymentAllocations: { include: { payment: { select: { status: true, canceledAt: true } } } },
       },
     });
 
@@ -398,7 +398,7 @@ export class AssistantToolsService {
         },
         include: {
           unit: { select: { id: true, label: true, code: true, building: { select: { name: true } } } },
-          paymentAllocations: { include: { payment: { select: { status: true } } } },
+          paymentAllocations: { include: { payment: { select: { status: true, canceledAt: true } } } },
         },
       });
 

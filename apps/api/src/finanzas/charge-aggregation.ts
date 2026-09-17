@@ -14,8 +14,10 @@ import {
  * - Charge outstanding (reportable/accounting) =
  *     Charge.amount - SUM(PaymentAllocation.amount WHERE Payment.status is
  *     accounting-effective).
- * - Accounting-effective = APPROVED | RECONCILED (see payment-status-semantics).
- * - SUBMITTED reservations, REJECTED, CANCELED never reduce outstanding.
+ * - Accounting-effective = APPROVED | RECONCILED (see payment-status-semantics)
+ *   and the payment is not soft-canceled.
+ * - SUBMITTED reservations, REJECTED, CANCELED and soft-canceled payments never
+ *   reduce outstanding.
  * - paymentOriginalAmountMinor, Payment.amount, Payment.currency and
  *   Payment.functionalAmountMinor NEVER participate in charge-side math.
  * - No ExchangeRate lookup, no live FX, no floats.
@@ -23,7 +25,10 @@ import {
 
 export interface ChargeOutstandingInputAllocation {
   readonly amount: number;
-  readonly payment?: { readonly status?: string | null } | null;
+  readonly payment?: {
+    readonly status?: string | null;
+    readonly canceledAt: Date | string | null;
+  } | null;
 }
 
 export interface ChargeOutstandingInput {
@@ -41,7 +46,8 @@ export interface ChargeOutstandingInput {
 export function calculateChargeOutstandingMinor(charge: ChargeOutstandingInput): number {
   const effectiveAllocated = (charge.paymentAllocations ?? []).reduce(
     (sum, allocation) =>
-      isEffectivePaymentStatus(allocation.payment?.status)
+      isEffectivePaymentStatus(allocation.payment?.status) &&
+      !allocation.payment?.canceledAt
         ? sum + allocation.amount
         : sum,
     0,

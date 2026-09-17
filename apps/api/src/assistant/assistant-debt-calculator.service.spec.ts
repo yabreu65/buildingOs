@@ -23,7 +23,7 @@ describe('AssistantDebtCalculatorService', () => {
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
-        paymentAllocations: [{ amount: 2500, payment: { status: PaymentStatus.APPROVED } }],
+        paymentAllocations: [{ amount: 2500, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }],
       }),
     ).toBe(7500);
   });
@@ -33,7 +33,7 @@ describe('AssistantDebtCalculatorService', () => {
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
-        paymentAllocations: [{ amount: 4000, payment: { status: PaymentStatus.RECONCILED } }],
+        paymentAllocations: [{ amount: 4000, payment: { status: PaymentStatus.RECONCILED, canceledAt: null } }],
       }),
     ).toBe(6000);
   });
@@ -44,12 +44,38 @@ describe('AssistantDebtCalculatorService', () => {
         amount: 10000,
         currency: 'ARS',
         paymentAllocations: [
-          { amount: 1000, payment: { status: PaymentStatus.SUBMITTED } },
-          { amount: 2000, payment: { status: PaymentStatus.PENDING } },
-          { amount: 3000, payment: { status: PaymentStatus.REJECTED } },
+          { amount: 1000, payment: { status: PaymentStatus.SUBMITTED, canceledAt: null } },
+          { amount: 2000, payment: { status: PaymentStatus.PENDING, canceledAt: null } },
+          { amount: 3000, payment: { status: PaymentStatus.REJECTED, canceledAt: null } },
         ],
       }),
     ).toBe(10000);
+  });
+
+  it('ignores APPROVED and RECONCILED allocations from soft-canceled payments', () => {
+    expect(
+      service.calculateChargeOutstanding({
+        amount: 10000,
+        currency: 'ARS',
+        paymentAllocations: [
+          { amount: 3000, payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-01-01') } },
+          { amount: 4000, payment: { status: PaymentStatus.RECONCILED, canceledAt: '2026-01-02T00:00:00.000Z' } },
+        ],
+      }),
+    ).toBe(10000);
+  });
+
+  it('applies active APPROVED and RECONCILED allocations', () => {
+    expect(
+      service.calculateChargeOutstanding({
+        amount: 10000,
+        currency: 'ARS',
+        paymentAllocations: [
+          { amount: 3000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } },
+          { amount: 4000, payment: { status: PaymentStatus.RECONCILED, canceledAt: null } },
+        ],
+      }),
+    ).toBe(3000);
   });
 
   it('never returns negative debt on over-allocation', () => {
@@ -57,7 +83,7 @@ describe('AssistantDebtCalculatorService', () => {
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
-        paymentAllocations: [{ amount: 15000, payment: { status: PaymentStatus.APPROVED } }],
+        paymentAllocations: [{ amount: 15000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }],
       }),
     ).toBe(0);
   });
@@ -66,7 +92,7 @@ describe('AssistantDebtCalculatorService', () => {
     const result = service.calculateOutstandingByCurrency([
       { amount: 10000, currency: 'ARS', paymentAllocations: [] },
       { amount: 5000, currency: 'USD', paymentAllocations: [] },
-      { amount: 2000, currency: 'ARS', paymentAllocations: [{ amount: 2000, payment: { status: PaymentStatus.APPROVED } }] },
+      { amount: 2000, currency: 'ARS', paymentAllocations: [{ amount: 2000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }] },
     ]);
 
     expect(result).toEqual([
@@ -81,11 +107,11 @@ describe('AssistantDebtCalculatorService', () => {
         unitId: 'unit-1',
         amount: 10000,
         currency: 'ARS',
-        paymentAllocations: [{ amount: 2500, payment: { status: PaymentStatus.APPROVED } }],
+        paymentAllocations: [{ amount: 2500, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }],
       },
       { unitId: 'unit-1', amount: 5000, currency: 'USD', paymentAllocations: [] },
       { unitId: 'unit-2', amount: 7000, currency: 'ARS', paymentAllocations: [] },
-      { unitId: 'unit-3', amount: 9000, currency: 'VES', paymentAllocations: [{ amount: 9000, payment: { status: PaymentStatus.APPROVED } }] },
+      { unitId: 'unit-3', amount: 9000, currency: 'VES', paymentAllocations: [{ amount: 9000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }] },
     ]);
 
     expect(result.get('unit-1')).toEqual([

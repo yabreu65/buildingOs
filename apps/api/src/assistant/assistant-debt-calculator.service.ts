@@ -8,7 +8,10 @@ import {
 
 export interface AssistantDebtAllocation {
   readonly amount: number;
-  readonly payment?: { readonly status: PaymentStatus | string } | null;
+  readonly payment?: {
+    readonly status: PaymentStatus | string;
+    readonly canceledAt: Date | string | null;
+  } | null;
 }
 
 export interface AssistantDebtCharge {

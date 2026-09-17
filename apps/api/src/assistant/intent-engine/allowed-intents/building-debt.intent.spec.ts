@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { PaymentStatus } from '@prisma/client';
 import { buildingDebtIntent, buildChargePeriodFilter } from './building-debt.intent';
 
 describe('buildingDebtIntent period handling', () => {
@@ -13,14 +14,31 @@ describe('buildingDebtIntent period handling', () => {
     jest.useRealTimers();
   });
 
-  function buildPrismaMock() {
+  function buildPrismaMock(charges: unknown[] = []) {
     return {
       tenant: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ currency: 'ARS' }),
       },
       charge: {
-        findMany: jest.fn().mockResolvedValue([]),
+        findMany: jest.fn().mockResolvedValue(charges),
       },
+    };
+  }
+
+  function charge(overrides: {
+    unitId: string;
+    amount: number;
+    currency?: string;
+    dueDate?: Date;
+    allocations?: Array<{ amount: number; payment?: { status?: PaymentStatus | string; canceledAt?: Date | string | null } | null }>;
+  }) {
+    return {
+      unitId: overrides.unitId,
+      amount: overrides.amount,
+      currency: overrides.currency ?? 'ARS',
+      dueDate: overrides.dueDate ?? new Date('2026-01-01T00:00:00.000Z'),
+      unit: { code: `code-${overrides.unitId}`, label: `Label ${overrides.unitId}` },
+      paymentAllocations: overrides.allocations ?? [],
     };
   }
 
@@ -185,5 +203,63 @@ describe('buildingDebtIntent period handling', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(prisma.charge.findMany).not.toHaveBeenCalled();
+  });
+
+  it('loads payment canceledAt and uses canonical outstanding in currency buckets and unit output', async () => {
+    const prisma = buildPrismaMock([
+      charge({
+        unitId: 'unit-approved-canceled',
+        amount: 10000,
+        currency: 'USD',
+        allocations: [{ amount: 10000, payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-01-01') } }],
+      }),
+      charge({
+        unitId: 'unit-reconciled-canceled',
+        amount: 12000,
+        currency: 'USD',
+        allocations: [{ amount: 12000, payment: { status: PaymentStatus.RECONCILED, canceledAt: '2026-01-02T00:00:00.000Z' } }],
+      }),
+      charge({
+        unitId: 'unit-active',
+        amount: 10000,
+        currency: 'COP',
+        allocations: [
+          { amount: 3000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } },
+          { amount: 2000, payment: { status: PaymentStatus.RECONCILED, canceledAt: null } },
+          { amount: 4000, payment: { status: PaymentStatus.SUBMITTED, canceledAt: null } },
+          { amount: 1000, payment: { status: PaymentStatus.REJECTED, canceledAt: null } },
+        ],
+      }),
+    ]);
+
+    const result = await buildingDebtIntent.executor({
+      tenantId: 'tenant-1',
+      entityIds: { buildingId: 'building-1' },
+      filters: {},
+      pagination: { limit: 20 },
+      prisma: prisma as never,
+    });
+
+    expect(prisma.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        paymentAllocations: expect.objectContaining({
+          include: expect.objectContaining({
+            payment: { select: { status: true, canceledAt: true } },
+          }),
+        }),
+      }),
+    }));
+    expect(result.data).toEqual(expect.objectContaining({
+      outstandingByCurrency: [
+        { currency: 'USD', amountMinor: 22000 },
+        { currency: 'COP', amountMinor: 5000 },
+      ],
+      totalUnits: 3,
+    }));
+    expect((result.data as { byUnit: Array<{ label: string; remainingDebtByCurrency: unknown[] }> }).byUnit).toEqual(expect.arrayContaining([
+      { label: 'Label unit-approved-canceled', unitCode: 'code-unit-approved-canceled', remainingDebtByCurrency: [{ currency: 'USD', amountMinor: 10000 }] },
+      { label: 'Label unit-reconciled-canceled', unitCode: 'code-unit-reconciled-canceled', remainingDebtByCurrency: [{ currency: 'USD', amountMinor: 12000 }] },
+      { label: 'Label unit-active', unitCode: 'code-unit-active', remainingDebtByCurrency: [{ currency: 'COP', amountMinor: 5000 }] },
+    ]));
   });
 });
