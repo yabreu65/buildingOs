@@ -52,6 +52,32 @@ describe('AssistantDebtCalculatorService', () => {
     ).toBe(10000);
   });
 
+  it('ignores APPROVED and RECONCILED allocations from soft-canceled payments', () => {
+    expect(
+      service.calculateChargeOutstanding({
+        amount: 10000,
+        currency: 'ARS',
+        paymentAllocations: [
+          { amount: 3000, payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-01-01') } },
+          { amount: 4000, payment: { status: PaymentStatus.RECONCILED, canceledAt: '2026-01-02T00:00:00.000Z' } },
+        ],
+      }),
+    ).toBe(10000);
+  });
+
+  it('applies active APPROVED and RECONCILED allocations', () => {
+    expect(
+      service.calculateChargeOutstanding({
+        amount: 10000,
+        currency: 'ARS',
+        paymentAllocations: [
+          { amount: 3000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } },
+          { amount: 4000, payment: { status: PaymentStatus.RECONCILED, canceledAt: null } },
+        ],
+      }),
+    ).toBe(3000);
+  });
+
   it('never returns negative debt on over-allocation', () => {
     expect(
       service.calculateChargeOutstanding({

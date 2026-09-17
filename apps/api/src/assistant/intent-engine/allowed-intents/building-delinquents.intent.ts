@@ -68,6 +68,7 @@ export const buildingDelinquentsIntent: IntentDefinition = {
             payment: {
               select: {
                 status: true,
+                canceledAt: true,
               },
             },
           },

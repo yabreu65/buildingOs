@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { PaymentStatus } from '@prisma/client';
 import { buildingDelinquentsIntent } from './building-delinquents.intent';
 import { IntentExecutionResult } from '../intent.types';
 
@@ -10,7 +11,7 @@ function chg(o: {
   dueDate: string;
   status?: string;
   overdueSince?: string | null;
-  allocations?: Array<{ amount: number; payment?: { status?: string } | null }>;
+  allocations?: Array<{ amount: number; payment?: { status?: string; canceledAt?: Date | string | null } | null }>;
 }) {
   return {
     id: o.id || `c-${o.unitId}`,
@@ -28,7 +29,7 @@ function chg(o: {
 
 function makePrisma(charges: unknown[]) {
   return {
-    charge: { findMany: async () => charges },
+    charge: { findMany: jest.fn().mockResolvedValue(charges) },
     tenant: { findUniqueOrThrow: async () => ({ currency: 'ARS' }) },
   };
 }
@@ -130,5 +131,63 @@ describe('building_delinquents intent (3F5 decision B)', () => {
       } as never),
     ).rejects.toThrow(BadRequestException);
     expect(prisma.charge.findMany).not.toHaveBeenCalled();
+  });
+
+  it('loads payment canceledAt and uses canonical outstanding for delinquent currency buckets', async () => {
+    const prisma = makePrisma([
+      chg({
+        unitId: 'unit-approved-canceled',
+        amount: 10000,
+        currency: 'USD',
+        dueDate: '2026-01-01T00:00:00Z',
+        allocations: [{ amount: 10000, payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-01-01') } }],
+      }),
+      chg({
+        unitId: 'unit-reconciled-canceled',
+        amount: 12000,
+        currency: 'USD',
+        dueDate: '2026-01-02T00:00:00Z',
+        allocations: [{ amount: 12000, payment: { status: PaymentStatus.RECONCILED, canceledAt: '2026-01-02T00:00:00.000Z' } }],
+      }),
+      chg({
+        unitId: 'unit-active',
+        amount: 10000,
+        currency: 'COP',
+        dueDate: '2026-01-03T00:00:00Z',
+        allocations: [
+          { amount: 3000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } },
+          { amount: 2000, payment: { status: PaymentStatus.RECONCILED, canceledAt: null } },
+          { amount: 4000, payment: { status: PaymentStatus.SUBMITTED, canceledAt: null } },
+          { amount: 1000, payment: { status: PaymentStatus.REJECTED, canceledAt: null } },
+        ],
+      }),
+    ]);
+
+    const result = await buildingDelinquentsIntent.executor({
+      tenantId: 'tenant-1',
+      entityIds: { buildingId: 'building-1' },
+      filters: {},
+      pagination: { limit: 20 },
+      prisma: prisma as never,
+      userRoles: ['TENANT_ADMIN'],
+    } as never);
+
+    expect(prisma.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        paymentAllocations: expect.objectContaining({
+          include: expect.objectContaining({
+            payment: { select: { status: true, canceledAt: true } },
+          }),
+        }),
+      }),
+    }));
+    expect(result.data).toEqual({
+      delinquents: [
+        { label: 'Label unit-approved-canceled', unitCode: 'code-unit-approved-canceled', outstandingByCurrency: [{ currency: 'USD', amountMinor: 10000 }], earliestDue: new Date('2026-01-01T00:00:00Z') },
+        { label: 'Label unit-reconciled-canceled', unitCode: 'code-unit-reconciled-canceled', outstandingByCurrency: [{ currency: 'USD', amountMinor: 12000 }], earliestDue: new Date('2026-01-02T00:00:00Z') },
+        { label: 'Label unit-active', unitCode: 'code-unit-active', outstandingByCurrency: [{ currency: 'COP', amountMinor: 5000 }], earliestDue: new Date('2026-01-03T00:00:00Z') },
+      ],
+      totalUnitsWithDebt: 3,
+    });
   });
 });
