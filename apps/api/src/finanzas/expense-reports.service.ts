@@ -7,6 +7,126 @@ import {
   type ReportCurrencyAmountBucket,
   type ReportCurrencyInput,
 } from './currency-buckets';
+import {
+  allocateByLargestRemainder,
+  toBasisPoints,
+} from './movement-allocation.service';
+
+const TOTAL_PERCENTAGE_BASIS_POINTS = 100 * 10_000;
+
+interface SharedExpenseAllocation {
+  readonly buildingId: string;
+  readonly amountMinor: number | null;
+  readonly percentage: number | null;
+}
+
+/**
+ * Reconstructs legacy percentage allocations without altering persisted amounts.
+ * It mirrors the canonical allocation service's integer basis-point, floor, and
+ * largest-remainder semantics; ties are resolved by original allocation order.
+ */
+function reconstructSharedAllocationAmounts(
+  totalAmountMinor: number,
+  allocations: readonly SharedExpenseAllocation[],
+): Array<number | null> {
+  const amounts = allocations.map((allocation) => allocation.amountMinor);
+  const missing = allocations
+    .map((allocation, index) => ({ allocation, index }))
+    .filter(({ allocation }) => allocation.amountMinor === null);
+
+  if (missing.length === 0) return amounts;
+
+  let persistedTotal = 0;
+  for (const amountMinor of amounts) {
+    persistedTotal += amountMinor ?? 0;
+  }
+  const hasPersistedAmounts = allocations.some((allocation) => allocation.amountMinor !== null);
+  const weightedMissing = missing.map(({ allocation, index }) => ({
+    index,
+    basisPoints: allocation.percentage === null ? 0 : toBasisPoints(allocation.percentage),
+  }));
+  const totalBasisPoints = weightedMissing.reduce(
+    (sum, allocation) => sum + allocation.basisPoints,
+    0,
+  );
+  const hasCompletePercentageSet =
+    weightedMissing.every(
+      (allocation) => Number.isSafeInteger(allocation.basisPoints) && allocation.basisPoints > 0,
+    ) && totalBasisPoints > 0;
+  const remainingAmountMinor = totalAmountMinor - persistedTotal;
+  if (
+    !hasPersistedAmounts &&
+    hasCompletePercentageSet &&
+    totalBasisPoints === TOTAL_PERCENTAGE_BASIS_POINTS
+  ) {
+    const reconstructed = allocateByLargestRemainder(
+      totalAmountMinor,
+      missing.map(({ allocation }) => ({
+        buildingId: allocation.buildingId,
+        percentage: allocation.percentage ?? 0,
+      })),
+    );
+    for (const [index, allocation] of missing.entries()) {
+      amounts[allocation.index] = reconstructed[index] ?? null;
+    }
+    return amounts;
+  }
+
+  const canReconstructMixedSet =
+    hasPersistedAmounts &&
+    hasCompletePercentageSet &&
+    remainingAmountMinor >= 0;
+
+  if (canReconstructMixedSet) {
+    const reconstructed = weightedMissing.map((allocation) => {
+      const numerator = remainingAmountMinor * allocation.basisPoints;
+      return {
+        ...allocation,
+        amountMinor: Math.floor(numerator / totalBasisPoints),
+        remainder: numerator % totalBasisPoints,
+      };
+    });
+    const allocatedAmountMinor = reconstructed.reduce(
+      (sum, allocation) => sum + allocation.amountMinor,
+      0,
+    );
+    const missingCents = remainingAmountMinor - allocatedAmountMinor;
+
+    reconstructed
+      .slice()
+      .sort((a, b) => b.remainder - a.remainder || a.index - b.index)
+      .slice(0, missingCents)
+      .forEach((allocation) => {
+        const targetAllocation = reconstructed.find(
+          (candidate) => candidate.index === allocation.index,
+        );
+        if (targetAllocation) {
+          targetAllocation.amountMinor += 1;
+        }
+      });
+
+    for (const allocation of reconstructed) {
+      amounts[allocation.index] = allocation.amountMinor;
+    }
+    return amounts;
+  }
+
+  // An all-null, incomplete percentage set cannot account for the full expense.
+  // Preserve its known partial shares without creating an artificial remainder.
+  if (
+    !hasPersistedAmounts &&
+    hasCompletePercentageSet &&
+    totalBasisPoints < TOTAL_PERCENTAGE_BASIS_POINTS
+  ) {
+    for (const allocation of weightedMissing) {
+      amounts[allocation.index] = Math.floor(
+        (totalAmountMinor * allocation.basisPoints) / TOTAL_PERCENTAGE_BASIS_POINTS,
+      );
+    }
+  }
+
+  return amounts;
+}
 
 // ── Types for Notas Revelatorias ──────────────────────────────────────────
 
@@ -255,6 +375,7 @@ export class ExpenseReportsService {
           include: {
             allocations: {
               where: { tenantId },
+              orderBy: { buildingId: 'asc' },
               select: { buildingId: true, amountMinor: true, percentage: true },
             },
           },
@@ -342,12 +463,14 @@ export class ExpenseReportsService {
 
     const sharedAmountsByBuilding = new Map<string, ReportCurrencyInput[]>();
     for (const expense of commonExps) {
-      for (const allocation of expense.allocations) {
-        if (!allocation.buildingId) continue;
+      const allocationAmounts = reconstructSharedAllocationAmounts(
+        expense.amountMinor,
+        expense.allocations,
+      );
+      for (const [index, allocation] of expense.allocations.entries()) {
+        const amountMinor = allocationAmounts[index];
+        if (!allocation.buildingId || amountMinor === null || amountMinor === undefined) continue;
 
-        const amountMinor =
-          allocation.amountMinor ??
-          Math.floor(expense.amountMinor * ((allocation.percentage ?? 0) / 100));
         const amounts = sharedAmountsByBuilding.get(allocation.buildingId) ?? [];
         amounts.push({ currency: expense.currencyCode, amountMinor });
         sharedAmountsByBuilding.set(allocation.buildingId, amounts);

@@ -386,6 +386,118 @@ describe('ExpenseReportsService.getNotasRevelatorias (3F6 line items)', () => {
     }
   });
 
+  it('reconstructs a 50/50 all-null allocation exactly with a first-entry remainder', async () => {
+    const svc = makeService(makeNotasPrisma(
+      [
+        notaExpense({
+          currencyCode: 'VES',
+          amountMinor: 10001,
+          allocations: [
+            { buildingId: 'b-1', amountMinor: null, percentage: 50 },
+            { buildingId: 'b-2', amountMinor: null, percentage: 50 },
+          ],
+        }),
+        notaExpense({
+          currencyCode: 'USD',
+          amountMinor: 10001,
+          allocations: [
+            { buildingId: 'b-1', amountMinor: null, percentage: 50 },
+            { buildingId: 'b-2', amountMinor: null, percentage: 50 },
+          ],
+        }),
+      ],
+      {
+        buildings: [
+          { id: 'b-1', name: 'B1' },
+          { id: 'b-2', name: 'B2' },
+          { id: 'b-3', name: 'B3' },
+        ],
+        buildingExps: [notaExpense({ currencyCode: 'VES', amountMinor: 9, buildingId: 'b-1' })],
+        unitCategories: [
+          { buildingId: 'b-1', name: 'B1 category', coefficient: 100, units: [{ id: 'u-1', buildingId: 'b-1' }] },
+          { buildingId: 'b-2', name: 'B2 category', coefficient: 100, units: [{ id: 'u-2', buildingId: 'b-2' }] },
+        ],
+      },
+    ));
+
+    const report = await svc.getNotasRevelatorias('t-1', '2026-07', ['TENANT_ADMIN']);
+    const b1 = report.alicuotas.find((alicuota) => alicuota.buildingId === 'b-1')!;
+    const b2 = report.alicuotas.find((alicuota) => alicuota.buildingId === 'b-2')!;
+
+    expect(b1.rows[0]!.gastosComunesPerUnit).toBe(5001);
+    expect(b2.rows[0]!.gastosComunesPerUnit).toBe(5000);
+    expect(b1.rows[0]!.gastosComunesPerUnit + b2.rows[0]!.gastosComunesPerUnit).toBe(10001);
+    expect(report.reservaLegal).toEqual([
+      { buildingName: 'B1', byCurrency: [{ currency: 'VES', amountMinor: 501 }] },
+      { buildingName: 'B2', byCurrency: [{ currency: 'VES', amountMinor: 500 }] },
+      { buildingName: 'B3', byCurrency: [] },
+    ]);
+  });
+
+  it('reconstructs three-way fractional percentages with an exact total', async () => {
+    const svc = makeService(makeNotasPrisma(
+      [notaExpense({
+        currencyCode: 'USD',
+        amountMinor: 10001,
+        allocations: [
+          { buildingId: 'b-1', amountMinor: null, percentage: 33.33 },
+          { buildingId: 'b-2', amountMinor: null, percentage: 33.33 },
+          { buildingId: 'b-3', amountMinor: null, percentage: 33.34 },
+        ],
+      })],
+      {
+        buildings: [
+          { id: 'b-1', name: 'B1' },
+          { id: 'b-2', name: 'B2' },
+          { id: 'b-3', name: 'B3' },
+        ],
+        unitCategories: [
+          { buildingId: 'b-1', name: 'B1 category', coefficient: 100, units: [{ id: 'u-1', buildingId: 'b-1' }] },
+          { buildingId: 'b-2', name: 'B2 category', coefficient: 100, units: [{ id: 'u-2', buildingId: 'b-2' }] },
+          { buildingId: 'b-3', name: 'B3 category', coefficient: 100, units: [{ id: 'u-3', buildingId: 'b-3' }] },
+        ],
+      },
+    ));
+
+    const report = await svc.getNotasRevelatorias('t-1', '2026-07', ['TENANT_ADMIN']);
+    const shares = report.alicuotas.map((alicuota) => alicuota.rows[0]!.gastosComunesPerUnit);
+
+    expect(shares).toEqual([3333, 3333, 3335]);
+    expect(shares.reduce((sum, amount) => sum + amount, 0)).toBe(10001);
+  });
+
+  it('keeps persisted allocations authoritative and reconstructs only the null remainder', async () => {
+    const svc = makeService(makeNotasPrisma(
+      [notaExpense({
+        currencyCode: 'USD',
+        amountMinor: 10001,
+        allocations: [
+          { buildingId: 'b-1', amountMinor: 7000, percentage: 70 },
+          { buildingId: 'b-2', amountMinor: null, percentage: 10 },
+          { buildingId: 'b-3', amountMinor: null, percentage: 20 },
+        ],
+      })],
+      {
+        buildings: [
+          { id: 'b-1', name: 'B1' },
+          { id: 'b-2', name: 'B2' },
+          { id: 'b-3', name: 'B3' },
+        ],
+        unitCategories: [
+          { buildingId: 'b-1', name: 'B1 category', coefficient: 100, units: [{ id: 'u-1', buildingId: 'b-1' }] },
+          { buildingId: 'b-2', name: 'B2 category', coefficient: 100, units: [{ id: 'u-2', buildingId: 'b-2' }] },
+          { buildingId: 'b-3', name: 'B3 category', coefficient: 100, units: [{ id: 'u-3', buildingId: 'b-3' }] },
+        ],
+      },
+    ));
+
+    const report = await svc.getNotasRevelatorias('t-1', '2026-07', ['TENANT_ADMIN']);
+    const shares = report.alicuotas.map((alicuota) => alicuota.rows[0]!.gastosComunesPerUnit);
+
+    expect(shares).toEqual([7000, 1000, 2001]);
+    expect(shares.reduce((sum, amount) => sum + amount, 0)).toBe(10001);
+  });
+
   it('uses persisted unequal shared VES and USD allocations per building, independent of building count', async () => {
     const svc = makeService(makeNotasPrisma(
       [
@@ -415,7 +527,7 @@ describe('ExpenseReportsService.getNotasRevelatorias (3F6 line items)', () => {
     expect(report.alicuotas.find((a) => a.buildingId === 'b-2')!.rows[0]!.gastosComunesPerUnit).toBe(3000);
   });
 
-  it('uses percentage only when a shared allocation has no persisted amountMinor', async () => {
+  it('preserves known partial percentage shares when an all-null legacy set is incomplete', async () => {
     const svc = makeService(makeNotasPrisma(
       [notaExpense({
         currencyCode: 'VES',
@@ -442,6 +554,7 @@ describe('ExpenseReportsService.getNotasRevelatorias (3F6 line items)', () => {
       include: {
         allocations: {
           where: { tenantId: 't-1' },
+          orderBy: { buildingId: 'asc' },
           select: { buildingId: true, amountMinor: true, percentage: true },
         },
       },
