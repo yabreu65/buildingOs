@@ -33,7 +33,8 @@ export class ExpenseImportService {
     buildingId: string,
     period: string,
     rows: ExpenseImportRow[],
-    userId: string,
+    membershipId: string,
+    actorUserId: string,
   ): Promise<ExpenseImportResult> {
     const errors: { rowIndex: number; reason: string }[] = [];
     const createdExpenses: string[] = [];
@@ -104,14 +105,14 @@ export class ExpenseImportService {
             currencyCode: validated.currencyCode,
             invoiceDate: validated.invoiceDate,
             status: 'DRAFT',
-            createdByMembershipId: userId,
+            createdByMembershipId: membershipId,
           },
         });
 
         createdExpenses.push(expense.id);
         void this.auditService.createLog({
           tenantId,
-          actorUserId: userId,
+          actorUserId,
           action: AuditAction.EXPENSE_IMPORTED,
           entityType: 'Expense',
           entityId: expense.id,

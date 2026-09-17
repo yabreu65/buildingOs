@@ -231,4 +231,40 @@ describe('FinanzasController administrative portal access', () => {
       query,
     );
   });
+
+  it('passes membership attribution separately from the authenticated audit actor when importing expenses', async () => {
+    const importExpensesFromRows = jest.fn().mockResolvedValue({
+      totalRows: 1,
+      successCount: 1,
+      failureCount: 0,
+      createdExpenses: ['expense-1'],
+      errors: [],
+    });
+    const importController = new FinanzasController(
+      {} as never,
+      { importExpensesFromRows } as never,
+    );
+    const importDto = {
+      period: '2026-08',
+      rows: [{
+        fecha: '10/08/2026',
+        descripcion: 'Municipal tax',
+        monto: 12.34,
+        moneda: 'ARS',
+        edificio: 'Tower A',
+        categoria: 'Taxes',
+      }],
+    } as never;
+
+    await importController.importExpenses('building-1', importDto, stubReq(['TENANT_ADMIN']));
+
+    expect(importExpensesFromRows).toHaveBeenCalledWith(
+      'tenant-1',
+      'building-1',
+      '2026-08',
+      importDto.rows,
+      'member-1',
+      'user-1',
+    );
+  });
 });

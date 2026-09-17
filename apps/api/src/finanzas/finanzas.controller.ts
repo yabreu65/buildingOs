@@ -520,6 +520,7 @@ export class FinanzasController {
   ): Promise<ExpenseImportResult> {
     const tenantId = req.tenantId!;
     const userId = req.user.id;
+    const membershipId = req.user.membershipId!;
     const userRoles = req.user?.roles || [];
 
     // Only TENANT_ADMIN, TENANT_OWNER, OPERATOR can import
@@ -538,6 +539,7 @@ export class FinanzasController {
       buildingId,
       importDto.period,
       importDto.rows,
+      membershipId,
       userId,
     );
   }

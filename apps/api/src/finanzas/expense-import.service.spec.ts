@@ -1,9 +1,11 @@
+import { AuditAction } from '@prisma/client';
 import { ExpenseImportService } from './expense-import.service';
 
 describe('ExpenseImportService', () => {
   const tenantId = 'tenant-1';
   const buildingId = 'building-1';
-  const userId = 'user-1';
+  const membershipId = 'membership-1';
+  const actorUserId = 'user-1';
   const validRow = {
     fecha: '10/08/2026',
     descripcion: 'Municipal tax',
@@ -37,13 +39,14 @@ describe('ExpenseImportService', () => {
     service = new ExpenseImportService(prisma as never, auditService as never);
   });
 
-  it('creates canonical BUILDING DRAFT rows with exact cents', async () => {
+  it('creates canonical BUILDING DRAFT rows with membership attribution and the authenticated audit actor', async () => {
     const result = await service.importExpensesFromRows(
       tenantId,
       buildingId,
       '2026-08',
       [validRow],
-      userId,
+      membershipId,
+      actorUserId,
     );
 
     expect(result).toMatchObject({ successCount: 1, failureCount: 0, createdExpenses: ['expense-1'] });
@@ -66,8 +69,22 @@ describe('ExpenseImportService', () => {
         currencyCode: 'ARS',
         scopeType: 'BUILDING',
         status: 'DRAFT',
+        createdByMembershipId: membershipId,
         invoiceDate: new Date('2026-08-10T00:00:00.000Z'),
       }),
+    });
+    expect(auditService.createLog).toHaveBeenCalledWith({
+      tenantId,
+      actorUserId,
+      action: AuditAction.EXPENSE_IMPORTED,
+      entityType: 'Expense',
+      entityId: 'expense-1',
+      metadata: {
+        source: 'EXCEL_IMPORT',
+        rowIndex: 0,
+        category: 'Taxes',
+        vendor: undefined,
+      },
     });
   });
 
@@ -83,7 +100,8 @@ describe('ExpenseImportService', () => {
       buildingId,
       '2026-08',
       [{ ...validRow, ...invalid }],
-      userId,
+      membershipId,
+      actorUserId,
     );
 
     expect(result).toMatchObject({ totalRows: 1, successCount: 0, failureCount: 1 });
@@ -99,7 +117,8 @@ describe('ExpenseImportService', () => {
       buildingId,
       '2026-08',
       [validRow],
-      userId,
+      membershipId,
+      actorUserId,
     );
 
     expect(result).toMatchObject({ successCount: 0, failureCount: 1 });
@@ -112,7 +131,8 @@ describe('ExpenseImportService', () => {
       buildingId,
       '2026-08',
       [validRow, { ...validRow, monto: 1.001 }],
-      userId,
+      membershipId,
+      actorUserId,
     );
 
     expect(result).toMatchObject({ totalRows: 2, successCount: 1, failureCount: 1 });
