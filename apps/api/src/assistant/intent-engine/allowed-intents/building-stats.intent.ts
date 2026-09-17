@@ -1,9 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
-import { ChargeStatus } from '@prisma/client';
 import { Permission } from '../../../rbac/permissions';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
 import { aggregateReportBuckets } from '../../../finanzas/currency-buckets';
-import { calculateChargeOutstandingMinor } from '../../../finanzas/charge-aggregation';
 
 export const buildingStatsIntent: IntentDefinition = {
   name: 'building_stats',
@@ -18,7 +16,7 @@ export const buildingStatsIntent: IntentDefinition = {
       throw new BadRequestException('buildingId required for building_stats intent');
     }
 
-    const [units, openTicketsCount, totalTicketsCount, charges] = await Promise.all([
+    const [units, openTicketsCount, totalTicketsCount, outstandingGroups] = await Promise.all([
       // Unit counts by type and occupancy
       prisma.unit.groupBy({
         by: ['unitType', 'occupancyStatus'],
@@ -33,26 +31,44 @@ export const buildingStatsIntent: IntentDefinition = {
       prisma.ticket.count({
         where: { buildingId, tenantId },
       }),
-      // Total debt by stored charge currency, using canonical outstanding:
-      // charge amount minus effective non-canceled allocations, clamped at zero.
-      prisma.charge.findMany({
-        where: {
-          buildingId,
-          tenantId,
-          canceledAt: null,
-          status: { not: ChargeStatus.CANCELED },
-        },
-        select: {
-          amount: true,
-          currency: true,
-          paymentAllocations: {
-            select: {
-              amount: true,
-              payment: { select: { status: true, canceledAt: true } },
-            },
-          },
-        },
-      }),
+      // Return only final outstanding totals grouped by stored charge currency.
+      prisma.$queryRaw<Array<{ currency: string; outstanding: bigint }>>`
+        WITH charge_balances AS (
+          SELECT
+            charge.id,
+            charge.currency,
+            GREATEST(
+              charge.amount - COALESCE(
+                SUM(
+                  CASE
+                    WHEN payment.status IN ('APPROVED', 'RECONCILED')
+                      AND payment."canceledAt" IS NULL
+                      THEN allocation.amount
+                    ELSE 0
+                  END
+                ),
+                0
+              ),
+              0
+            ) AS outstanding
+          FROM "Charge" AS charge
+          LEFT JOIN "PaymentAllocation" AS allocation
+            ON allocation."chargeId" = charge.id
+            AND allocation."tenantId" = ${tenantId}
+          LEFT JOIN "Payment" AS payment
+            ON payment.id = allocation."paymentId"
+            AND payment."tenantId" = ${tenantId}
+          WHERE charge."tenantId" = ${tenantId}
+            AND charge."buildingId" = ${buildingId}
+            AND charge."canceledAt" IS NULL
+            AND charge.status <> 'CANCELED'
+          GROUP BY charge.id, charge.currency, charge.amount
+        )
+        SELECT currency, SUM(outstanding) AS outstanding
+        FROM charge_balances
+        WHERE outstanding > 0
+        GROUP BY currency
+      `,
     ]);
 
     // Process unit counts
@@ -74,12 +90,10 @@ export const buildingStatsIntent: IntentDefinition = {
     billableUnits = billableCount;
 
     const totalDebtByCurrency = aggregateReportBuckets(
-      charges
-        .map((charge) => ({
-          currency: charge.currency,
-          amountMinor: calculateChargeOutstandingMinor(charge),
-        }))
-        .filter((bucket) => bucket.amountMinor > 0),
+      outstandingGroups.map((group) => ({
+        currency: group.currency,
+        amountMinor: Number(group.outstanding),
+      })),
     );
     const averageDebtByCurrency = totalDebtByCurrency.map((bucket) => ({
       currency: bucket.currency,

@@ -1,8 +1,22 @@
-import { PaymentStatus } from '@prisma/client';
 import { buildingStatsIntent } from './building-stats.intent';
 
+interface OutstandingGroup {
+  readonly currency: string;
+  readonly outstanding: bigint;
+}
+
+interface PrismaMock {
+  readonly unit: {
+    readonly groupBy: jest.Mock;
+    readonly count: jest.Mock;
+  };
+  readonly ticket: { readonly count: jest.Mock };
+  readonly charge: { readonly findMany: jest.Mock };
+  readonly $queryRaw: jest.Mock;
+}
+
 describe('buildingStatsIntent currency-safe debt totals', () => {
-  function basePrisma(charges: unknown[]) {
+  function basePrisma(outstandingGroups: OutstandingGroup[]): PrismaMock {
     return {
       unit: {
         groupBy: jest.fn().mockResolvedValue([
@@ -11,17 +25,20 @@ describe('buildingStatsIntent currency-safe debt totals', () => {
         count: jest.fn().mockResolvedValue(2),
       },
       ticket: { count: jest.fn().mockResolvedValueOnce(4).mockResolvedValueOnce(9) },
-      charge: {
-        findMany: jest.fn().mockResolvedValue(charges),
-      },
+      charge: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue(outstandingGroups),
     };
+  }
+
+  function queryText(prisma: PrismaMock): string {
+    return Array.from(prisma.$queryRaw.mock.calls[0]![0] as TemplateStringsArray).join('');
   }
 
   it('returns per-currency outstanding buckets without a default currency', async () => {
     const prisma = basePrisma([
-      { amount: 1001, currency: 'USD', paymentAllocations: [] },
-      { amount: 1000, currency: 'VES', paymentAllocations: [] },
-      { amount: 1002, currency: 'UYU', paymentAllocations: [] },
+      { currency: 'USD', outstanding: 1001n },
+      { currency: 'VES', outstanding: 1000n },
+      { currency: 'UYU', outstanding: 1002n },
     ]);
 
     const result = await buildingStatsIntent.executor({
@@ -51,41 +68,14 @@ describe('buildingStatsIntent currency-safe debt totals', () => {
     expect(result.data).not.toHaveProperty('totalDebt');
     expect(result.data).not.toHaveProperty('averageDebt');
     expect(result.data).not.toHaveProperty('currency');
-    expect(prisma.charge.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({
-        tenantId: 'tenant-1',
-        buildingId: 'building-1',
-        canceledAt: null,
-        status: { not: 'CANCELED' },
-      }),
-    }));
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.charge.findMany).not.toHaveBeenCalled();
   });
 
-  it('uses canonical outstanding for totalDebtByCurrency and averageDebtByCurrency', async () => {
+  it('uses grouped final outstanding totals and constrains the PostgreSQL aggregation to effective payments', async () => {
     const prisma = basePrisma([
-      {
-        amount: 10000,
-        currency: 'USD',
-        paymentAllocations: [
-          { amount: 4000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } },
-          { amount: 2000, payment: { status: PaymentStatus.SUBMITTED, canceledAt: null } },
-        ],
-      },
-      {
-        amount: 7000,
-        currency: 'USD',
-        paymentAllocations: [
-          { amount: 7000, payment: { status: PaymentStatus.RECONCILED, canceledAt: null } },
-        ],
-      },
-      {
-        amount: 9000,
-        currency: 'COP',
-        paymentAllocations: [
-          { amount: 1000, payment: { status: PaymentStatus.REJECTED, canceledAt: null } },
-          { amount: 3000, payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-01-01') } },
-        ],
-      },
+      { currency: 'USD', outstanding: 6000n },
+      { currency: 'COP', outstanding: 9000n },
     ]);
 
     const result = await buildingStatsIntent.executor({
@@ -106,5 +96,24 @@ describe('buildingStatsIntent currency-safe debt totals', () => {
         { currency: 'COP', amountMinor: 3000 },
       ],
     }));
+
+    const query = queryText(prisma);
+    expect(query).toContain('WITH charge_balances AS');
+    expect(query).toContain('GREATEST(');
+    expect(query).toContain("payment.status IN ('APPROVED', 'RECONCILED')");
+    expect(query).toContain('payment."canceledAt" IS NULL');
+    expect(query).toContain('charge."canceledAt" IS NULL');
+    expect(query).toContain("charge.status <> 'CANCELED'");
+    expect(query).toContain('GROUP BY charge.id, charge.currency, charge.amount');
+    expect(query).toContain('WHERE outstanding > 0');
+    expect(query).toContain('GROUP BY currency');
+    expect(query).toContain('SELECT currency, SUM(outstanding) AS outstanding');
+    expect(prisma.$queryRaw.mock.calls[0]!.slice(1)).toEqual([
+      'tenant-1',
+      'tenant-1',
+      'tenant-1',
+      'building-1',
+    ]);
+    expect(prisma.charge.findMany).not.toHaveBeenCalled();
   });
 });
