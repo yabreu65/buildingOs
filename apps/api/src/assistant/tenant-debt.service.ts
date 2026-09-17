@@ -26,6 +26,7 @@ export async function resolveTenantDebtSummary(
           payment: {
             select: {
               status: true,
+              canceledAt: true,
             },
           },
         },

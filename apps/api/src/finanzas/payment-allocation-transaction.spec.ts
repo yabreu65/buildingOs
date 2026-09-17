@@ -269,9 +269,9 @@ describe('payment allocation transaction semantics', () => {
 
   it('counts effective and SUBMITTED reservations while excluding the current payment once', () => {
     const allocations = [
-      { amount: 2000, payment: { id: 'effective', status: PaymentStatus.APPROVED } },
-      { amount: 3000, payment: { id: 'submitted', status: PaymentStatus.SUBMITTED } },
-      { amount: 7000, payment: { id: 'current', status: PaymentStatus.SUBMITTED } },
+      { amount: 2000, payment: { id: 'effective', status: PaymentStatus.APPROVED, canceledAt: null } },
+      { amount: 3000, payment: { id: 'submitted', status: PaymentStatus.SUBMITTED, canceledAt: null } },
+      { amount: 7000, payment: { id: 'current', status: PaymentStatus.SUBMITTED, canceledAt: null } },
     ];
     expect(calculateChargeAvailableOutstanding(12000, allocations, 'current')).toBe(7000);
     expect(calculateChargeAvailableOutstanding(12000, allocations)).toBe(0);

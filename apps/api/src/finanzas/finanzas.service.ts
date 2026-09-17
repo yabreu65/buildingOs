@@ -129,6 +129,7 @@ type ChargeWithAllocations = Prisma.ChargeGetPayload<{
           select: {
             id: true;
             status: true;
+            canceledAt: true;
           };
         };
       };
@@ -2858,7 +2859,7 @@ export class FinanzasService {
           },
         },
         paymentAllocations: {
-          include: { payment: { select: { status: true } } },
+          include: { payment: { select: { status: true, canceledAt: true } } },
         },
       },
     });

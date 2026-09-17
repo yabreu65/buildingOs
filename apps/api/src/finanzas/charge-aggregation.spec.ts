@@ -5,12 +5,12 @@ import {
 import { ChargeStatus, PaymentStatus } from '@prisma/client';
 
 describe('calculateChargeOutstandingMinor', () => {
-  const effectiveApproved = { payment: { status: PaymentStatus.APPROVED } };
-  const effectiveReconciled = { payment: { status: PaymentStatus.RECONCILED } };
-  const submitted = { payment: { status: PaymentStatus.SUBMITTED } };
-  const rejected = { payment: { status: PaymentStatus.REJECTED } };
+  const effectiveApproved = { payment: { status: PaymentStatus.APPROVED, canceledAt: null } };
+  const effectiveReconciled = { payment: { status: PaymentStatus.RECONCILED, canceledAt: null } };
+  const submitted = { payment: { status: PaymentStatus.SUBMITTED, canceledAt: null } };
+  const rejected = { payment: { status: PaymentStatus.REJECTED, canceledAt: null } };
 
-  function charge(amount: number, allocations: Array<{ amount: number; payment?: { status?: string | null } | null }> = []) {
+  function charge(amount: number, allocations: Array<{ amount: number; payment?: { status?: string | null; canceledAt: Date | string | null } | null }> = []) {
     return { amount, paymentAllocations: allocations };
   }
 
@@ -82,7 +82,7 @@ describe('calculateChargeOutstandingMinor', () => {
 
   it('null payment status is ignored', () => {
     expect(
-      calculateChargeOutstandingMinor(charge(10000, [{ amount: 5000, payment: { status: null } }])),
+      calculateChargeOutstandingMinor(charge(10000, [{ amount: 5000, payment: { status: null, canceledAt: null } }])),
     ).toBe(10000);
   });
 

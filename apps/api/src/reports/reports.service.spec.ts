@@ -421,7 +421,7 @@ describe('ReportsService.getFinanceReport', () => {
       },
       include: {
         paymentAllocations: {
-          include: { payment: { select: { status: true } } },
+          include: { payment: { select: { status: true, canceledAt: true } } },
         },
       },
     });

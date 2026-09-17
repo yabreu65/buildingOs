@@ -44,6 +44,7 @@ export const unitDebtIntent: IntentDefinition = {
               payment: {
                 select: {
                   status: true,
+                  canceledAt: true,
                 },
               },
             },

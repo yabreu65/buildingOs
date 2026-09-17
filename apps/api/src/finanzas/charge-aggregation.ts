@@ -27,7 +27,7 @@ export interface ChargeOutstandingInputAllocation {
   readonly amount: number;
   readonly payment?: {
     readonly status?: string | null;
-    readonly canceledAt?: Date | string | null;
+    readonly canceledAt: Date | string | null;
   } | null;
 }
 
