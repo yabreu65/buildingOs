@@ -8,19 +8,27 @@ export interface HistoricalFinanceRecord {
   readonly createdSequence: number;
 }
 
+export const FINANCE_CURRENCY_STATUSES = [
+  'CANONICAL_CURRENT',
+  'LEGACY_STORED',
+  'MALFORMED',
+] as const;
+
+export type FinanceCurrencyStatus = (typeof FINANCE_CURRENCY_STATUSES)[number];
+
 /** Minimal relation evidence that lets paged scans classify a counterpart without retaining it. */
 export interface FinanceInventoryCounterpartEvidence {
   readonly present: boolean;
   readonly tenantToken?: string;
   readonly currencyCode?: string;
-  readonly currencySupported?: boolean;
+  readonly currencyStatuses?: readonly FinanceCurrencyStatus[];
 }
 
 /** Synthetic and provider-normalized data used only for read-only validation. */
 export interface FinanceInventoryRecord extends HistoricalFinanceRecord {
   readonly tenantToken?: string;
   readonly currencyCode?: string;
-  readonly currencySupported?: boolean;
+  readonly currencyStatuses?: readonly FinanceCurrencyStatus[];
   /** Explicit persisted compatibility evidence; omitted keeps exact-currency matching. */
   readonly currencyCompatible?: boolean;
   readonly representation?: string;

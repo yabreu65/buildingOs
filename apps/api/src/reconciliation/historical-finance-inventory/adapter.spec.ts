@@ -81,7 +81,7 @@ describe('read-only historical finance adapter', () => {
 
     await expect(adapter.listPage('paymentAllocations', { limit: 2, cursor: 'allocation-000' })).resolves.toMatchObject({
       records: [{
-        id: 'allocation-001', createdSequence: 0, tenantToken: 'tenant-a', currencyCode: 'ARS', currencySupported: true,
+        id: 'allocation-001', createdSequence: 0, tenantToken: 'tenant-a', currencyCode: 'ARS', currencyStatuses: ['CANONICAL_CURRENT'],
         currencyCompatible: true, invariantValid: true, requiresCounterpart: true, counterpartEntity: 'payments', counterpartId: 'payment-001', requiresCurrency: true,
       }],
     });
@@ -112,7 +112,7 @@ describe('read-only historical finance adapter', () => {
     expect(record).toMatchObject(expected);
     expect(classifyFinanceCondition({
       entity: 'paymentAllocations', counterpartPresent: true, sameTenant: true,
-      currencyCompatible: record.currencyCompatible ?? false, currencySupported: record.currencySupported ?? false,
+      currencyCompatible: record.currencyCompatible ?? false, currencyStatuses: record.currencyStatuses ?? [],
       invariantValid: record.invariantValid ?? true, representation: record.representation,
     }).classification).toBe(expected.invariantValid ? (expected.representation ? 'LEGACY_SUPPORTED' : 'SAFE') : 'INVALID_BLOCKING');
   });
@@ -120,25 +120,25 @@ describe('read-only historical finance adapter', () => {
   it.each([
       ['Charge -> Liquidation', 'charges', {
         charge: { findMany: jest.fn().mockResolvedValue([{ id: 'charge-1', tenantId: 'tenant-a', buildingId: 'building-a', currency: 'ARS', liquidationId: 'liquidation-1', building: { id: 'building-a', tenantId: 'tenant-a' }, unit: { tenantId: 'tenant-a', buildingId: 'building-a' }, liquidation: { tenantId: 'tenant-a', baseCurrency: 'ARS' } }]) },
-      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencySupported: true }],
+      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencyStatuses: ['CANONICAL_CURRENT'] }],
       ['PaymentAllocation -> Payment', 'paymentAllocations', {
         paymentAllocation: { findMany: jest.fn().mockResolvedValue([{ id: 'allocation-1', tenantId: 'tenant-a', paymentId: 'payment-1', chargeId: 'charge-1', amount: 100, paymentOriginalAmountMinor: null, payment: { id: 'payment-1', tenantId: 'tenant-a', buildingId: 'building-a', unitId: 'unit-a', currency: 'ARS', ...paymentSnapshot() }, charge: { id: 'charge-1', tenantId: 'tenant-a', buildingId: 'building-a', unitId: 'unit-a', currency: 'ARS' } }]) },
-      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencySupported: true }],
+      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencyStatuses: ['CANONICAL_CURRENT'] }],
       ['FundTransaction -> Fund', 'fundTransactions', {
         fundTransaction: { findMany: jest.fn().mockResolvedValue([{ id: 'transaction-1', tenantId: 'tenant-a', fundId: 'fund-1', direction: 'CREDIT', amountMinor: 100, currencyCode: 'ARS', fund: { tenantId: 'tenant-a' }, incomeApplication: null }]) },
       }, { present: true, tenantToken: 'tenant-a' }],
       ['IncomeApplication -> Income', 'incomeApplications', {
         incomeApplication: { findMany: jest.fn().mockResolvedValue([{ id: 'application-1', tenantId: 'tenant-a', incomeId: 'income-1', destinationType: 'OFFSET_EXPENSES', fundId: null, amountMinor: 100, currencyCode: 'ARS', income: { tenantId: 'tenant-a', currencyCode: 'ARS' }, fund: null, fundTransaction: null }]) },
-      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencySupported: true }],
+      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencyStatuses: ['CANONICAL_CURRENT'] }],
       ['MovementAllocation -> Expense', 'movementAllocations', {
         movementAllocation: { findMany: jest.fn().mockResolvedValue([{ id: 'movement-expense-1', tenantId: 'tenant-a', expenseId: 'expense-1', incomeId: null, currencyCode: 'ARS', building: { id: 'building-a', tenantId: 'tenant-a' }, expense: { tenantId: 'tenant-a', currencyCode: 'ARS' }, income: null }]) },
-      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencySupported: true }],
+      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencyStatuses: ['CANONICAL_CURRENT'] }],
       ['MovementAllocation -> Income', 'movementAllocations', {
         movementAllocation: { findMany: jest.fn().mockResolvedValue([{ id: 'movement-income-1', tenantId: 'tenant-a', expenseId: null, incomeId: 'income-1', currencyCode: 'ARS', building: { id: 'building-a', tenantId: 'tenant-a' }, expense: null, income: { tenantId: 'tenant-a', currencyCode: 'ARS' } }]) },
-      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencySupported: true }],
+      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencyStatuses: ['CANONICAL_CURRENT'] }],
       ['LiquidationIncomeOffset -> IncomeApplication', 'liquidationIncomeOffsets', {
         liquidationIncomeOffset: { findMany: jest.fn().mockResolvedValue([{ id: 'offset-1', tenantId: 'tenant-a', incomeApplicationId: 'application-1', buildingId: 'building-a', originalAmountMinor: 100, valuedAmountMinor: 100, currencyCode: 'ARS', baseCurrency: 'ARS', liquidation: { tenantId: 'tenant-a', buildingId: 'building-a', baseCurrency: 'ARS', valuationMode: 'LEGACY_NOMINAL' }, incomeApplication: { tenantId: 'tenant-a', amountMinor: 100, currencyCode: 'ARS' } }]) },
-      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencySupported: true }],
+      }, { present: true, tenantToken: 'tenant-a', currencyCode: 'ARS', currencyStatuses: ['CANONICAL_CURRENT'] }],
     ])('maps %s counterpart evidence from selected Prisma relations', async (_name, entity: FinanceInventoryEntity, overrides, expected) => {
       const adapter = createPrismaReadOnlyFinanceInventoryAdapter(emptyPrisma(overrides));
 
@@ -156,6 +156,35 @@ describe('read-only historical finance adapter', () => {
     await expect(adapter.listPage('funds', { limit: 1 })).resolves.toMatchObject({ records: [{ invariantValid: true }] });
     await expect(adapter.listPage('fundTransactions', { limit: 1 })).resolves.toMatchObject({ records: [{ invariantValid: true, counterpartEntity: 'funds' }] });
     await expect(adapter.listPage('incomeApplications', { limit: 1 })).resolves.toMatchObject({ records: [{ invariantValid: true }] });
+  });
+
+  it.each([
+    ['canonical ARS', 'ARS', ['CANONICAL_CURRENT'], 'SAFE'],
+    ['historical UYU', 'UYU', ['LEGACY_STORED'], 'LEGACY_SUPPORTED'],
+    ['malformed historical code', 'US', ['MALFORMED'], 'REPAIRABLE'],
+  ])('maps %s currency evidence through allocation counterparts', async (_name, currency, expectedStatuses, classification) => {
+    const payment = { id: 'payment-1', tenantId: 'tenant-a', buildingId: 'building-a', unitId: 'unit-a', currency, ...paymentSnapshot() };
+    const charge = { id: 'charge-1', tenantId: 'tenant-a', buildingId: 'building-a', unitId: 'unit-a', currency };
+    const adapter = createPrismaReadOnlyFinanceInventoryAdapter(emptyPrisma({
+      paymentAllocation: { findMany: jest.fn().mockResolvedValue([{ id: 'allocation-1', tenantId: 'tenant-a', paymentId: payment.id, chargeId: charge.id, amount: 100, paymentOriginalAmountMinor: null, payment, charge }]) },
+    }));
+
+    const [record] = (await adapter.listPage('paymentAllocations', { limit: 1 })).records;
+
+    expect(record.currencyStatuses).toEqual(expectedStatuses);
+    expect(record.counterpartEvidence?.currencyStatuses).toEqual(expectedStatuses);
+    expect(classifyFinanceCondition({
+      entity: 'paymentAllocations',
+      counterpartPresent: true,
+      sameTenant: true,
+      currencyCompatible: record.currencyCompatible ?? false,
+      currencyStatuses: [
+        ...(record.currencyStatuses ?? []),
+        ...(record.counterpartEvidence?.currencyStatuses ?? []),
+      ],
+      invariantValid: record.invariantValid ?? true,
+      representation: record.representation,
+    }).classification).toBe(classification);
   });
 
   it('derives legacy Income classifications using persisted status, destination, applications, and relevant liquidations', async () => {
@@ -217,6 +246,6 @@ describe('read-only historical finance adapter', () => {
     const adapter = createPrismaReadOnlyFinanceInventoryAdapter(emptyPrisma({ liquidation: { findMany: jest.fn().mockResolvedValue(rows) } }));
     const records = (await adapter.listPage('liquidations', { limit: 4 })).records;
     expect(records.map((record) => record.representation)).toEqual(['V1', 'V2', 'V3', 'ZERO_NET']);
-    expect(records.map((record) => classifyFinanceCondition({ entity: 'liquidations', counterpartPresent: true, sameTenant: true, currencyCompatible: true, currencySupported: true, invariantValid: record.invariantValid ?? true, representation: record.representation }).classification)).toEqual(['LEGACY_SUPPORTED', 'LEGACY_SUPPORTED', 'SAFE', 'SAFE']);
+    expect(records.map((record) => classifyFinanceCondition({ entity: 'liquidations', counterpartPresent: true, sameTenant: true, currencyCompatible: true, currencyStatuses: record.currencyStatuses ?? [], invariantValid: record.invariantValid ?? true, representation: record.representation }).classification)).toEqual(['LEGACY_SUPPORTED', 'LEGACY_SUPPORTED', 'SAFE', 'SAFE']);
   });
 });

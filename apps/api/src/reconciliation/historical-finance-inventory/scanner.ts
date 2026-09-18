@@ -92,7 +92,7 @@ function evidenceFromRecord(record: FinanceInventoryRecord): FinanceInventoryCou
     present: true,
     ...(record.tenantToken === undefined ? {} : { tenantToken: record.tenantToken }),
     ...(record.currencyCode === undefined ? {} : { currencyCode: record.currencyCode }),
-    ...(record.currencySupported === undefined ? {} : { currencySupported: record.currencySupported }),
+    ...(record.currencyStatuses === undefined ? {} : { currencyStatuses: record.currencyStatuses }),
   };
 }
 
@@ -120,15 +120,17 @@ function conditionFor(
         && counterpart.currencyCode !== undefined
         && record.currencyCode === counterpart.currencyCode
       );
-  const currencySupported = record.currencySupported !== false
-    && (counterpart?.present !== true || counterpart.currencySupported !== false);
+  const currencyStatuses = [
+    ...(record.currencyStatuses ?? []),
+    ...(counterpart?.present === true ? counterpart.currencyStatuses ?? [] : []),
+  ];
 
   return {
     entity,
     counterpartPresent,
     sameTenant,
     currencyCompatible,
-    currencySupported,
+    currencyStatuses,
     invariantValid: record.invariantValid !== false,
     representation: record.representation,
   };

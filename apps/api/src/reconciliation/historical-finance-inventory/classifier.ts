@@ -1,4 +1,4 @@
-import { FinanceInventoryEntity } from './contracts';
+import { FinanceCurrencyStatus, FinanceInventoryEntity } from './contracts';
 
 export const FINANCE_CLASSIFICATIONS = [
   'SAFE',
@@ -16,6 +16,7 @@ export type FinanceFindingCategory =
   | 'MISSING_COUNTERPART'
   | 'CROSS_TENANT'
   | 'CURRENCY_INVALID'
+  | 'MALFORMED_CURRENCY'
   | 'INVARIANT_VIOLATION';
 
 export interface FinanceCondition {
@@ -23,7 +24,7 @@ export interface FinanceCondition {
   readonly counterpartPresent: boolean;
   readonly sameTenant: boolean;
   readonly currencyCompatible: boolean;
-  readonly currencySupported: boolean;
+  readonly currencyStatuses: readonly FinanceCurrencyStatus[];
   readonly invariantValid: boolean;
   readonly representation?: string;
 }
@@ -51,13 +52,19 @@ export function classifyFinanceCondition(condition: FinanceCondition): FinanceCl
   if (!condition.sameTenant) {
     return { classification: 'INVALID_BLOCKING', category: 'CROSS_TENANT' };
   }
-  if (!condition.currencyCompatible || !condition.currencySupported) {
+  if (!condition.currencyCompatible) {
     return { classification: 'INVALID_BLOCKING', category: 'CURRENCY_INVALID' };
   }
   if (!condition.invariantValid) {
     return { classification: 'INVALID_BLOCKING', category: 'INVARIANT_VIOLATION' };
   }
-  if (condition.representation !== undefined && LEGACY_REPRESENTATIONS.has(condition.representation)) {
+  if (condition.currencyStatuses.includes('MALFORMED')) {
+    return { classification: 'REPAIRABLE', category: 'MALFORMED_CURRENCY' };
+  }
+  if (
+    condition.currencyStatuses.includes('LEGACY_STORED')
+    || (condition.representation !== undefined && LEGACY_REPRESENTATIONS.has(condition.representation))
+  ) {
     return { classification: 'LEGACY_SUPPORTED', category: 'SUPPORTED_LEGACY' };
   }
 

@@ -1,7 +1,9 @@
+import { isCanonicalCurrency } from '@buildingos/contracts';
 import { PrismaService } from '../../prisma/prisma.service';
 import { classifyFunctionalSnapshot } from '../../finanzas/functional-snapshot';
 import {
   FINANCE_INVENTORY_ENTITIES,
+  FinanceCurrencyStatus,
   FinanceInventoryCounterpartEvidence,
   FinanceInventoryEntity,
   FinanceInventoryRecord,
@@ -13,7 +15,7 @@ import {
 
 export { FINANCE_INVENTORY_ENTITIES } from './contracts';
 
-const SUPPORTED_CURRENCIES = new Set(['ARS', 'USD', 'VES', 'COP']);
+const HISTORICAL_CURRENCY_CODE = /^[A-Z]{3}$/;
 
 interface BuildingEvidence {
   readonly id: string;
@@ -52,8 +54,21 @@ function toPage<Row extends { readonly id: string }>(
   };
 }
 
-function currencySupported(currencyCode: string | null | undefined): boolean {
-  return currencyCode !== undefined && currencyCode !== null && SUPPORTED_CURRENCIES.has(currencyCode);
+function currencyStatus(currencyCode: string | null | undefined): FinanceCurrencyStatus | undefined {
+  if (currencyCode === undefined || currencyCode === null) {
+    return undefined;
+  }
+  if (isCanonicalCurrency(currencyCode)) {
+    return 'CANONICAL_CURRENT';
+  }
+  return HISTORICAL_CURRENCY_CODE.test(currencyCode) ? 'LEGACY_STORED' : 'MALFORMED';
+}
+
+function currencyStatuses(...currencyCodes: readonly (string | null | undefined)[]): readonly FinanceCurrencyStatus[] {
+  return currencyCodes.flatMap((currencyCode) => {
+    const status = currencyStatus(currencyCode);
+    return status === undefined ? [] : [status];
+  });
 }
 
 function counterpartEvidence(
@@ -65,7 +80,7 @@ function counterpartEvidence(
     present,
     ...(present ? { tenantToken: counterpart.tenantId } : {}),
     ...(present && currencyCode !== null && currencyCode !== undefined
-      ? { currencyCode, currencySupported: currencySupported(currencyCode) }
+      ? { currencyCode, currencyStatuses: currencyStatuses(currencyCode) }
       : {}),
   };
 }
@@ -188,7 +203,7 @@ function paymentAllocationCompatibility(row: {
     readonly conversionDate: Date | null;
   };
   readonly charge: { readonly currency: string };
-}): { readonly currencyCompatible: boolean; readonly currencySupported: boolean; readonly invariantValid: boolean; readonly representation?: string } {
+}): { readonly currencyCompatible: boolean; readonly invariantValid: boolean; readonly representation?: string } {
   const snapshotState = classifyFunctionalSnapshot(row.payment);
   const crossCurrency = row.payment.currency !== row.charge.currency;
   const amountValid = isPositiveSafeInteger(row.amount)
@@ -200,36 +215,29 @@ function paymentAllocationCompatibility(row: {
       && row.paymentOriginalAmountMinor <= row.payment.amount
       && (!crossCurrency || row.paymentOriginalAmountMinor > 0)
       && (crossCurrency || row.paymentOriginalAmountMinor === row.amount));
-  const supported = currencySupported(row.payment.currency)
-    && currencySupported(row.charge.currency)
-    && (snapshotState !== 'COMPLETE' || currencySupported(row.payment.functionalCurrencyCode));
-
   if (!crossCurrency) {
     return {
       currencyCompatible: true,
-      currencySupported: supported,
       invariantValid: amountValid && originalAmountValid && snapshotState !== 'PARTIAL_INVALID',
     };
   }
 
   if (snapshotState === 'PARTIAL_INVALID') {
-    return { currencyCompatible: false, currencySupported: supported, invariantValid: false };
+    return { currencyCompatible: false, invariantValid: false };
   }
   if (row.paymentOriginalAmountMinor === null || snapshotState === 'LEGACY_NULL') {
     return {
       currencyCompatible: true,
-      currencySupported: supported,
       invariantValid: amountValid && originalAmountValid,
       representation: 'LEGACY_PAYMENT_ALLOCATION_CROSS',
     };
   }
 
-  const canonicalSnapshot = row.payment.functionalCurrencyCode === row.charge.currency
+  const snapshotMatchesChargeCurrency = row.payment.functionalCurrencyCode === row.charge.currency
     && isPositiveSafeInteger(row.payment.functionalAmountMinor);
   return {
-    currencyCompatible: canonicalSnapshot,
-    currencySupported: supported,
-    invariantValid: amountValid && originalAmountValid && canonicalSnapshot,
+    currencyCompatible: snapshotMatchesChargeCurrency,
+    invariantValid: amountValid && originalAmountValid && snapshotMatchesChargeCurrency,
   };
 }
 
@@ -286,7 +294,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
             createdSequence: 0,
             tenantToken: row.tenantId,
             currencyCode: row.baseCurrency,
-            currencySupported: currencySupported(row.baseCurrency),
+            currencyStatuses: currencyStatuses(row.baseCurrency),
             representation: liquidationRepresentation(row),
             invariantValid: validTenantBuildingUnitRelationship(row.tenantId, row.building)
               && validLiquidationShape({ ...row, representation: liquidationRepresentation(row) }),
@@ -348,7 +356,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
                   createdSequence: 0,
                   tenantToken: row.tenantId,
                   currencyCode: row.currencyCode,
-                  currencySupported: currencySupported(row.currencyCode),
+                  currencyStatuses: currencyStatuses(row.currencyCode),
                   invariantValid: isPositiveSafeInteger(row.amountMinor)
                     && row.fund.tenantId === row.tenantId
                     && applicationValid,
@@ -378,7 +386,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
             createdSequence: 0,
             tenantToken: row.tenantId,
             currencyCode: row.currency,
-            currencySupported: currencySupported(row.currency),
+            currencyStatuses: currencyStatuses(row.currency),
             invariantValid: validTenantBuildingUnitRelationship(row.tenantId, row.building, row.unit),
             ...(row.liquidationId === null ? {} : {
               requiresCounterpart: true,
@@ -405,7 +413,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
             createdSequence: 0,
             tenantToken: row.tenantId,
             currencyCode: row.currency,
-            currencySupported: currencySupported(row.currency),
+            currencyStatuses: currencyStatuses(row.currency),
             invariantValid: validTenantBuildingUnitRelationship(row.tenantId, row.building, row.unit),
           }));
         }
@@ -439,27 +447,33 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
               charge: { select: { id: true, tenantId: true, buildingId: true, unitId: true, currency: true } },
             },
           });
-          return toPage(rows, request, (row) => ({
-            id: row.id,
-            createdSequence: 0,
-            tenantToken: row.tenantId,
-            currencyCode: row.charge.currency,
-            currencySupported: paymentAllocationCompatibility(row).currencySupported,
-                currencyCompatible: paymentAllocationCompatibility(row).currencyCompatible,
-                ...(paymentAllocationCompatibility(row).representation === undefined ? {} : {
-                  representation: paymentAllocationCompatibility(row).representation,
-                }),
-            invariantValid: row.payment.tenantId === row.tenantId
-              && row.charge.tenantId === row.tenantId
-              && row.payment.buildingId === row.charge.buildingId
-              && row.payment.unitId === row.charge.unitId
-                  && paymentAllocationCompatibility(row).invariantValid,
-            requiresCounterpart: true,
-            counterpartEntity: 'payments',
-            counterpartId: row.paymentId,
-                counterpartEvidence: counterpartEvidence(row.payment, row.payment.currency),
-            requiresCurrency: true,
-          }));
+          return toPage(rows, request, (row) => {
+            const compatibility = paymentAllocationCompatibility(row);
+            return {
+              id: row.id,
+              createdSequence: 0,
+              tenantToken: row.tenantId,
+              currencyCode: row.charge.currency,
+              currencyStatuses: currencyStatuses(
+                row.charge.currency,
+                row.payment.functionalCurrencyCode,
+              ),
+              currencyCompatible: compatibility.currencyCompatible,
+              ...(compatibility.representation === undefined ? {} : {
+                representation: compatibility.representation,
+              }),
+              invariantValid: row.payment.tenantId === row.tenantId
+                && row.charge.tenantId === row.tenantId
+                && row.payment.buildingId === row.charge.buildingId
+                && row.payment.unitId === row.charge.unitId
+                && compatibility.invariantValid,
+              requiresCounterpart: true,
+              counterpartEntity: 'payments',
+              counterpartId: row.paymentId,
+              counterpartEvidence: counterpartEvidence(row.payment, row.payment.currency),
+              requiresCurrency: true,
+            };
+          });
         }
         case 'expenses': {
           const rows = await prisma.expense.findMany({
@@ -477,7 +491,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
             createdSequence: 0,
             tenantToken: row.tenantId,
             currencyCode: row.currencyCode,
-            currencySupported: currencySupported(row.currencyCode),
+            currencyStatuses: currencyStatuses(row.currencyCode),
             invariantValid: validOptionalBuildingRelationship(row.tenantId, row.building, row.scopeType === 'BUILDING'),
           }));
         }
@@ -496,7 +510,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
             createdSequence: 0,
             tenantToken: row.tenantId,
             currencyCode: row.currencyCode,
-            currencySupported: currencySupported(row.currencyCode),
+            currencyStatuses: currencyStatuses(row.currencyCode),
             invariantValid: validTenantBuildingUnitRelationship(row.tenantId, row.building),
           }));
         }
@@ -570,7 +584,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
               createdSequence: 0,
               tenantToken: row.tenantId,
               currencyCode: row.currencyCode,
-              currencySupported: currencySupported(row.currencyCode),
+              currencyStatuses: currencyStatuses(row.currencyCode),
               representation,
               invariantValid: validOptionalBuildingRelationship(row.tenantId, row.building, row.scopeType === 'BUILDING')
                 && row.allocations.every((allocation) => allocation.building.tenantId === row.tenantId),
@@ -613,7 +627,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
               createdSequence: 0,
               tenantToken: row.tenantId,
               currencyCode: row.currencyCode,
-              currencySupported: currencySupported(row.currencyCode),
+              currencyStatuses: currencyStatuses(row.currencyCode),
               invariantValid: row.income.tenantId === row.tenantId
                 && row.income.currencyCode === row.currencyCode
                 && isPositiveSafeInteger(row.amountMinor)
@@ -651,7 +665,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
               createdSequence: 0,
               tenantToken: row.tenantId,
               currencyCode: row.currencyCode ?? undefined,
-              currencySupported: currencySupported(row.currencyCode),
+              currencyStatuses: currencyStatuses(row.currencyCode),
               invariantValid: hasExpense !== hasIncome
                 && validTenantBuildingUnitRelationship(row.tenantId, row.building)
                 && counterpart?.tenantId === row.tenantId,
@@ -684,9 +698,11 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
             createdSequence: 0,
             tenantToken: row.tenantId,
             currencyCode: row.currencyCode,
-            currencySupported: currencySupported(row.currencyCode)
-              && currencySupported(row.baseCurrency)
-              && currencySupported(row.liquidation.baseCurrency),
+            currencyStatuses: currencyStatuses(
+              row.currencyCode,
+              row.baseCurrency,
+              row.liquidation.baseCurrency,
+            ),
             invariantValid: row.liquidation.tenantId === row.tenantId
               && row.incomeApplication.tenantId === row.tenantId
               && row.buildingId === row.liquidation.buildingId
@@ -714,7 +730,7 @@ export function createPrismaReadOnlyFinanceInventoryAdapter(
             createdSequence: 0,
             tenantToken: row.id,
             currencyCode: row.currency,
-            currencySupported: currencySupported(row.currency),
+            currencyStatuses: currencyStatuses(row.currency),
           }));
         }
         case 'tenantRelationships': {

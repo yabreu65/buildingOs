@@ -16,6 +16,7 @@ function record(
     createdSequence: index,
     tenantToken: 'tenant-a',
     currencyCode: 'USD',
+    currencyStatuses: ['CANONICAL_CURRENT'],
     representation: 'CURRENT',
     ...overrides,
   };
@@ -106,6 +107,56 @@ describe('historical finance aggregate scanner', () => {
     expect(result.classificationTotals).toEqual({ SAFE: 2, LEGACY_SUPPORTED: 0, REPAIRABLE: 0, INVALID_BLOCKING: 0 });
   });
 
+  it('classifies canonical, stored legacy, malformed, and contradictory currency evidence', async () => {
+    const source: Partial<Record<FinanceInventoryEntity, readonly FinanceInventoryRecord[]>> = {
+      payments: [
+        record('payments', 1, { currencyCode: 'ARS', currencyStatuses: ['CANONICAL_CURRENT'] }),
+        record('payments', 2, { currencyCode: 'UYU', currencyStatuses: ['LEGACY_STORED'] }),
+        record('payments', 3, { currencyCode: 'US', currencyStatuses: ['MALFORMED'] }),
+      ],
+      paymentAllocations: [
+        record('paymentAllocations', 1, {
+          currencyCode: 'ARS',
+          currencyStatuses: ['CANONICAL_CURRENT'],
+          requiresCounterpart: true,
+          counterpartEntity: 'payments',
+          counterpartId: 'payments-1',
+          requiresCurrency: true,
+        }),
+        record('paymentAllocations', 2, {
+          currencyCode: 'UYU',
+          currencyStatuses: ['LEGACY_STORED'],
+          requiresCounterpart: true,
+          counterpartEntity: 'payments',
+          counterpartId: 'payments-2',
+          requiresCurrency: true,
+        }),
+        record('paymentAllocations', 3, {
+          currencyCode: 'US',
+          currencyStatuses: ['MALFORMED'],
+          requiresCounterpart: true,
+          counterpartEntity: 'payments',
+          counterpartId: 'payments-3',
+          requiresCurrency: true,
+        }),
+        record('paymentAllocations', 4, {
+          currencyCode: 'ARS',
+          currencyStatuses: ['CANONICAL_CURRENT'],
+          currencyCompatible: false,
+          requiresCounterpart: true,
+          counterpartEntity: 'payments',
+          counterpartId: 'payments-1',
+          requiresCurrency: true,
+        }),
+      ],
+    };
+
+    const result = await new HistoricalFinanceInventoryScanner(adapter(source)).scan();
+
+    expect(result.classificationTotals).toEqual({ SAFE: 2, LEGACY_SUPPORTED: 2, REPAIRABLE: 2, INVALID_BLOCKING: 1 });
+    expect(result.findingCategoryCounts).toEqual({ SUPPORTED_LEGACY: 2, MALFORMED_CURRENCY: 2, CURRENCY_INVALID: 1 });
+  });
+
   it('does not rescan a counterpart entity when mapped relation evidence is present', async () => {
       const source: Partial<Record<FinanceInventoryEntity, readonly FinanceInventoryRecord[]>> = {
         paymentAllocations: [record('paymentAllocations', 1, {
@@ -113,7 +164,7 @@ describe('historical finance aggregate scanner', () => {
           counterpartEntity: 'payments',
           counterpartId: 'payment-1',
           requiresCurrency: true,
-          counterpartEvidence: { present: true, tenantToken: 'tenant-a', currencyCode: 'USD', currencySupported: true },
+          counterpartEvidence: { present: true, tenantToken: 'tenant-a', currencyCode: 'USD', currencyStatuses: ['CANONICAL_CURRENT'] },
         })],
       };
       const sourceAdapter = adapter(source);
