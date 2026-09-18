@@ -4,6 +4,7 @@ import {
   TenantType,
   BillingPlanId,
   ChargeStatus,
+  ExpenseStatus,
   PaymentStatus,
   PaymentMethod,
   CommunicationChannel,
@@ -542,6 +543,95 @@ async function main() {
   // ============================================================================
   const currentPeriod = "2026-04";
   const currency = "ARS";
+  const seedExpenseId = `seed-expense-${currentPeriod}`;
+  const seedExpenseInvoiceDate = new Date(`${currentPeriod}-01T00:00:00.000Z`);
+  const seedExpenseDescription = "Test liquidation expense snapshot";
+
+  const existingSeedCategory = await prisma.expenseLedgerCategory.findUnique({
+    where: { tenantId_name: { tenantId: tenantA.id, name: "Test Expense" } },
+  });
+  const seedExpenseCategory = existingSeedCategory ?? await prisma.expenseLedgerCategory.create({
+    data: {
+      tenantId: tenantA.id,
+      name: "Test Expense",
+      movementType: "EXPENSE",
+      catalogScope: "BUILDING",
+      isActive: true,
+    },
+  });
+  if (
+    seedExpenseCategory.tenantId !== tenantA.id ||
+    seedExpenseCategory.name !== "Test Expense" ||
+    seedExpenseCategory.movementType !== "EXPENSE" ||
+    seedExpenseCategory.catalogScope !== "BUILDING" ||
+    !seedExpenseCategory.isActive
+  ) {
+    throw new Error(
+      `Test expense category ${seedExpenseCategory.id} has incompatible semantics; refusing to mutate financial evidence.`,
+    );
+  }
+
+  const existingSeedExpense = await prisma.expense.findUnique({
+    where: { id: seedExpenseId },
+  });
+  if (existingSeedExpense) {
+    const compatible =
+      existingSeedExpense.tenantId === tenantA.id &&
+      existingSeedExpense.buildingId === buildingA1.id &&
+      existingSeedExpense.period === currentPeriod &&
+      existingSeedExpense.liquidationPeriod === currentPeriod &&
+      existingSeedExpense.categoryId === seedExpenseCategory.id &&
+      existingSeedExpense.scopeType === "BUILDING" &&
+      existingSeedExpense.unitGroupId === null &&
+      existingSeedExpense.amountMinor === 500000 &&
+      existingSeedExpense.currencyCode === currency &&
+      existingSeedExpense.invoiceDate.getTime() === seedExpenseInvoiceDate.getTime() &&
+      existingSeedExpense.description === seedExpenseDescription &&
+      existingSeedExpense.status === ExpenseStatus.VALIDATED &&
+      existingSeedExpense.createdByMembershipId === adminMembershipA.id &&
+      existingSeedExpense.validatedByMembershipId === adminMembershipA.id &&
+      existingSeedExpense.validatedAt?.getTime() === seedExpenseInvoiceDate.getTime() &&
+      existingSeedExpense.functionalAmountMinor === 500000 &&
+      existingSeedExpense.functionalCurrencyCode === currency &&
+      existingSeedExpense.exchangeRateId === null &&
+      existingSeedExpense.exchangeRateValue?.toString() === "1" &&
+      existingSeedExpense.exchangeRateDirection === "IDENTITY" &&
+      existingSeedExpense.exchangeRateEffectiveAt === null &&
+      existingSeedExpense.conversionDate?.getTime() === seedExpenseInvoiceDate.getTime();
+
+    if (!compatible) {
+      throw new Error(
+        `Test expense ${seedExpenseId} has incompatible semantics; refusing to mutate published liquidation evidence.`,
+      );
+    }
+  } else {
+    await prisma.expense.create({
+      data: {
+        id: seedExpenseId,
+        tenantId: tenantA.id,
+        buildingId: buildingA1.id,
+        period: currentPeriod,
+        liquidationPeriod: currentPeriod,
+        categoryId: seedExpenseCategory.id,
+        scopeType: "BUILDING",
+        amountMinor: 500000,
+        currencyCode: currency,
+        invoiceDate: seedExpenseInvoiceDate,
+        postedAt: seedExpenseInvoiceDate,
+        description: seedExpenseDescription,
+        status: ExpenseStatus.VALIDATED,
+        createdByMembershipId: adminMembershipA.id,
+        validatedByMembershipId: adminMembershipA.id,
+        validatedAt: seedExpenseInvoiceDate,
+        functionalAmountMinor: 500000,
+        functionalCurrencyCode: currency,
+        exchangeRateValue: "1",
+        exchangeRateDirection: "IDENTITY",
+        conversionDate: seedExpenseInvoiceDate,
+      },
+    });
+  }
+
   const expenseSnapshot = [
     buildSeedExpenseSnapshotItem({
       expenseId: `seed-expense-${currentPeriod}`,

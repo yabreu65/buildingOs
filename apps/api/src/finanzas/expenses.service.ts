@@ -813,14 +813,20 @@ export class ExpensesService {
       this.prisma.building.findMany({ where: { tenantId }, select: { id: true, name: true } }),
       this.prisma.expenseLedgerCategory.findMany({
         where: { tenantId, movementType: 'EXPENSE', isActive: true },
-        select: { id: true, name: true },
+        select: { id: true, name: true, catalogScope: true },
       }),
       this.prisma.vendor.findMany({ where: { tenantId }, select: { id: true, name: true } }),
     ]);
 
-    const buildingsByName = new Map(buildings.map((b) => [b.name.toLowerCase(), b.id]));
-    const categoriesByName = new Map(categories.map((c) => [c.name.toLowerCase(), c.id]));
-    const vendorsByName = new Map(vendors.map((v) => [v.name.toLowerCase(), v.id]));
+    const buildingsByName = new Map(
+      buildings.map((building) => [building.name.toLowerCase().trim(), building.id]),
+    );
+    const categoriesByName = new Map(
+      categories.map((category) => [category.name.toLowerCase().trim(), category]),
+    );
+    const vendorsByName = new Map(
+      vendors.map((vendor) => [vendor.name.toLowerCase().trim(), vendor.id]),
+    );
 
     const errors: { rowIndex: number; reason: string }[] = [];
     let successCount = 0;
@@ -832,56 +838,61 @@ export class ExpensesService {
 
       try {
         // Validate required fields
-        if (!row.fecha || !row.descripcion || !row.monto || !row.moneda || !row.edificio || !row.categoria) {
+        if (!row.fecha || !row.descripcion || row.monto === undefined || !row.moneda || !row.edificio || !row.categoria) {
           throw new Error('Faltan campos requeridos (fecha, descripcion, monto, moneda, edificio, categoria)');
         }
 
-        // Parse date
         const invoiceDate = this.parseDate(row.fecha);
         if (!invoiceDate) throw new Error(`Fecha inválida: ${row.fecha}`);
 
-        // Resolve building
-        const buildingKey = row.edificio.toLowerCase().trim();
-        let buildingId: string | null = null;
-        let scopeType: 'BUILDING' | 'TENANT_SHARED' = 'BUILDING';
-
-        if (buildingKey === 'comunes' || buildingKey === 'áreas comunes' || buildingKey === 'tenant_shared') {
-          buildingId = null;
-          scopeType = 'TENANT_SHARED';
-        } else {
-          buildingId = buildingsByName.get(buildingKey) ?? null;
-          if (!buildingId) throw new Error(`Edificio no encontrado: ${row.edificio}`);
+        const liquidationPeriod = this.getAccountingPeriodFromInvoiceDate(invoiceDate);
+        if (liquidationPeriod !== period) {
+          throw new Error(
+            `El período de la factura (${liquidationPeriod}) no coincide con el período solicitado (${period})`,
+          );
         }
 
-        // Resolve category
-        const categoryId = categoriesByName.get(row.categoria.toLowerCase().trim()) ?? null;
-        if (!categoryId) throw new Error(`Categoría no encontrada: ${row.categoria}`);
+        const buildingKey = row.edificio.toLowerCase().trim();
+        if (this.isTenantSharedBuildingAlias(buildingKey)) {
+          throw new Error('Los gastos compartidos requieren allocations y no se pueden importar por esta vía');
+        }
+        const buildingId = buildingsByName.get(buildingKey);
+        if (!buildingId) throw new Error(`Edificio no encontrado: ${row.edificio}`);
 
-        // Resolve vendor (optional)
-        const vendorId = row.proveedor ? (vendorsByName.get(row.proveedor.toLowerCase().trim()) ?? null) : null;
+        const category = categoriesByName.get(row.categoria.toLowerCase().trim());
+        if (!category) throw new Error(`Categoría no encontrada: ${row.categoria}`);
+        if (category.catalogScope !== 'BUILDING') {
+          throw new Error(`La categoría ${row.categoria} no es válida para gastos de edificio`);
+        }
 
-        // Validate currency
-        const currencyCode = (row.moneda ?? 'USD').toUpperCase().trim();
+        const vendorName = row.proveedor?.trim();
+        const vendorId = vendorName ? vendorsByName.get(vendorName.toLowerCase()) : null;
+        if (vendorName && !vendorId) {
+          throw new Error(`Proveedor no encontrado: ${row.proveedor}`);
+        }
+
+        const currencyCode = row.moneda.toUpperCase().trim();
         if (!CANONICAL_CURRENCIES.includes(currencyCode as CanonicalCurrency)) {
           throw new Error(`Moneda inválida: ${row.moneda}`);
         }
 
-        // Validate monto is a number
-        const monto = typeof row.monto === 'number' ? row.monto : parseFloat(String(row.monto));
-        if (isNaN(monto) || monto <= 0) {
+        const amountMinor = this.parseImportAmountMinor(row.monto);
+        if (amountMinor === null) {
           throw new Error(`Monto inválido: ${row.monto}`);
         }
 
-        // Create expense
+        await this.assertBuildingPeriodIsOpen(tenantId, buildingId, liquidationPeriod);
+
         await this.prisma.expense.create({
           data: {
             tenantId,
             buildingId,
-            period,
-            categoryId,
+            period: liquidationPeriod,
+            liquidationPeriod,
+            categoryId: category.id,
             vendorId,
-            scopeType,
-            amountMinor: Math.round(monto * 100),
+            scopeType: 'BUILDING',
+            amountMinor,
             currencyCode,
             invoiceDate,
             description: row.descripcion,
@@ -904,6 +915,27 @@ export class ExpensesService {
 
   // ── Helper ────────────────────────────────────────────────────────────
 
+  private parseImportAmountMinor(value: unknown): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return null;
+    }
+
+    const serialized = value.toString();
+    if (!/^\d+(?:\.\d{1,2})?$/.test(serialized)) {
+      return null;
+    }
+
+    const [whole, fraction = ''] = serialized.split('.');
+    const amountMinor = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+    return Number.isSafeInteger(amountMinor) && amountMinor > 0 ? amountMinor : null;
+  }
+
+  private isTenantSharedBuildingAlias(building: string): boolean {
+    return ['comunes', 'áreas comunes', 'areas comunes', 'tenant_shared', 'tenant shared'].includes(
+      building,
+    );
+  }
+
   private parseDate(dateStr: string): Date | null {
     // Try DD/MM/YYYY
     const match = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -911,8 +943,10 @@ export class ExpensesService {
       const day = parseInt(match[1]!, 10);
       const month = parseInt(match[2]!, 10);
       const year = parseInt(match[3]!, 10);
-      const d = new Date(year, month - 1, day);
-      return d.getMonth() === month - 1 ? d : null;
+      const d = new Date(Date.UTC(year, month - 1, day));
+      return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day
+        ? d
+        : null;
     }
     // Try YYYY-MM-DD
     try {

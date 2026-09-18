@@ -87,6 +87,7 @@ describe('LiquidationPublicationUseCase', () => {
 
   let tx: {
     $queryRaw: jest.Mock;
+    $executeRaw: jest.Mock;
     membership: { findFirst: jest.Mock };
     liquidation: { findFirst: jest.Mock; updateMany: jest.Mock };
     unit: { findMany: jest.Mock };
@@ -101,6 +102,12 @@ describe('LiquidationPublicationUseCase', () => {
   beforeEach(() => {
     tx = {
       $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      expense: {
+        findMany: jest.fn().mockImplementation(({ where }) =>
+          where.id.in.map((id: string) => ({ id, status: 'VALIDATED' })),
+        ),
+      },
       membership: {
       findFirst: jest.fn().mockResolvedValue({
         id: 'member-1',
@@ -250,6 +257,53 @@ describe('LiquidationPublicationUseCase', () => {
         }),
       }),
     }));
+  });
+
+  it('accepts a TENANT_SHARED projected snapshot without comparing it to the whole Expense amount', async () => {
+    tx.expense.findMany.mockResolvedValueOnce([
+      { id: 'exp-1', status: 'VALIDATED', amountMinor: 10000, scopeType: 'TENANT_SHARED' },
+    ]);
+
+    await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+      dueDate: '2026-06-10',
+    })).resolves.toMatchObject({ status: 'PUBLISHED' });
+    expect(tx.charge.createMany).toHaveBeenCalled();
+  });
+
+  it('fails closed before output writes when a modern expense source is no longer VALIDATED', async () => {
+    tx.expense.findMany.mockResolvedValueOnce([{ id: 'exp-1', status: 'DRAFT' }]);
+
+    await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+      dueDate: '2026-06-10',
+    })).rejects.toMatchObject({
+      response: {
+        statusCode: 422,
+        error: 'LIQUIDATION_EXPENSE_SOURCE_DRIFT',
+      },
+    });
+
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.expense.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 'tenant-1', id: { in: ['exp-1'] } },
+      select: { id: true, status: true },
+    });
+    expect(tx.charge.createMany).not.toHaveBeenCalled();
+    expect(tx.liquidation.updateMany).not.toHaveBeenCalled();
+    expect(deps.createAuditLogRequired).not.toHaveBeenCalled();
+  });
+
+  it('preserves PUBLISHED idempotency without revalidating expense sources', async () => {
+    tx.liquidation.findFirst.mockReset().mockResolvedValueOnce({
+      ...baseLiquidation,
+      status: 'PUBLISHED',
+    });
+
+    await expect(useCase.execute('tenant-1', 'liq-1', 'member-1', {
+      dueDate: '2026-06-10',
+    })).resolves.toMatchObject({ status: 'PUBLISHED' });
+
+    expect(tx.expense.findMany).not.toHaveBeenCalled();
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
   });
 
   it('publishes charges from the frozen draft distribution after live weights change', async () => {

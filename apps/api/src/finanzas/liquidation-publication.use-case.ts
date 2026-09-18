@@ -30,6 +30,7 @@ import {
   type PublishLiquidationDto,
 } from './expense-ledger.dto';
 import { lockUnitChargesForAllocation } from './payment-allocation-transaction';
+import { acquireExpenseLock } from './movement-locks';
 import { lockUnitsFinancialMutations } from './unit-financial-lock';
 
 export type NotificationPolicy = 'post-commit' | 'disabled';
@@ -646,7 +647,14 @@ export class LiquidationPublicationUseCase {
             });
           }
 
-          const publicationExpenses = getPublicationSnapshotExpenses(current.expenseSnapshot);
+          const publicationExpenses =
+            currentRecord.publicationIntegrityVersion === 1
+              ? await getValidatedModernPublicationExpenses(
+                  tx,
+                  tenantId,
+                  current.expenseSnapshot,
+                )
+              : getPublicationSnapshotExpenses(current.expenseSnapshot);
           const valuationMode = current.valuationMode ?? 'LEGACY_NOMINAL';
           assertLiquidationMovementCurrency(
             publicationExpenses,
@@ -1790,6 +1798,59 @@ function assertFrozenDistributionMatchesExpenseSources(
       invalidFrozenSource();
     }
   }
+}
+
+async function getValidatedModernPublicationExpenses(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  expenseSnapshot: unknown,
+): Promise<ReadonlyArray<PublishedExpenseSnapshot>> {
+  let publicationExpenses: ReadonlyArray<PublishedExpenseSnapshot>;
+
+  try {
+    publicationExpenses = getPublicationSnapshotExpenses(expenseSnapshot);
+  } catch {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: 'LIQUIDATION_EXPENSE_SOURCE_DRIFT',
+      message: 'El snapshot de gastos de la liquidación es inválido; no se publica',
+    });
+  }
+
+  const expenseIds = [
+    ...new Set(
+      publicationExpenses
+        .filter((expense) => expense.type === 'EXPENSE')
+        .map((expense) => expense.expenseId),
+    ),
+  ].sort();
+
+  for (const expenseId of expenseIds) {
+    await acquireExpenseLock(tx, tenantId, expenseId);
+  }
+
+  if (expenseIds.length === 0) {
+    return publicationExpenses;
+  }
+
+  const expenses = await tx.expense.findMany({
+    where: { tenantId, id: { in: expenseIds } },
+    select: { id: true, status: true },
+  });
+
+  if (
+    expenses.length !== expenseIds.length ||
+    expenses.some((expense) => expense.status !== 'VALIDATED')
+  ) {
+    throw new UnprocessableEntityException({
+      statusCode: 422,
+      error: 'LIQUIDATION_EXPENSE_SOURCE_DRIFT',
+      message:
+        'Los gastos de la liquidación ya no existen en el tenant o no están validados; no se publica',
+    });
+  }
+
+  return publicationExpenses;
 }
 
 function getPublicationSnapshotExpenses(
