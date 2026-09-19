@@ -4,6 +4,7 @@ import {
   classifyPaymentSideAllocations,
 } from '../finanzas/payment-allocation-transaction';
 import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
+import { isEffectivePaymentStatus } from '../finanzas/payment-status-semantics';
 
 export const RECONCILIATION_OUTCOMES = [
   'RECONCILED',
@@ -63,7 +64,7 @@ export interface HistoricalPaymentReconciliationEvidence {
   readonly id: string;
   readonly tenantId: string;
   readonly buildingId: string;
-  readonly unitId: string;
+  readonly unitId: string | null;
   readonly amountMinor: number;
   readonly currency: string;
   readonly status: string;
@@ -438,25 +439,27 @@ export function reconcilePayment(
   payment: HistoricalPaymentReconciliationEvidence,
 ): ReconciliationResult {
   const findings: ReconciliationFinding[] = [];
-  if (!payment.id || !payment.tenantId || !payment.buildingId || !payment.unitId) {
-    findings.push(finding('INVALID_PAYMENT_SCOPE', 'Payment identity and ownership scope are required'));
+  if (!payment.id || !payment.tenantId || !payment.buildingId) {
+    findings.push(finding('INVALID_PAYMENT_SCOPE', 'Payment identity and tenant/building scope are required'));
   }
   if (!isSafeMinor(payment.amountMinor) || !isHistoricalCurrency(payment.currency)) {
     findings.push(finding('INVALID_PAYMENT_AMOUNT', 'Payment amount and currency must be valid historical evidence'));
   }
-  if (payment.status !== 'APPROVED' && payment.status !== 'RECONCILED') {
-    findings.push(finding('INVALID_PAYMENT_STATUS', 'Payment status is not supported by the canonical consumption contract'));
+  if (!['SUBMITTED', 'APPROVED', 'REJECTED', 'RECONCILED'].includes(payment.status)) {
+    findings.push(finding('INVALID_PAYMENT_STATUS', 'Payment status is not supported by the canonical Payment status contract'));
   }
 
+  const allocationUnitIds = new Set<string>();
   let effectiveChargeAllocatedMinor = 0;
   for (const allocation of payment.paymentAllocations) {
+    allocationUnitIds.add(allocation.charge.unitId);
     if (allocation.paymentId !== payment.id
       || allocation.tenantId !== payment.tenantId
       || allocation.buildingId !== payment.buildingId
-      || allocation.unitId !== payment.unitId
+      || allocation.unitId !== allocation.charge.unitId
+      || (payment.unitId !== null && allocation.unitId !== payment.unitId)
       || allocation.charge.tenantId !== payment.tenantId
-      || allocation.charge.buildingId !== payment.buildingId
-      || allocation.charge.unitId !== payment.unitId) {
+      || allocation.charge.buildingId !== payment.buildingId) {
       findings.push(finding('CROSS_SCOPE_EVIDENCE', 'Payment allocation or Charge does not belong to the Payment scope'));
     }
     if (!isSafeMinor(allocation.amount) || (allocation.paymentOriginalAmountMinor !== null && !isSafeMinor(allocation.paymentOriginalAmountMinor))) {
@@ -469,6 +472,12 @@ export function reconcilePayment(
     if (!isHistoricalCurrency(allocation.charge.currency)) {
       findings.push(finding('INVALID_CHARGE_CURRENCY', 'Payment allocation Charge currency is invalid'));
     }
+  }
+  if (payment.unitId === null && allocationUnitIds.size > 1) {
+    findings.push(finding('CROSS_SCOPE_EVIDENCE', 'Building-level Payment allocations must resolve to one Charge unit'));
+  }
+  if (payment.canceledAt !== null || !isEffectivePaymentStatus(payment.status)) {
+    effectiveChargeAllocatedMinor = 0;
   }
 
   const paymentInput = {
@@ -487,10 +496,31 @@ export function reconcilePayment(
       charge: { currency: allocation.charge.currency },
     })),
   };
+  const legacyCrossEvidence = payment.paymentAllocations.length > 0
+    && payment.amountMinor > 0
+    && payment.functionalAmountMinor === null
+    && payment.functionalCurrencyCode === null
+    && payment.exchangeRateId === null
+    && payment.exchangeRateValue === null
+    && payment.exchangeRateDirection === null
+    && payment.exchangeRateEffectiveAt === null
+    && payment.conversionDate === null
+    && payment.paymentAllocations.every((allocation) =>
+      allocation.charge.currency !== payment.currency
+      && allocation.paymentOriginalAmountMinor === null
+      && allocation.amount > 0,
+    );
   const classification = classifyPaymentSideAllocations(paymentInput);
   if (classification.kind === 'MIXED') {
     findings.push(finding('INVALID_PAYMENT_CURRENCY_MODE', 'Payment allocations mix same- and cross-currency evidence'));
   } else if (classification.kind === 'UNRESOLVED_LEGACY_CROSS') {
+    if (legacyCrossEvidence && findings.length === 0) {
+      return result('LEGACY_RECONCILED', [], {
+        mode: 'CROSS',
+        legacyClassification: 'LEGACY_PAYMENT_ALLOCATION_CROSS',
+        effectiveChargeAllocatedMinor,
+      });
+    }
     findings.push(finding('INVALID_PAYMENT_LEGACY_SNAPSHOT', 'Cross-currency Payment allocation lacks original-consumption evidence'));
   } else if (classification.kind === 'UNRESOLVED_CROSS_SNAPSHOT') {
     findings.push(finding('INVALID_PAYMENT_FUNCTIONAL_SNAPSHOT', `Cross-currency Payment snapshot is unresolved: ${classification.reason}`));
@@ -509,14 +539,14 @@ export function reconcilePayment(
     if (payment.canceledAt === null && payment.status === 'RECONCILED' && (!allChargesPaid || !completelyConsumed)) {
       findings.push(finding('INVALID_RECONCILED_PAYMENT', 'RECONCILED Payment lacks complete canonical consumption evidence'));
     }
-    if (payment.canceledAt !== null) effectiveChargeAllocatedMinor = 0;
+    if (payment.canceledAt !== null || !isEffectivePaymentStatus(payment.status)) effectiveChargeAllocatedMinor = 0;
     return result(
       outcomeForFindings(findings, false),
       findings,
       { ...aggregate, allChargesPaid, effectiveChargeAllocatedMinor },
     );
   }
-  if (payment.canceledAt !== null) effectiveChargeAllocatedMinor = 0;
+  if (payment.canceledAt !== null || !isEffectivePaymentStatus(payment.status)) effectiveChargeAllocatedMinor = 0;
   return result(
     outcomeForFindings(findings, false),
     findings,

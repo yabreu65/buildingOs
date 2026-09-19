@@ -304,6 +304,8 @@ describe('historical financial reconciliation', () => {
 
   it.each([
     ['accepts same-currency APPROVED remainder', payment({ paymentAllocations: [paymentAllocation()] }), 'RECONCILED'],
+    ['accepts structurally valid SUBMITTED payment', payment({ status: 'SUBMITTED', paymentAllocations: [paymentAllocation()] }), 'RECONCILED'],
+    ['accepts structurally valid REJECTED payment', payment({ status: 'REJECTED', paymentAllocations: [paymentAllocation()] }), 'RECONCILED'],
     ['accepts exact same-currency consumption', payment({ paymentAllocations: [paymentAllocation({ amount: 10_000, paymentOriginalAmountMinor: 10_000 })] }), 'RECONCILED'],
     ['blocks same-currency overconsumption', payment({ paymentAllocations: [paymentAllocation({ amount: 10_001, paymentOriginalAmountMinor: 10_001 })] }), 'INVALID_BLOCKING'],
     ['accepts exact cross-currency reconciled consumption', payment({ ...crossSnapshot, status: 'RECONCILED', paymentAllocations: [
@@ -323,7 +325,9 @@ describe('historical financial reconciliation', () => {
   ] as const)('%s', (_name, evidence, outcome) => {
     const result = reconcilePayment(evidence);
     expect(result.outcome).toBe(outcome);
-    if (evidence.canceledAt !== null) expect(result.evidence?.effectiveChargeAllocatedMinor).toBe(0);
+    if (evidence.canceledAt !== null || evidence.status === 'SUBMITTED' || evidence.status === 'REJECTED') {
+      expect(result.evidence?.effectiveChargeAllocatedMinor).toBe(0);
+    }
   });
 
   it('reports one global functional consumption for cross-currency allocations', () => {
@@ -339,9 +343,50 @@ describe('historical financial reconciliation', () => {
     expect(result.evidence).toMatchObject({ functionalConsumedMinor: 18_250, functionalRemainingMinor: 0, originalConsumedMinor: 10_000, originalRemainingMinor: 0 });
   });
 
+  it('preserves the 3G.1 legacy-supported cross-currency allocation', () => {
+    const result = reconcilePayment(payment({
+      amountMinor: 100,
+      paymentAllocations: [paymentAllocation({
+        amount: 18_250,
+        paymentOriginalAmountMinor: null,
+        charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' },
+      })],
+    }));
+    expect(result.outcome).toBe('LEGACY_RECONCILED');
+    expect(result.evidence).toMatchObject({
+      mode: 'CROSS',
+      legacyClassification: 'LEGACY_PAYMENT_ALLOCATION_CROSS',
+    });
+  });
+
+  it('supports a building-level Payment without fabricating a unit', () => {
+    const result = reconcilePayment(payment({
+      unitId: null,
+      paymentAllocations: [paymentAllocation()],
+    }));
+    expect(result.outcome).toBe('RECONCILED');
+    expect(result.findings).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'INVALID_PAYMENT_SCOPE' }),
+    ]));
+  });
+
+  it('blocks building-level allocations that span multiple Charge units', () => {
+    const result = reconcilePayment(payment({
+      unitId: null,
+      paymentAllocations: [
+        paymentAllocation(),
+        paymentAllocation({
+          unitId: 'unit-2',
+          charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-2', currency: 'USD', status: 'PENDING' },
+        }),
+      ],
+    }));
+    expect(result.outcome).toBe('INVALID_BLOCKING');
+    expect(result.findings.map((finding) => finding.code)).toContain('CROSS_SCOPE_EVIDENCE');
+  });
+
   it.each([
     ['MIXED', payment({ paymentAllocations: [paymentAllocation(), paymentAllocation({ amount: 36_500, paymentOriginalAmountMinor: 1_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'VES', status: 'PENDING' } })] })],
-    ['unresolved legacy cross', payment({ ...crossSnapshot, paymentAllocations: [paymentAllocation({ amount: 18_250, paymentOriginalAmountMinor: null, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } })] })],
     ['partial snapshot', payment({ functionalAmountMinor: 18_250, paymentAllocations: [paymentAllocation({ amount: 18_250, paymentOriginalAmountMinor: 1_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } })] })],
     ['unsupported currency relationship', payment({ ...crossSnapshot, functionalCurrencyCode: 'VES', paymentAllocations: [paymentAllocation({ amount: 18_250, paymentOriginalAmountMinor: 1_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } })] })],
   ] as const)('fails closed for %s payment evidence', (_name, evidence) => {
