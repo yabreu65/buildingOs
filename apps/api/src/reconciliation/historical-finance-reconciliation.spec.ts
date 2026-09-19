@@ -370,6 +370,18 @@ describe('historical financial reconciliation', () => {
     ]));
   });
 
+  it.each([undefined, 123] as const)('blocks malformed Payment unit scope %p instead of treating it as building-level', (unitId) => {
+    const malformedEvidence = {
+      ...payment({ paymentAllocations: [paymentAllocation()] }),
+      unitId,
+    } as unknown as HistoricalPaymentReconciliationEvidence;
+    const result = reconcilePayment(malformedEvidence);
+    expect(result.outcome).toBe('INVALID_BLOCKING');
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'INVALID_PAYMENT_SCOPE' }),
+    ]));
+  });
+
   it('blocks building-level allocations that span multiple Charge units', () => {
     const result = reconcilePayment(payment({
       unitId: null,

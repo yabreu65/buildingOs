@@ -439,7 +439,12 @@ export function reconcilePayment(
   payment: HistoricalPaymentReconciliationEvidence,
 ): ReconciliationResult {
   const findings: ReconciliationFinding[] = [];
-  if (!payment.id || !payment.tenantId || !payment.buildingId) {
+  if (
+    !payment.id
+    || !payment.tenantId
+    || !payment.buildingId
+    || (payment.unitId !== null && typeof payment.unitId !== 'string')
+  ) {
     findings.push(finding('INVALID_PAYMENT_SCOPE', 'Payment identity and tenant/building scope are required'));
   }
   if (!isSafeMinor(payment.amountMinor) || !isHistoricalCurrency(payment.currency)) {
