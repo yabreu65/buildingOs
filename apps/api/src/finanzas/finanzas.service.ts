@@ -2565,6 +2565,7 @@ export class FinanzasService {
       where: {
         tenantId,
         paymentId,
+        charge: { tenantId, buildingId },
       },
       include: {
         charge: {
@@ -2663,6 +2664,10 @@ export class FinanzasService {
       where: { id: paymentId, tenantId, buildingId },
       include: {
         paymentAllocations: {
+          where: {
+            tenantId,
+            charge: { tenantId, buildingId },
+          },
           include: {
             charge: {
               select: {
