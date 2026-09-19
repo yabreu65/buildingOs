@@ -3686,6 +3686,63 @@ describe('FinanzasService', () => {
         'building-1',
       );
     });
+
+    it('scopes allocation charges to the requested tenant and building', async () => {
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: 'payment-1',
+        unitId: null,
+      } as never);
+      jest.spyOn(prismaService.paymentAllocation, 'findMany').mockResolvedValue([] as never);
+
+      await service.getPaymentAllocations(
+        'tenant-1',
+        'building-1',
+        'payment-1',
+        ['TENANT_ADMIN'],
+        'admin-1',
+      );
+
+      expect(prismaService.paymentAllocation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            tenantId: 'tenant-1',
+            paymentId: 'payment-1',
+            charge: { tenantId: 'tenant-1', buildingId: 'building-1' },
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('getPayment', () => {
+    it('scopes nested allocation charges to the requested tenant and building', async () => {
+      jest.spyOn(prismaService.payment, 'findFirst').mockResolvedValue({
+        id: 'payment-1',
+        notes: null,
+      } as never);
+
+      await service.getPayment(
+        'tenant-1',
+        'building-1',
+        'payment-1',
+        ['TENANT_ADMIN'],
+        'admin-1',
+      );
+
+      expect(prismaService.payment.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'payment-1', tenantId: 'tenant-1', buildingId: 'building-1' },
+          include: expect.objectContaining({
+            paymentAllocations: expect.objectContaining({
+              where: {
+                tenantId: 'tenant-1',
+                charge: { tenantId: 'tenant-1', buildingId: 'building-1' },
+              },
+            }),
+          }),
+        }),
+      );
+    });
   });
 
   describe('resident charge selection reservation cancellation semantics (3F-R6)', () => {
@@ -4057,6 +4114,48 @@ describe('FinanzasService', () => {
       );
       expect(ledger.totals.balanceByCurrency).toEqual([]);
       expect(ledger.totals.totalChargesByCurrency).toEqual([]);
+    });
+
+    it('reads persisted historical UYU charges without conversion or write validation', async () => {
+      const persistedUyuCharge = charge({
+        id: 'legacy-uyu-charge',
+        amount: 12347,
+        currency: 'UYU',
+      });
+      mockLedgerBase([persistedUyuCharge]);
+
+      const ledger = await service.getUnitLedger(
+        tenantId,
+        unitId,
+        undefined,
+        undefined,
+        ['TENANT_ADMIN'],
+        'user-1',
+        { tenantId, roles: ['TENANT_ADMIN'], scopedRoles: [] },
+      );
+
+      expect(ledger.charges).toEqual([
+        expect.objectContaining({
+          id: 'legacy-uyu-charge',
+          amount: 12347,
+          currency: 'UYU',
+        }),
+      ]);
+      expect(ledger.totals.totalChargesByCurrency).toEqual([
+        { currency: 'UYU', amountMinor: 12347 },
+      ]);
+      expect(ledger.totals.totalPaidByCurrency).toEqual([
+        { currency: 'UYU', amountMinor: 0 },
+      ]);
+      expect(ledger.totals.totalAllocatedByCurrency).toEqual([
+        { currency: 'UYU', amountMinor: 0 },
+      ]);
+      expect(ledger.totals.balanceByCurrency).toEqual([
+        { currency: 'UYU', amountMinor: 12347 },
+      ]);
+      expect(prismaService.exchangeRate.findFirst).not.toHaveBeenCalled();
+      expect(prismaService.tenant.findFirst).not.toHaveBeenCalled();
+      expect(validators.canWriteCharges).not.toHaveBeenCalled();
     });
 
     it('amount scale: minor units preserved (12345)', async () => {
