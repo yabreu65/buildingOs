@@ -1,3 +1,8 @@
+import type { Prisma } from '@prisma/client';
+import {
+  aggregatePaymentSideAllocations,
+  classifyPaymentSideAllocations,
+} from '../finanzas/payment-allocation-transaction';
 import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
 
 export const RECONCILIATION_OUTCOMES = [
@@ -36,6 +41,41 @@ export interface HistoricalPaymentEvidence {
 export interface HistoricalPaymentAllocationEvidence {
   readonly amount: number;
   readonly payment?: HistoricalPaymentEvidence | null;
+}
+
+export interface HistoricalPaymentReconciliationAllocationEvidence {
+  readonly paymentId: string;
+  readonly tenantId: string;
+  readonly buildingId: string;
+  readonly unitId: string;
+  readonly amount: number;
+  readonly paymentOriginalAmountMinor: number | null;
+  readonly charge: {
+    readonly tenantId: string;
+    readonly buildingId: string;
+    readonly unitId: string;
+    readonly currency: string;
+    readonly status: string;
+  };
+}
+
+export interface HistoricalPaymentReconciliationEvidence {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly buildingId: string;
+  readonly unitId: string;
+  readonly amountMinor: number;
+  readonly currency: string;
+  readonly status: string;
+  readonly canceledAt: Date | string | null;
+  readonly functionalAmountMinor: number | null;
+  readonly functionalCurrencyCode: string | null;
+  readonly exchangeRateId: string | null;
+  readonly exchangeRateValue: Prisma.Decimal | null;
+  readonly exchangeRateDirection: string | null;
+  readonly exchangeRateEffectiveAt: Date | null;
+  readonly conversionDate: Date | null;
+  readonly paymentAllocations: readonly HistoricalPaymentReconciliationAllocationEvidence[];
 }
 
 export interface HistoricalChargeEvidence {
@@ -394,6 +434,96 @@ export function reconcileDebtAggregate(
   );
 }
 
+export function reconcilePayment(
+  payment: HistoricalPaymentReconciliationEvidence,
+): ReconciliationResult {
+  const findings: ReconciliationFinding[] = [];
+  if (!payment.id || !payment.tenantId || !payment.buildingId || !payment.unitId) {
+    findings.push(finding('INVALID_PAYMENT_SCOPE', 'Payment identity and ownership scope are required'));
+  }
+  if (!isSafeMinor(payment.amountMinor) || !isHistoricalCurrency(payment.currency)) {
+    findings.push(finding('INVALID_PAYMENT_AMOUNT', 'Payment amount and currency must be valid historical evidence'));
+  }
+  if (payment.status !== 'APPROVED' && payment.status !== 'RECONCILED') {
+    findings.push(finding('INVALID_PAYMENT_STATUS', 'Payment status is not supported by the canonical consumption contract'));
+  }
+
+  let effectiveChargeAllocatedMinor = 0;
+  for (const allocation of payment.paymentAllocations) {
+    if (allocation.paymentId !== payment.id
+      || allocation.tenantId !== payment.tenantId
+      || allocation.buildingId !== payment.buildingId
+      || allocation.unitId !== payment.unitId
+      || allocation.charge.tenantId !== payment.tenantId
+      || allocation.charge.buildingId !== payment.buildingId
+      || allocation.charge.unitId !== payment.unitId) {
+      findings.push(finding('CROSS_SCOPE_EVIDENCE', 'Payment allocation or Charge does not belong to the Payment scope'));
+    }
+    if (!isSafeMinor(allocation.amount) || (allocation.paymentOriginalAmountMinor !== null && !isSafeMinor(allocation.paymentOriginalAmountMinor))) {
+      findings.push(finding('INVALID_PAYMENT_ALLOCATION', 'Payment allocation amounts must be non-negative safe integers'));
+    } else {
+      const nextTotal = addSafeMinor(effectiveChargeAllocatedMinor, allocation.amount);
+      if (nextTotal === undefined) findings.push(finding('INVALID_PAYMENT_ALLOCATION', 'Payment allocation total exceeds safe integer range'));
+      else effectiveChargeAllocatedMinor = nextTotal;
+    }
+    if (!isHistoricalCurrency(allocation.charge.currency)) {
+      findings.push(finding('INVALID_CHARGE_CURRENCY', 'Payment allocation Charge currency is invalid'));
+    }
+  }
+
+  const paymentInput = {
+    amount: payment.amountMinor,
+    currency: payment.currency,
+    functionalAmountMinor: payment.functionalAmountMinor,
+    functionalCurrencyCode: payment.functionalCurrencyCode,
+    exchangeRateId: payment.exchangeRateId,
+    exchangeRateValue: payment.exchangeRateValue,
+    exchangeRateDirection: payment.exchangeRateDirection,
+    exchangeRateEffectiveAt: payment.exchangeRateEffectiveAt,
+    conversionDate: payment.conversionDate,
+    paymentAllocations: payment.paymentAllocations.map((allocation) => ({
+      amount: allocation.amount,
+      paymentOriginalAmountMinor: allocation.paymentOriginalAmountMinor,
+      charge: { currency: allocation.charge.currency },
+    })),
+  };
+  const classification = classifyPaymentSideAllocations(paymentInput);
+  if (classification.kind === 'MIXED') {
+    findings.push(finding('INVALID_PAYMENT_CURRENCY_MODE', 'Payment allocations mix same- and cross-currency evidence'));
+  } else if (classification.kind === 'UNRESOLVED_LEGACY_CROSS') {
+    findings.push(finding('INVALID_PAYMENT_LEGACY_SNAPSHOT', 'Cross-currency Payment allocation lacks original-consumption evidence'));
+  } else if (classification.kind === 'UNRESOLVED_CROSS_SNAPSHOT') {
+    findings.push(finding('INVALID_PAYMENT_FUNCTIONAL_SNAPSHOT', `Cross-currency Payment snapshot is unresolved: ${classification.reason}`));
+  } else {
+    const aggregate = aggregatePaymentSideAllocations(paymentInput);
+    if (aggregate.originalRemainingMinor < 0) {
+      findings.push(finding('PAYMENT_ORIGINAL_OVERCONSUMED', 'Payment original amount is over-consumed without clamping'));
+    }
+    if (aggregate.functionalRemainingMinor !== null && aggregate.functionalRemainingMinor < 0) {
+      findings.push(finding('PAYMENT_FUNCTIONAL_OVERCONSUMED', 'Payment functional amount is over-consumed without clamping'));
+    }
+    const completelyConsumed = aggregate.mode === 'CROSS'
+      ? aggregate.originalRemainingMinor === 0 && aggregate.functionalRemainingMinor === 0
+      : aggregate.mode === 'SAME' && aggregate.originalRemainingMinor === 0;
+    const allChargesPaid = payment.paymentAllocations.every((allocation) => allocation.charge.status === 'PAID');
+    if (payment.canceledAt === null && payment.status === 'RECONCILED' && (!allChargesPaid || !completelyConsumed)) {
+      findings.push(finding('INVALID_RECONCILED_PAYMENT', 'RECONCILED Payment lacks complete canonical consumption evidence'));
+    }
+    if (payment.canceledAt !== null) effectiveChargeAllocatedMinor = 0;
+    return result(
+      outcomeForFindings(findings, false),
+      findings,
+      { ...aggregate, allChargesPaid, effectiveChargeAllocatedMinor },
+    );
+  }
+  if (payment.canceledAt !== null) effectiveChargeAllocatedMinor = 0;
+  return result(
+    outcomeForFindings(findings, false),
+    findings,
+    { effectiveChargeAllocatedMinor },
+  );
+}
+
 export function reconcileMovementAllocations(
   allocations: readonly HistoricalMovementAllocationEvidence[],
 ): ReconciliationResult {
@@ -408,8 +538,13 @@ export function reconcileMovementAllocations(
     return result(outcomeForFindings(findings, false), findings);
   }
   const parent = firstAllocation.parent;
-  const modes = new Set(allocations.map((allocation) => allocation.amountMinor !== null && allocation.amountMinor !== undefined ? 'AMOUNT' : 'PERCENTAGE'));
+  const modes = new Set(allocations.map((allocation) => allocation.percentage !== null && allocation.percentage !== undefined ? 'PERCENTAGE' : 'AMOUNT'));
   if (modes.size !== 1) findings.push(finding('INVALID_ALLOCATION_MODE', 'Movement allocations must use one persisted allocation mode'));
+  const percentageMode = modes.has('PERCENTAGE');
+  const persistedAmountPresence = allocations.map((allocation) => allocation.amountMinor !== null && allocation.amountMinor !== undefined);
+  if (percentageMode && persistedAmountPresence.some(Boolean) && persistedAmountPresence.some((present) => !present)) {
+    findings.push(finding('INVALID_ALLOCATION_MODE', 'Percentage allocations must have a consistent persisted amount shape'));
+  }
   let amountTotal = 0;
   let percentageTenThousandthsTotal = 0;
   for (const allocation of allocations) {
@@ -432,10 +567,15 @@ export function reconcileMovementAllocations(
       else percentageTenThousandthsTotal += percentageTenThousandths;
     }
   }
-  if (modes.has('AMOUNT') && amountTotal !== parent.amountMinor) findings.push(finding('ALLOCATION_TOTAL_MISMATCH', `Movement allocation amounts do not equal the persisted parent total: expected ${parent.amountMinor}, reported ${amountTotal}`));
-  if (modes.has('PERCENTAGE') && percentageTenThousandthsTotal !== 1_000_000) findings.push(finding('ALLOCATION_PERCENTAGE_MISMATCH', `Movement allocation percentages do not equal 100%: expected 1000000 ten-thousandths of a percentage point, reported ${percentageTenThousandthsTotal}`));
+  if (!percentageMode && modes.has('AMOUNT') && allocations.some((allocation) => allocation.amountMinor === null || allocation.amountMinor === undefined)) {
+    findings.push(finding('INVALID_ALLOCATION_AMOUNT', 'Amount allocations require persisted amount evidence'));
+  }
+  if ((percentageMode && persistedAmountPresence.some(Boolean)) || modes.has('AMOUNT')) {
+    if (amountTotal !== parent.amountMinor) findings.push(finding('ALLOCATION_TOTAL_MISMATCH', `Movement allocation amounts do not equal the persisted parent total: expected ${parent.amountMinor}, reported ${amountTotal}`));
+  }
+  if (percentageMode && percentageTenThousandthsTotal !== 1_000_000) findings.push(finding('ALLOCATION_PERCENTAGE_MISMATCH', `Movement allocation percentages do not equal 100%: expected 1000000 ten-thousandths of a percentage point, reported ${percentageTenThousandthsTotal}`));
   return result(
-    outcomeForFindings(findings, parent.currency !== 'USD' && parent.currency !== 'VES' && parent.currency !== 'ARS' && parent.currency !== 'COP'),
+    outcomeForFindings(findings, !percentageMode && parent.currency !== 'USD' && parent.currency !== 'VES' && parent.currency !== 'ARS' && parent.currency !== 'COP'),
     findings,
     { amountTotal, percentageTenThousandthsTotal, expectedAmountMinor: parent.amountMinor, expectedPercentageTenThousandths: 1_000_000 },
   );

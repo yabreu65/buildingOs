@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import {
   reconcileCharge,
   reconcileCurrencyBuckets,
@@ -9,7 +10,9 @@ import {
   reconcileDebtAggregate,
   reconcileMovementAllocations,
   reconcileExpenseLiquidation,
+  reconcilePayment,
   type HistoricalChargeEvidence,
+  type HistoricalPaymentReconciliationEvidence,
 } from './historical-finance-reconciliation';
 
 describe('historical financial reconciliation', () => {
@@ -264,6 +267,85 @@ describe('historical financial reconciliation', () => {
       percentageTenThousandthsTotal: 500_000,
       expectedPercentageTenThousandths: 1_000_000,
     });
+  });
+
+  it.each([
+    ['accepts percentage rows with canonical persisted amounts', [{ percentage: 60, amountMinor: 6_000 }, { percentage: 40, amountMinor: 4_000 }], 'RECONCILED', undefined],
+    ['blocks percentage contradiction despite canonical persisted amounts', [{ percentage: 60, amountMinor: 5_000 }, { percentage: 60, amountMinor: 5_000 }], 'REPAIRABLE_DISCREPANCY', 'ALLOCATION_PERCENTAGE_MISMATCH'],
+    ['blocks canonical percentages with contradictory persisted amounts', [{ percentage: 60, amountMinor: 7_000 }, { percentage: 40, amountMinor: 4_000 }], 'REPAIRABLE_DISCREPANCY', 'ALLOCATION_TOTAL_MISMATCH'],
+    ['accepts canonical precision percentages with persisted amounts', [{ percentage: 33.3333, amountMinor: 3_333 }, { percentage: 33.3333, amountMinor: 3_333 }, { percentage: 33.3334, amountMinor: 3_334 }], 'RECONCILED', undefined],
+  ] as const)('%s', (_name, rows, outcome, findingCode) => {
+    const result = reconcileMovementAllocations(rows.map((row) => ({
+      tenantId: 'tenant-1', buildingId: 'building-1', currency: 'ARS', ...row,
+      parent: { tenantId: 'tenant-1', buildingId: 'building-1', amountMinor: 10_000, currency: 'ARS' },
+    })));
+    expect(result.outcome).toBe(outcome);
+    if (findingCode !== undefined) expect(result.findings.map((finding) => finding.code)).toContain(findingCode);
+  });
+
+  const payment = (overrides: Partial<HistoricalPaymentReconciliationEvidence> = {}): HistoricalPaymentReconciliationEvidence => ({
+    id: 'payment-1', tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1',
+    amountMinor: 10_000, currency: 'USD', status: 'APPROVED', canceledAt: null,
+    functionalAmountMinor: null, functionalCurrencyCode: null, exchangeRateId: null,
+    exchangeRateValue: null, exchangeRateDirection: null, exchangeRateEffectiveAt: null,
+    conversionDate: null, paymentAllocations: [], ...overrides,
+  });
+  const paymentAllocation = (overrides: Partial<HistoricalPaymentReconciliationEvidence['paymentAllocations'][number]> = {}): HistoricalPaymentReconciliationEvidence['paymentAllocations'][number] => ({
+    tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', paymentId: 'payment-1',
+    amount: 1_000, paymentOriginalAmountMinor: 1_000,
+    charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'USD', status: 'PENDING' },
+    ...overrides,
+  });
+  const crossSnapshot = {
+    functionalAmountMinor: 18_250, functionalCurrencyCode: 'ARS', exchangeRateId: 'rate-1',
+    exchangeRateValue: new Prisma.Decimal('182.5'), exchangeRateDirection: 'DIRECT',
+    exchangeRateEffectiveAt: new Date('2026-08-08T00:00:00.000Z'), conversionDate: new Date('2026-08-10T00:00:00.000Z'),
+  } as const;
+
+  it.each([
+    ['accepts same-currency APPROVED remainder', payment({ paymentAllocations: [paymentAllocation()] }), 'RECONCILED'],
+    ['accepts exact same-currency consumption', payment({ paymentAllocations: [paymentAllocation({ amount: 10_000, paymentOriginalAmountMinor: 10_000 })] }), 'RECONCILED'],
+    ['blocks same-currency overconsumption', payment({ paymentAllocations: [paymentAllocation({ amount: 10_001, paymentOriginalAmountMinor: 10_001 })] }), 'INVALID_BLOCKING'],
+    ['accepts exact cross-currency reconciled consumption', payment({ ...crossSnapshot, status: 'RECONCILED', paymentAllocations: [
+      paymentAllocation({ amount: 10_000, paymentOriginalAmountMinor: 5_500, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PAID' } }),
+      paymentAllocation({ amount: 8_250, paymentOriginalAmountMinor: 4_500, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PAID' } }),
+    ] }), 'RECONCILED'],
+    ['blocks cross functional overconsumption', payment({ ...crossSnapshot, paymentAllocations: [
+      paymentAllocation({ amount: 10_000, paymentOriginalAmountMinor: 5_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } }),
+      paymentAllocation({ amount: 10_000, paymentOriginalAmountMinor: 5_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } }),
+    ] }), 'INVALID_BLOCKING'],
+    ['blocks cross original overconsumption', payment({ ...crossSnapshot, paymentAllocations: [
+      paymentAllocation({ amount: 9_000, paymentOriginalAmountMinor: 6_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } }),
+      paymentAllocation({ amount: 9_000, paymentOriginalAmountMinor: 5_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } }),
+    ] }), 'INVALID_BLOCKING'],
+    ['blocks a RECONCILED payment with a remainder', payment({ status: 'RECONCILED', paymentAllocations: [paymentAllocation()] }), 'INVALID_BLOCKING'],
+    ['keeps a canceled payment allocation effect at zero', payment({ status: 'RECONCILED', canceledAt: new Date('2026-08-10T00:00:00.000Z'), paymentAllocations: [paymentAllocation({ amount: 10_000, paymentOriginalAmountMinor: 10_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'USD', status: 'PAID' } })] }), 'RECONCILED'],
+  ] as const)('%s', (_name, evidence, outcome) => {
+    const result = reconcilePayment(evidence);
+    expect(result.outcome).toBe(outcome);
+    if (evidence.canceledAt !== null) expect(result.evidence?.effectiveChargeAllocatedMinor).toBe(0);
+  });
+
+  it('reports one global functional consumption for cross-currency allocations', () => {
+    const result = reconcilePayment(payment({
+      ...crossSnapshot,
+      status: 'RECONCILED',
+      paymentAllocations: [
+        paymentAllocation({ amount: 10_000, paymentOriginalAmountMinor: 5_500, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PAID' } }),
+        paymentAllocation({ amount: 8_250, paymentOriginalAmountMinor: 4_500, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PAID' } }),
+      ],
+    }));
+    expect(result.outcome).toBe('RECONCILED');
+    expect(result.evidence).toMatchObject({ functionalConsumedMinor: 18_250, functionalRemainingMinor: 0, originalConsumedMinor: 10_000, originalRemainingMinor: 0 });
+  });
+
+  it.each([
+    ['MIXED', payment({ paymentAllocations: [paymentAllocation(), paymentAllocation({ amount: 36_500, paymentOriginalAmountMinor: 1_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'VES', status: 'PENDING' } })] })],
+    ['unresolved legacy cross', payment({ ...crossSnapshot, paymentAllocations: [paymentAllocation({ amount: 18_250, paymentOriginalAmountMinor: null, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } })] })],
+    ['partial snapshot', payment({ functionalAmountMinor: 18_250, paymentAllocations: [paymentAllocation({ amount: 18_250, paymentOriginalAmountMinor: 1_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } })] })],
+    ['unsupported currency relationship', payment({ ...crossSnapshot, functionalCurrencyCode: 'VES', paymentAllocations: [paymentAllocation({ amount: 18_250, paymentOriginalAmountMinor: 1_000, charge: { tenantId: 'tenant-1', buildingId: 'building-1', unitId: 'unit-1', currency: 'ARS', status: 'PENDING' } })] })],
+  ] as const)('fails closed for %s payment evidence', (_name, evidence) => {
+    expect(reconcilePayment(evidence).outcome).toBe('INVALID_BLOCKING');
   });
 
   it('allows a legitimate unapplied income remainder', () => {
