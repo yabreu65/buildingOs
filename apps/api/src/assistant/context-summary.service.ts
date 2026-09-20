@@ -21,6 +21,7 @@ import { Prisma, TicketStatus, PaymentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   aggregateReportBuckets,
+  bigintToSafeMonetaryNumber,
   type ReportCurrencyAmountBucket,
 } from '../finanzas/currency-buckets';
 
@@ -333,7 +334,7 @@ export class AiContextSummaryService implements OnModuleDestroy {
             AND payment."tenantId" = ${request.tenantId}
           WHERE charge."tenantId" = ${request.tenantId}
             AND charge."canceledAt" IS NULL
-            AND charge.status <> 'CANCELED'
+            AND charge.status IN ('PENDING', 'PARTIAL')
             ${request.buildingId ? Prisma.sql`AND charge."buildingId" = ${request.buildingId}` : Prisma.empty}
             ${request.unitId ? Prisma.sql`AND charge."unitId" = ${request.unitId}` : Prisma.empty}
           GROUP BY charge.id, charge.currency, charge.amount
@@ -348,7 +349,7 @@ export class AiContextSummaryService implements OnModuleDestroy {
       snapshot.kpis.outstandingByCurrency = aggregateReportBuckets(
         outstandingGroups.map((group) => ({
           currency: group.currency,
-          amountMinor: Number(group.outstanding),
+          amountMinor: bigintToSafeMonetaryNumber(group.outstanding),
         })),
       );
 
@@ -393,7 +394,7 @@ export class AiContextSummaryService implements OnModuleDestroy {
             AND payment."tenantId" = ${request.tenantId}
           WHERE charge."tenantId" = ${request.tenantId}
             AND charge."canceledAt" IS NULL
-            AND charge.status <> 'CANCELED'
+            AND charge.status IN ('PENDING', 'PARTIAL')
             ${request.buildingId ? Prisma.sql`AND charge."buildingId" = ${request.buildingId}` : Prisma.empty}
             ${request.unitId ? Prisma.sql`AND charge."unitId" = ${request.unitId}` : Prisma.empty}
           GROUP BY charge.id, charge."buildingId", charge."unitId", charge."dueDate", charge.currency, charge.amount
@@ -457,7 +458,7 @@ export class AiContextSummaryService implements OnModuleDestroy {
         };
         current.entries.push({
           currency: row.currency,
-          amountMinor: Number(row.outstanding),
+          amountMinor: bigintToSafeMonetaryNumber(row.outstanding),
         });
         delinquentByUnit.set(unitKey, current);
       }

@@ -20,6 +20,14 @@ export interface ReportCurrencyInput {
   readonly amountMinor: number;
 }
 
+/** Convert a non-negative bigint monetary amount only when it is exactly representable. */
+export function bigintToSafeMonetaryNumber(value: bigint): number {
+  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError('Monetary amount exceeds the safe integer range');
+  }
+  return Number(value);
+}
+
 /**
  * Deterministic report-side ordering: canonical currencies first in
  * canonical order, then any other currency in lexicographic order.

@@ -1,4 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
+import { ChargeStatus } from '@prisma/client';
 import { AssistantToolsService } from './tools.service';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
@@ -100,7 +101,13 @@ describe('AssistantToolsService', () => {
       building: { name: 'Torre A' },
     });
     prisma.charge.findMany.mockResolvedValue([
-      { id: 'c1', amount: 50000, currency: 'ARS', paymentAllocations: [] },
+      {
+        id: 'c1',
+        amount: 50000,
+        currency: 'ARS',
+        status: ChargeStatus.PENDING,
+        paymentAllocations: [],
+      },
     ]);
 
     const result = await service.executeTool(

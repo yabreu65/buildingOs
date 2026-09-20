@@ -1,7 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { Permission } from '../../../rbac/permissions';
 import { IntentDefinition, IntentExecutionResult } from '../intent.types';
-import { aggregateReportBuckets } from '../../../finanzas/currency-buckets';
+import {
+  aggregateReportBuckets,
+  bigintToSafeMonetaryNumber,
+} from '../../../finanzas/currency-buckets';
 
 export const buildingStatsIntent: IntentDefinition = {
   name: 'building_stats',
@@ -61,7 +64,7 @@ export const buildingStatsIntent: IntentDefinition = {
           WHERE charge."tenantId" = ${tenantId}
             AND charge."buildingId" = ${buildingId}
             AND charge."canceledAt" IS NULL
-            AND charge.status <> 'CANCELED'
+            AND charge.status IN ('PENDING', 'PARTIAL')
           GROUP BY charge.id, charge.currency, charge.amount
         )
         SELECT currency, SUM(outstanding) AS outstanding
@@ -92,7 +95,7 @@ export const buildingStatsIntent: IntentDefinition = {
     const totalDebtByCurrency = aggregateReportBuckets(
       outstandingGroups.map((group) => ({
         currency: group.currency,
-        amountMinor: Number(group.outstanding),
+        amountMinor: bigintToSafeMonetaryNumber(group.outstanding),
       })),
     );
     const averageDebtByCurrency = totalDebtByCurrency.map((bucket) => ({

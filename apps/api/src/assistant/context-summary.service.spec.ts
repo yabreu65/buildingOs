@@ -143,7 +143,7 @@ describe('AiContextSummaryService currency-safe financial context', () => {
       expect(sql).toContain("payment.status IN ('APPROVED', 'RECONCILED')");
       expect(sql).toContain('payment."canceledAt" IS NULL');
       expect(sql).toContain('charge."canceledAt" IS NULL');
-      expect(sql).toContain("charge.status <> 'CANCELED'");
+      expect(sql).toContain("charge.status IN ('PENDING', 'PARTIAL')");
       expect(sql).toContain('allocation."tenantId" =');
       expect(sql).toContain('payment."tenantId" =');
       expect(sql).not.toContain('SUM(c.amount)');
@@ -210,5 +210,103 @@ describe('AiContextSummaryService currency-safe financial context', () => {
     expect(query).toMatch(/LIMIT 5/);
     expect(query).toMatch(/ORDER BY[\s\S]*"earliestDueDate" ASC NULLS LAST[\s\S]*"buildingId" ASC[\s\S]*"unitId" ASC/);
     expect(query).not.toContain('.slice(0, 5)');
+  });
+
+  it('emits exact MAX_SAFE_INTEGER for totals and top delinquent units', async () => {
+    const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+    const prisma = makePrisma([
+      [{ currency: 'USD', outstanding: maxSafe }],
+      [
+        {
+          buildingId: 'building-1',
+          unitId: 'unit-1',
+          building: 'Torre',
+          unit: '101',
+          currency: 'USD',
+          outstanding: maxSafe,
+        },
+      ],
+    ]);
+    service = new AiContextSummaryService(prisma as never);
+
+    const result = await service.getSummary({
+      tenantId: 'tenant-1',
+      membershipId: 'membership-1',
+      page: 'finance',
+      userRoles: ['TENANT_ADMIN'],
+    });
+
+    expect(result.snapshot.kpis.outstandingByCurrency).toEqual([
+      { currency: 'USD', amountMinor: Number.MAX_SAFE_INTEGER },
+    ]);
+    expect(result.snapshot.topDelinquentUnits).toEqual([
+      {
+        building: 'Torre',
+        unit: '101',
+        outstandingByCurrency: [{ currency: 'USD', amountMinor: Number.MAX_SAFE_INTEGER }],
+      },
+    ]);
+  });
+
+  it('omits totals above MAX_SAFE_INTEGER without blocking the summary', async () => {
+    const overflow = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+    const prisma = makePrisma([
+      [{ currency: 'USD', outstanding: overflow }],
+      [
+        {
+          buildingId: 'building-1',
+          unitId: 'unit-1',
+          building: 'Torre',
+          unit: '101',
+          currency: 'USD',
+          outstanding: BigInt(1000),
+        },
+      ],
+    ]);
+    service = new AiContextSummaryService(prisma as never);
+
+    const result = await service.getSummary({
+      tenantId: 'tenant-1',
+      membershipId: 'membership-1',
+      page: 'finance',
+      userRoles: ['TENANT_ADMIN'],
+    });
+
+    expect(result.snapshot.kpis).toMatchObject({
+      openTickets: 0,
+      submittedPayments: 2,
+      outstandingByCurrency: [],
+    });
+    expect(result.snapshot.topDelinquentUnits).toEqual([]);
+  });
+
+  it('omits per-unit delinquency values above MAX_SAFE_INTEGER while retaining totals', async () => {
+    const overflow = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+    const prisma = makePrisma([
+      [{ currency: 'USD', outstanding: BigInt(1000) }],
+      [
+        {
+          buildingId: 'building-1',
+          unitId: 'unit-1',
+          building: 'Torre',
+          unit: '101',
+          currency: 'USD',
+          outstanding: overflow,
+        },
+      ],
+    ]);
+    service = new AiContextSummaryService(prisma as never);
+
+    const result = await service.getSummary({
+      tenantId: 'tenant-1',
+      membershipId: 'membership-1',
+      page: 'finance',
+      userRoles: ['TENANT_ADMIN'],
+    });
+
+    expect(result.snapshot.kpis.outstandingByCurrency).toEqual([
+      { currency: 'USD', amountMinor: 1000 },
+    ]);
+    expect(result.snapshot.topDelinquentUnits).toEqual([]);
   });
 });

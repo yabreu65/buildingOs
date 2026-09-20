@@ -1,4 +1,4 @@
-import { PaymentStatus } from '@prisma/client';
+import { ChargeStatus, PaymentStatus } from '@prisma/client';
 import { AssistantDebtCalculatorService } from './assistant-debt-calculator.service';
 
 describe('AssistantDebtCalculatorService', () => {
@@ -8,14 +8,45 @@ describe('AssistantDebtCalculatorService', () => {
     service = new AssistantDebtCalculatorService();
   });
 
-  it('returns full charge amount when there are no allocations', () => {
+  it('returns full PENDING charge amount when there are no allocations', () => {
     expect(
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
+        status: ChargeStatus.PENDING,
         paymentAllocations: [],
       }),
     ).toBe(10000);
+  });
+
+  it('returns full PARTIAL charge amount before allocation subtraction', () => {
+    expect(
+      service.calculateChargeOutstanding({
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PARTIAL,
+        paymentAllocations: [{ amount: 2500, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }],
+      }),
+    ).toBe(7500);
+  });
+
+  it('returns zero for PAID and CANCELED charges despite missing allocations', () => {
+    expect(
+      service.calculateChargeOutstanding({
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.PAID,
+        paymentAllocations: [],
+      }),
+    ).toBe(0);
+    expect(
+      service.calculateChargeOutstanding({
+        amount: 10000,
+        currency: 'ARS',
+        status: ChargeStatus.CANCELED,
+        paymentAllocations: [],
+      }),
+    ).toBe(0);
   });
 
   it('subtracts APPROVED allocations', () => {
@@ -23,6 +54,7 @@ describe('AssistantDebtCalculatorService', () => {
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
+        status: ChargeStatus.PENDING,
         paymentAllocations: [{ amount: 2500, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }],
       }),
     ).toBe(7500);
@@ -33,6 +65,7 @@ describe('AssistantDebtCalculatorService', () => {
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
+        status: ChargeStatus.PARTIAL,
         paymentAllocations: [{ amount: 4000, payment: { status: PaymentStatus.RECONCILED, canceledAt: null } }],
       }),
     ).toBe(6000);
@@ -43,6 +76,7 @@ describe('AssistantDebtCalculatorService', () => {
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
+        status: ChargeStatus.PENDING,
         paymentAllocations: [
           { amount: 1000, payment: { status: PaymentStatus.SUBMITTED, canceledAt: null } },
           { amount: 2000, payment: { status: PaymentStatus.PENDING, canceledAt: null } },
@@ -57,6 +91,7 @@ describe('AssistantDebtCalculatorService', () => {
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
+        status: ChargeStatus.PENDING,
         paymentAllocations: [
           { amount: 3000, payment: { status: PaymentStatus.APPROVED, canceledAt: new Date('2026-01-01') } },
           { amount: 4000, payment: { status: PaymentStatus.RECONCILED, canceledAt: '2026-01-02T00:00:00.000Z' } },
@@ -70,6 +105,7 @@ describe('AssistantDebtCalculatorService', () => {
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
+        status: ChargeStatus.PARTIAL,
         paymentAllocations: [
           { amount: 3000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } },
           { amount: 4000, payment: { status: PaymentStatus.RECONCILED, canceledAt: null } },
@@ -83,16 +119,18 @@ describe('AssistantDebtCalculatorService', () => {
       service.calculateChargeOutstanding({
         amount: 10000,
         currency: 'ARS',
+        status: ChargeStatus.PARTIAL,
         paymentAllocations: [{ amount: 15000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }],
       }),
     ).toBe(0);
   });
 
-  it('aggregates outstanding by currency buckets — never a mixed scalar', () => {
+  it('aggregates only eligible charge statuses into independent currency buckets', () => {
     const result = service.calculateOutstandingByCurrency([
-      { amount: 10000, currency: 'ARS', paymentAllocations: [] },
-      { amount: 5000, currency: 'USD', paymentAllocations: [] },
-      { amount: 2000, currency: 'ARS', paymentAllocations: [{ amount: 2000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }] },
+      { amount: 10000, currency: 'ARS', status: ChargeStatus.PENDING, paymentAllocations: [] },
+      { amount: 5000, currency: 'USD', status: ChargeStatus.PARTIAL, paymentAllocations: [] },
+      { amount: 2000, currency: 'ARS', status: ChargeStatus.PAID, paymentAllocations: [] },
+      { amount: 3000, currency: 'USD', status: ChargeStatus.CANCELED, paymentAllocations: [] },
     ]);
 
     expect(result).toEqual([
@@ -107,11 +145,12 @@ describe('AssistantDebtCalculatorService', () => {
         unitId: 'unit-1',
         amount: 10000,
         currency: 'ARS',
+        status: ChargeStatus.PARTIAL,
         paymentAllocations: [{ amount: 2500, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }],
       },
-      { unitId: 'unit-1', amount: 5000, currency: 'USD', paymentAllocations: [] },
-      { unitId: 'unit-2', amount: 7000, currency: 'ARS', paymentAllocations: [] },
-      { unitId: 'unit-3', amount: 9000, currency: 'VES', paymentAllocations: [{ amount: 9000, payment: { status: PaymentStatus.APPROVED, canceledAt: null } }] },
+      { unitId: 'unit-1', amount: 5000, currency: 'USD', status: ChargeStatus.PENDING, paymentAllocations: [] },
+      { unitId: 'unit-2', amount: 7000, currency: 'ARS', status: ChargeStatus.PENDING, paymentAllocations: [] },
+      { unitId: 'unit-3', amount: 9000, currency: 'VES', status: ChargeStatus.PAID, paymentAllocations: [] },
     ]);
 
     expect(result.get('unit-1')).toEqual([
@@ -119,13 +158,12 @@ describe('AssistantDebtCalculatorService', () => {
       { currency: 'ARS', amountMinor: 7500 },
     ]);
     expect(result.get('unit-2')).toEqual([{ currency: 'ARS', amountMinor: 7000 }]);
-    // Fully paid unit has no entry.
     expect(result.has('unit-3')).toBe(false);
   });
 
-  it('drops charges without a currency instead of inventing one', () => {
+  it('drops eligible charges without a currency instead of inventing one', () => {
     const result = service.calculateOutstandingByCurrency([
-      { amount: 10000, paymentAllocations: [] },
+      { amount: 10000, status: ChargeStatus.PENDING, paymentAllocations: [] },
     ]);
 
     expect(result).toEqual([]);

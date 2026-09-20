@@ -16,6 +16,27 @@ interface PrismaMock {
 }
 
 describe('buildingStatsIntent currency-safe debt totals', () => {
+  it('rejects outstanding minor units over Number.MAX_SAFE_INTEGER instead of rounding', async () => {
+    const prisma: PrismaMock = {
+      unit: {
+        groupBy: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      ticket: { count: jest.fn().mockResolvedValue(0) },
+      charge: { findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([
+        { currency: 'USD', outstanding: BigInt(Number.MAX_SAFE_INTEGER) + 1n },
+      ]),
+    };
+
+    await expect(buildingStatsIntent.executor({
+      tenantId: 'tenant-1',
+      entityIds: { buildingId: 'building-1' },
+      filters: {},
+      pagination: { limit: 10 },
+      prisma: prisma as never,
+    })).rejects.toThrow('safe integer');
+  });
   function basePrisma(outstandingGroups: OutstandingGroup[]): PrismaMock {
     return {
       unit: {
@@ -103,7 +124,7 @@ describe('buildingStatsIntent currency-safe debt totals', () => {
     expect(query).toContain("payment.status IN ('APPROVED', 'RECONCILED')");
     expect(query).toContain('payment."canceledAt" IS NULL');
     expect(query).toContain('charge."canceledAt" IS NULL');
-    expect(query).toContain("charge.status <> 'CANCELED'");
+    expect(query).toContain("charge.status IN ('PENDING', 'PARTIAL')");
     expect(query).toContain('GROUP BY charge.id, charge.currency, charge.amount');
     expect(query).toContain('WHERE outstanding > 0');
     expect(query).toContain('GROUP BY currency');
