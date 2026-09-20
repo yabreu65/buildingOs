@@ -37,9 +37,59 @@ export function assertNonEmptyString(
 }
 
 /** Entero seguro >= 0 o lanza. */
-export function assertSafeIntegerNonNegative(value: unknown, message: string): void {
+export function assertSafeIntegerNonNegative(value: unknown, message: string): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throwBadRequest(message);
+  }
+}
+
+export interface LiquidationFin06Summary {
+  readonly grossExpenseAmountMinor: unknown;
+  readonly adjustmentAmountMinor: unknown;
+  readonly preIncomeAmountMinor: unknown;
+  readonly incomeOffsetAmountMinor: unknown;
+  readonly netDistributableAmountMinor: unknown;
+  readonly totalAmountMinor: unknown;
+}
+
+/** Validates the complete FIN-06 summary before a liquidation can be persisted. */
+export function assertValidLiquidationFin06Summary(
+  summary: LiquidationFin06Summary,
+): asserts summary is LiquidationFin06Summary & {
+  readonly grossExpenseAmountMinor: number;
+  readonly adjustmentAmountMinor: number;
+  readonly preIncomeAmountMinor: number;
+  readonly incomeOffsetAmountMinor: number;
+  readonly netDistributableAmountMinor: number;
+  readonly totalAmountMinor: number;
+} {
+  assertSafeIntegerNonNegative(summary.grossExpenseAmountMinor, 'grossExpenseAmountMinor');
+  assertSafeIntegerNonNegative(summary.adjustmentAmountMinor, 'adjustmentAmountMinor');
+  assertSafeIntegerNonNegative(summary.preIncomeAmountMinor, 'preIncomeAmountMinor');
+  assertSafeIntegerNonNegative(summary.incomeOffsetAmountMinor, 'incomeOffsetAmountMinor');
+  assertSafeIntegerNonNegative(summary.netDistributableAmountMinor, 'netDistributableAmountMinor');
+  assertSafeIntegerNonNegative(summary.totalAmountMinor, 'totalAmountMinor');
+
+  const preIncomeAmountMinor =
+    summary.grossExpenseAmountMinor + summary.adjustmentAmountMinor;
+  if (
+    !Number.isSafeInteger(preIncomeAmountMinor) ||
+    preIncomeAmountMinor !== summary.preIncomeAmountMinor
+  ) {
+    throwBadRequest('Liquidation FIN-06 pre-income total is inconsistent');
+  }
+
+  const netDistributableAmountMinor =
+    summary.preIncomeAmountMinor - summary.incomeOffsetAmountMinor;
+  if (
+    !Number.isSafeInteger(netDistributableAmountMinor) ||
+    netDistributableAmountMinor !== summary.netDistributableAmountMinor
+  ) {
+    throwBadRequest('Liquidation FIN-06 net distributable is inconsistent');
+  }
+
+  if (summary.netDistributableAmountMinor !== summary.totalAmountMinor) {
+    throwBadRequest('Liquidation FIN-06 total must equal net distributable');
   }
 }
 

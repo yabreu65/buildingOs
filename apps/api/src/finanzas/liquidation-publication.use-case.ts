@@ -30,6 +30,7 @@ import {
   type PublishLiquidationDto,
 } from './expense-ledger.dto';
 import { lockUnitChargesForAllocation } from './payment-allocation-transaction';
+import { assertValidLiquidationFin06Summary } from './liquidation-income-offset-snapshot';
 import { acquireExpenseLock } from './movement-locks';
 import { lockUnitsFinancialMutations } from './unit-financial-lock';
 
@@ -404,12 +405,14 @@ export async function createLiquidationDraftRecord(
     );
   }
 
-  const isFin06Input =
-    input.grossExpenseAmountMinor !== undefined ||
-    input.adjustmentAmountMinor !== undefined ||
-    input.preIncomeAmountMinor !== undefined ||
-    input.incomeOffsetAmountMinor !== undefined ||
-    input.netDistributableAmountMinor !== undefined;
+  assertValidLiquidationFin06Summary({
+    grossExpenseAmountMinor: input.grossExpenseAmountMinor,
+    adjustmentAmountMinor: input.adjustmentAmountMinor,
+    preIncomeAmountMinor: input.preIncomeAmountMinor,
+    incomeOffsetAmountMinor: input.incomeOffsetAmountMinor,
+    netDistributableAmountMinor: input.netDistributableAmountMinor,
+    totalAmountMinor: input.totalAmountMinor,
+  });
 
   const liquidation = await tx.liquidation.create({
     data: {
@@ -430,17 +433,10 @@ export async function createLiquidationDraftRecord(
       preIncomeAmountMinor: input.preIncomeAmountMinor ?? null,
       incomeOffsetAmountMinor: input.incomeOffsetAmountMinor ?? null,
       netDistributableAmountMinor: input.netDistributableAmountMinor ?? null,
-      // FIN-06R2: los drafts del motor FIN-06 persisten SIEMPRE los JSON,
-      // incluso vacíos ([] / {}), para clasificarse como FIN-06 en publish.
-      // Solo liquidaciones históricas pre-FIN-06 mantienen null.
-      ...(isFin06Input
-        ? {
-            incomeOffsetSnapshot: (input.incomeOffsetSnapshot ??
-              []) as Prisma.InputJsonArray,
-            incomeOffsetsByCurrency: (input.incomeOffsetsByCurrency ??
-              {}) as Prisma.InputJsonObject,
-          }
-        : {}),
+      // FIN-06R2: every newly created draft has a complete summary, so its
+      // JSON artifacts are persisted even when there are no offsets.
+      incomeOffsetSnapshot: (input.incomeOffsetSnapshot ?? []) as Prisma.InputJsonArray,
+      incomeOffsetsByCurrency: (input.incomeOffsetsByCurrency ?? {}) as Prisma.InputJsonObject,
       ...(input.distributionSnapshot !== undefined
         ? { distributionSnapshot: input.distributionSnapshot }
         : {}),

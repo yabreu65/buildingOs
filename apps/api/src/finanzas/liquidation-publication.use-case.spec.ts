@@ -7,10 +7,75 @@ import { Prisma } from '@prisma/client';
 import {
   LiquidationPublicationUseCase,
   calculateLegacyFixtureDistribution,
+  createLiquidationDraftRecord,
   sendChargePublishedNotifications,
   type LiquidationWorkflowDependencies,
 } from './liquidation-publication.use-case';
 import { distributeLiquidationMovements } from './liquidation-distribution';
+
+describe('createLiquidationDraftRecord invariant boundary', () => {
+  it('rejects a modern draft without a complete FIN-06 summary', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'liq-local-repro' });
+    const tx = {
+      liquidation: {
+        create,
+        findFirst: jest.fn().mockResolvedValue({ id: 'liq-local-repro' }),
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await expect(createLiquidationDraftRecord(
+      tx,
+      { createAuditLogRequired: jest.fn().mockResolvedValue(undefined) },
+      {
+        tenantId: 'tenant-local',
+        buildingId: 'building-local',
+        period: '2026-09',
+        publicationIntegrityVersion: 1,
+        valuationMode: 'FUNCTIONAL',
+        baseCurrency: 'ARS',
+        totalAmountMinor: 100,
+        totalsByCurrency: { ARS: 100 },
+        expenseSnapshot: [],
+        unitCount: 1,
+        generatedByMembershipId: 'membership-local',
+      },
+    )).rejects.toThrow(BadRequestException);
+
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a modern draft with a partial FIN-06 summary', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'liq-local-repro' });
+    const tx = {
+      liquidation: {
+        create,
+        findFirst: jest.fn().mockResolvedValue({ id: 'liq-local-repro' }),
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await expect(createLiquidationDraftRecord(
+      tx,
+      { createAuditLogRequired: jest.fn().mockResolvedValue(undefined) },
+      {
+        tenantId: 'tenant-local',
+        buildingId: 'building-local',
+        period: '2026-09',
+        publicationIntegrityVersion: 1,
+        valuationMode: 'FUNCTIONAL',
+        baseCurrency: 'ARS',
+        totalAmountMinor: 100,
+        totalsByCurrency: { ARS: 100 },
+        expenseSnapshot: [],
+        grossExpenseAmountMinor: 100,
+        adjustmentAmountMinor: 0,
+        unitCount: 1,
+        generatedByMembershipId: 'membership-local',
+      },
+    )).rejects.toThrow(BadRequestException);
+
+    expect(create).not.toHaveBeenCalled();
+  });
+});
 
 describe('calculateLegacyFixtureDistribution', () => {
   it('preserves largest-remainder allocation for historical liquidations', () => {
