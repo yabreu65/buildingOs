@@ -30,6 +30,7 @@ const ALLOWED_URL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const ALLOWED_SERVER_ADDRESSES = new Set(['127.0.0.1', '::1']);
 const ALLOWED_DATABASE_TARGETS = [
   { database: 'buildingos', urlPort: 5434, serverPort: 5432 },
+  { database: 'buildingos_phase3d2_test', urlPort: 5434, serverPort: 5432 },
   { database: 'buildingos_test', urlPort: 5432, serverPort: 5432 },
 ] as const;
 

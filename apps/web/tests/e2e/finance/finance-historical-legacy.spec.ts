@@ -3,8 +3,10 @@ import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
+  EXPECTED_FAILURE_STATUSES,
   attachBrowserObservability,
   acquireFin07dMutationLock,
+  expectHTTPFailure,
   expectHTTPSuccess,
   loginAsFinanceAdmin,
   resolveFinanceAdminContext,
@@ -33,7 +35,9 @@ let releaseMutationLock: (() => Promise<void>) | undefined;
 
 interface Fin07dFixtureContext {
   readonly tenantAId: string;
+  readonly tenantBId: string;
   readonly buildingA1Id: string;
+  readonly buildingA2Id: string;
   readonly reserveFundId: string;
   readonly specialFundId: string;
   readonly normalV3ExpenseId: string;
@@ -417,6 +421,26 @@ test.describe.serial('FIN-07D historical liquidations and legacy backfill', () =
     }
 
     expectCleanObservability(observability);
+  });
+
+  test('historical reads fail closed outside the authorized tenant and building scope', async ({ page }) => {
+    const tenantId = await loginAsFinanceAdmin(page);
+    const context = await resolveFinanceAdminContext(page, tenantId);
+    expect(context.tenantId).toBe(fixture.tenantAId);
+    expect(context.buildingId).toBe(fixture.buildingA1Id);
+
+    await page.goto(`/${tenantId}/buildings/${fixture.buildingA2Id}/finance?period=${V1_PERIOD}`);
+    await expect(page.getByRole('heading', { name: 'Finanzas del edificio' })).toBeVisible();
+    await page.getByRole('button', { name: 'Liquidaciones' }).click();
+    await expect(page.getByRole('heading', { name: `Liquidaciones — ${V1_PERIOD}` })).toBeVisible();
+    await expect(historicalCard(page, V1_PERIOD)).toHaveCount(0);
+
+    await expectHTTPFailure(page.request, {
+      method: 'GET',
+      url: liquidationUrl(fixture.tenantBId, fixture.historicalV1LiquidationId),
+      headers: headers(tenantId),
+      expectedStatus: EXPECTED_FAILURE_STATUSES.FORBIDDEN,
+    });
   });
 
   test('Journey D classifies, backfills, idempotently revisits, and resets legacy fixtures', async ({ page }) => {
