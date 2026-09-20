@@ -5329,6 +5329,53 @@ describe('FinanzasService', () => {
 
   // ========== 3E3: CROSS-CURRENCY PAYMENT ALLOCATION ==========
   describe('getPaymentMetrics currency-safe backlog', () => {
+      it('counts reconciled payments as approved review outcomes while excluding submitted and canceled payments', async () => {
+        setupMetrics(
+          [
+            { amount: 100, currency: 'ARS', createdAt: new Date('2026-09-09T00:00:00.000Z'), buildingId: 'building-a' },
+            { amount: 100, currency: 'ARS', createdAt: new Date('2026-09-08T00:00:00.000Z'), buildingId: 'building-a' },
+            { amount: 100, currency: 'ARS', createdAt: new Date('2026-09-07T00:00:00.000Z'), buildingId: 'building-a' },
+            { amount: 100, currency: 'ARS', createdAt: new Date('2026-09-06T00:00:00.000Z'), buildingId: 'building-a' },
+          ],
+          [
+            { status: PaymentStatus.APPROVED, reference: null },
+            { status: PaymentStatus.APPROVED, reference: null },
+            { status: PaymentStatus.RECONCILED, reference: null },
+            { status: PaymentStatus.RECONCILED, reference: null },
+            { status: PaymentStatus.RECONCILED, reference: null },
+            { status: PaymentStatus.REJECTED, reference: 'OTHER' },
+          ],
+          [{ id: 'building-a', name: 'Torre A' }],
+          [
+            { buildingId: 'building-a', status: PaymentStatus.SUBMITTED, currency: 'ARS', _count: { _all: 4 }, _sum: { amount: 400 } },
+            { buildingId: 'building-a', status: PaymentStatus.APPROVED, currency: 'ARS', _count: { _all: 2 }, _sum: { amount: 200 } },
+            { buildingId: 'building-a', status: PaymentStatus.RECONCILED, currency: 'ARS', _count: { _all: 3 }, _sum: { amount: 300 } },
+            { buildingId: 'building-a', status: PaymentStatus.REJECTED, currency: 'ARS', _count: { _all: 1 }, _sum: { amount: 100 } },
+          ],
+        );
+
+        const result = await service.getPaymentMetrics('tenant-1', {});
+
+        expect(result).toMatchObject({
+          backlogCount: 4,
+          totalReviewed: 6,
+          approvalRate: (5 / 6) * 100,
+          rejectionRate: (1 / 6) * 100,
+          byBuilding: [{ buildingId: 'building-a', pending: 4, approved: 5, rejected: 1 }],
+        });
+        expect(prismaService.payment.findMany).toHaveBeenNthCalledWith(2, expect.objectContaining({
+          where: expect.objectContaining({
+            status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED, PaymentStatus.REJECTED] },
+            canceledAt: null,
+          }),
+        }));
+        expect(prismaService.payment.groupBy).toHaveBeenCalledWith(expect.objectContaining({
+          where: expect.objectContaining({
+            status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED, PaymentStatus.RECONCILED, PaymentStatus.REJECTED] },
+            canceledAt: null,
+          }),
+        }));
+      });
     const setupMetrics = (
       pendingPayments: readonly Record<string, unknown>[],
       reviewedPayments: readonly Record<string, unknown>[],
@@ -5452,7 +5499,7 @@ describe('FinanzasService', () => {
       expect(prismaService.payment.findMany).toHaveBeenNthCalledWith(2, {
         where: {
           tenantId: 'tenant-1',
-          status: { in: [PaymentStatus.APPROVED, PaymentStatus.REJECTED] },
+          status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED, PaymentStatus.REJECTED] },
           updatedAt: { gte: new Date('2026-09-01'), lte: new Date('2026-09-30') },
           canceledAt: null,
           buildingId: 'building-a',
@@ -5469,7 +5516,7 @@ describe('FinanzasService', () => {
           tenantId: 'tenant-1',
           buildingId: { in: ['building-a'] },
           canceledAt: null,
-          status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED, PaymentStatus.REJECTED] },
+          status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED, PaymentStatus.RECONCILED, PaymentStatus.REJECTED] },
         },
         _count: { _all: true },
         _sum: { amount: true },

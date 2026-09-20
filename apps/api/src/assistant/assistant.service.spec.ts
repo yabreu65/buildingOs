@@ -23,7 +23,7 @@ import { QueryExecutorService } from './executor/query-executor.service';
 import { ResponseFormatterService } from './formatter/response-formatter.service';
 import { IntentRegistry } from './intent-engine/intent-registry';
 import { FilterCoverageValidator } from './intent-engine/filter-coverage.validator';
-import { PaymentStatus, UnitOccupantRole } from '@prisma/client';
+import { ChargeStatus, PaymentStatus, UnitOccupantRole } from '@prisma/client';
 import { IntentSemanticValidatorService } from './intent-semantic-validator.service';
 
 /**
@@ -2258,7 +2258,8 @@ describe('AssistantService - Strict Operational Questions', () => {
       mockPrisma.charge.findMany.mockResolvedValue([
         {
           amount: 50000,
-      currency: 'ARS',
+          status: ChargeStatus.PENDING,
+          currency: 'ARS',
           paymentAllocations: [],
         },
       ]);
@@ -2278,7 +2279,8 @@ describe('AssistantService - Strict Operational Questions', () => {
       mockPrisma.charge.findMany.mockResolvedValue([
         {
           amount: 100000,
-      currency: 'ARS',
+          status: ChargeStatus.PENDING,
+          currency: 'ARS',
           paymentAllocations: [
             { amount: 30000, payment: { status: PaymentStatus.APPROVED } },
           ],
@@ -2312,7 +2314,8 @@ describe('AssistantService - Strict Operational Questions', () => {
       mockPrisma.charge.findMany.mockResolvedValue([
         {
           amount: 150000,
-      currency: 'ARS',
+          status: ChargeStatus.PENDING,
+          currency: 'ARS',
           paymentAllocations: [],
         },
       ]);
@@ -2331,7 +2334,8 @@ describe('AssistantService - Strict Operational Questions', () => {
       mockPrisma.charge.findMany.mockResolvedValue([
         {
           amount: 0,
-      currency: 'ARS',
+          status: ChargeStatus.PENDING,
+          currency: 'ARS',
           paymentAllocations: [],
         },
       ]);
@@ -2682,8 +2686,8 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P26: responde "cuanto debe el edificio"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
-        { amount: 50000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
+        { amount: 100000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 50000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDebtQuestion(
@@ -2699,7 +2703,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P27: responde "deuda de la torre"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 200000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 200000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDebtQuestion(
@@ -2727,7 +2731,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P29: responde "cuanto adeuda el sector"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 75000, currency: 'ARS', unitId: 'u1', paymentAllocations: [{ amount: 25000, payment: { status: PaymentStatus.APPROVED } }] },
+        { amount: 75000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [{ amount: 25000, payment: { status: PaymentStatus.APPROVED } }] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDebtQuestion(
@@ -2742,7 +2746,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P30: responde "deuda del complejo"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 0, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 0, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDebtQuestion(
@@ -2895,8 +2899,8 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P36: responde "quienes son los morosos"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
-        { amount: 50000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
+        { amount: 100000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 50000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2915,7 +2919,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P37: responde "top deudores de la torre"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 200000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 200000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2930,8 +2934,8 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P38: responde "ranking de deuda del bloque"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 150000, currency: 'ARS', unitId: 'u1', paymentAllocations: [{ amount: 50000, payment: { status: PaymentStatus.APPROVED } }] },
-        { amount: 80000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
+        { amount: 150000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [{ amount: 50000, payment: { status: PaymentStatus.APPROVED } }] },
+        { amount: 80000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2959,9 +2963,9 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P40: responde "morosos del complejo"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 300000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
-        { amount: 200000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
-        { amount: 100000, currency: 'ARS', unitId: 'u3', paymentAllocations: [] },
+        { amount: 300000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 200000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
+        { amount: 100000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u3', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2978,7 +2982,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P41: responde "deudores del edificio"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 50000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 50000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -2993,7 +2997,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('P41-V1: matchea "atrasados"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 80000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 80000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingDelinquentsQuestion(
@@ -3037,8 +3041,8 @@ describe('AssistantService - Strict Operational Questions', () => {
     it('P42: responde "estadisticas del edificio"', async () => {
       mockPrisma.ticket.count.mockResolvedValueOnce(2).mockResolvedValueOnce(5);
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
-        { amount: 50000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
+        { amount: 100000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 50000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingStatsQuestion(
@@ -3071,7 +3075,7 @@ describe('AssistantService - Strict Operational Questions', () => {
     it('P44: responde "resumen del bloque"', async () => {
       mockPrisma.ticket.count.mockResolvedValueOnce(1).mockResolvedValueOnce(3);
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 200000, currency: 'ARS', unitId: 'u1', paymentAllocations: [{ amount: 100000, payment: { status: PaymentStatus.APPROVED } }] },
+        { amount: 200000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [{ amount: 100000, payment: { status: PaymentStatus.APPROVED } }] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingStatsQuestion(
@@ -3101,8 +3105,8 @@ describe('AssistantService - Strict Operational Questions', () => {
     it('P46: responde "datos del edificio"', async () => {
       mockPrisma.ticket.count.mockResolvedValueOnce(5).mockResolvedValueOnce(10);
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 300000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
-        { amount: 100000, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
+        { amount: 300000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 100000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u2', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingStatsQuestion(
@@ -3133,7 +3137,7 @@ describe('AssistantService - Strict Operational Questions', () => {
     it('P47-V1: matchea "como viene el edificio"', async () => {
       mockPrisma.ticket.count.mockResolvedValueOnce(2).mockResolvedValueOnce(8);
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 100000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictBuildingStatsQuestion(
@@ -3483,7 +3487,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('building-level se evalua antes que unit-level para "deuda edificio A"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 100000, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
+        { amount: 100000, status: ChargeStatus.PENDING, currency: 'ARS', unitId: 'u1', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictOperationalQuestion(
@@ -3499,7 +3503,7 @@ describe('AssistantService - Strict Operational Questions', () => {
 
     it('unit-level se usa para "deuda del depto 101 del Edificio A"', async () => {
       mockPrisma.charge.findMany.mockResolvedValue([
-        { amount: 50000, currency: 'ARS', paymentAllocations: [] },
+        { amount: 50000, status: ChargeStatus.PENDING, currency: 'ARS', paymentAllocations: [] },
       ]);
 
       const result = await (service as any).tryResolveStrictOperationalQuestion(

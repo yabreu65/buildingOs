@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { PaymentStatus } from '@prisma/client';
+import { ChargeStatus, PaymentStatus } from '@prisma/client';
 import { buildingDebtIntent, buildChargePeriodFilter } from './building-debt.intent';
 
 describe('buildingDebtIntent period handling', () => {
@@ -35,6 +35,7 @@ describe('buildingDebtIntent period handling', () => {
     return {
       unitId: overrides.unitId,
       amount: overrides.amount,
+      status: ChargeStatus.PENDING,
       currency: overrides.currency ?? 'ARS',
       dueDate: overrides.dueDate ?? new Date('2026-01-01T00:00:00.000Z'),
       unit: { code: `code-${overrides.unitId}`, label: `Label ${overrides.unitId}` },

@@ -5,7 +5,7 @@ import {
   type ReportCurrencyAmountBucket,
 } from '../finanzas/currency-buckets';
 import { AuditService } from '../audit/audit.service';
-import { AuditAction, Prisma, UnitOccupantRole } from '@prisma/client';
+import { AuditAction, ChargeStatus, Prisma, UnitOccupantRole } from '@prisma/client';
 import { AiBudgetService } from './budget.service';
 import { AiRouterService } from './router.service';
 import { AiCacheService } from './cache.service';
@@ -2534,6 +2534,7 @@ export class AssistantService implements OnModuleInit {
         where: {
           tenantId,
           unitId: unit.id,
+          status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
           canceledAt: null,
         },
         include: {
@@ -2881,6 +2882,7 @@ export class AssistantService implements OnModuleInit {
       where: {
         tenantId,
         unitId: { in: unitIds },
+        status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
         canceledAt: null,
       },
       include: {
@@ -3115,6 +3117,7 @@ export class AssistantService implements OnModuleInit {
       where: {
         tenantId,
         unitId: { in: unitIds },
+        status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
         canceledAt: null,
       },
       include: {
@@ -3243,6 +3246,7 @@ export class AssistantService implements OnModuleInit {
         where: {
           tenantId,
           buildingId: building.id,
+          status: { in: [ChargeStatus.PENDING, ChargeStatus.PARTIAL] },
           canceledAt: null,
         },
         include: {

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { PaymentStatus } from '@prisma/client';
+import { ChargeStatus, PaymentStatus } from '@prisma/client';
 import { calculateChargeOutstandingMinor } from '../finanzas/charge-aggregation';
 import {
   aggregateReportBuckets,
@@ -16,9 +16,15 @@ export interface AssistantDebtAllocation {
 
 export interface AssistantDebtCharge {
   readonly amount: number;
+  readonly status: ChargeStatus | string;
   readonly currency?: string | null;
   readonly unitId?: string | null;
   readonly paymentAllocations: readonly AssistantDebtAllocation[];
+}
+
+/** Only open charge lifecycle states can contribute assistant debt. */
+export function isAssistantDebtChargeStatus(status: ChargeStatus | string): boolean {
+  return status === ChargeStatus.PENDING || status === ChargeStatus.PARTIAL;
 }
 
 @Injectable()
@@ -28,6 +34,9 @@ export class AssistantDebtCalculatorService {
    * Delegates to the canonical Phase 3F charge-aggregation helper.
    */
   calculateChargeOutstanding(charge: AssistantDebtCharge): number {
+    if (!isAssistantDebtChargeStatus(charge.status)) {
+      return 0;
+    }
     return calculateChargeOutstandingMinor(charge);
   }
 

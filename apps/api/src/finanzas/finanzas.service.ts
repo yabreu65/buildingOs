@@ -3425,10 +3425,10 @@ export class FinanzasService {
     const agingMedianDays = ages.length > 0 ? ages[Math.floor(ages.length / 2)] : 0;
     const agingP95Days = ages.length > 0 ? ages[Math.floor(ages.length * 0.95)] : 0;
 
-    // Get reviewed payments (APPROVED + REJECTED) in date range
+    // Get reviewed payments (APPROVED + RECONCILED + REJECTED) in date range
     const reviewedWhere: Prisma.PaymentWhereInput = {
       tenantId,
-      status: { in: [PaymentStatus.APPROVED, PaymentStatus.REJECTED] },
+      status: { in: [PaymentStatus.APPROVED, PaymentStatus.RECONCILED, PaymentStatus.REJECTED] },
       updatedAt: { gte: dateFrom, lte: dateTo },
       canceledAt: null,
     };
@@ -3442,7 +3442,9 @@ export class FinanzasService {
     });
 
     const totalReviewed = reviewedPayments.length;
-    const approvedCount = reviewedPayments.filter(p => p.status === PaymentStatus.APPROVED).length;
+    const approvedCount = reviewedPayments.filter(
+      p => p.status === PaymentStatus.APPROVED || p.status === PaymentStatus.RECONCILED,
+    ).length;
     const rejectedCount = reviewedPayments.filter(p => p.status === PaymentStatus.REJECTED).length;
 
     const approvalRate = totalReviewed > 0 ? (approvedCount / totalReviewed) * 100 : 0;
@@ -3473,7 +3475,14 @@ export class FinanzasService {
         tenantId,
         buildingId: { in: buildingIds },
         canceledAt: null,
-        status: { in: [PaymentStatus.SUBMITTED, PaymentStatus.APPROVED, PaymentStatus.REJECTED] },
+        status: {
+          in: [
+            PaymentStatus.SUBMITTED,
+            PaymentStatus.APPROVED,
+            PaymentStatus.RECONCILED,
+            PaymentStatus.REJECTED,
+          ],
+        },
       },
       _count: { _all: true },
       _sum: { amount: true },
@@ -3482,7 +3491,9 @@ export class FinanzasService {
     const byBuilding = buildings.map(b => {
       const buildingPaymentGroups = paymentGroupsByBuilding.filter(payment => payment.buildingId === b.id);
       const pendingGroups = buildingPaymentGroups.filter(payment => payment.status === PaymentStatus.SUBMITTED);
-      const approvedGroups = buildingPaymentGroups.filter(payment => payment.status === PaymentStatus.APPROVED);
+      const approvedGroups = buildingPaymentGroups.filter(
+        payment => payment.status === PaymentStatus.APPROVED || payment.status === PaymentStatus.RECONCILED,
+      );
       const rejectedGroups = buildingPaymentGroups.filter(payment => payment.status === PaymentStatus.REJECTED);
       return {
         buildingId: b.id,
