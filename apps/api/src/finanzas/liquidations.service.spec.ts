@@ -279,6 +279,27 @@ describe('LiquidationsService', () => {
     prisma = module.get<PrismaService>(PrismaService);
   });
 
+  it('fails closed when detail lookup uses a different tenant', async () => {
+    prisma.liquidation.findFirst.mockResolvedValueOnce(null);
+
+    await expect(
+      service.getLiquidation(
+        'tenant-2',
+        'seed-legacy-backfill-conflict-liq-2025-12',
+        'member-1',
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(prisma.liquidation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: 'seed-legacy-backfill-conflict-liq-2025-12',
+          tenantId: 'tenant-2',
+        },
+      }),
+    );
+  });
+
   it('includes chargePeriod when mapping a liquidation response', async () => {
     const liquidations = await service.listLiquidations(
       'tenant-1',

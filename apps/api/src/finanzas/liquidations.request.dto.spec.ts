@@ -5,6 +5,7 @@ import {
   CancelLiquidationDto,
   ListLiquidationsQueryDto,
   LiquidationParamDto,
+  LiquidationReadParamDto,
   PublishLiquidationDto,
   CreateLiquidationDraftDto,
 } from './expense-ledger.dto';
@@ -41,6 +42,37 @@ describe('Liquidation request DTOs', () => {
         ).toContain('liquidationId');
       },
     );
+  });
+
+  describe('LiquidationReadParamDto.liquidationId', () => {
+    it.each([
+      'c123456789012345678901234',
+      'seed-legacy-backfill-conflict-liq-2025-12',
+    ])('accepts a persisted read ID: %s', (liquidationId) => {
+      expect(validate(LiquidationReadParamDto, { liquidationId })).toHaveLength(0);
+    });
+
+    it.each([
+      '',
+      '   ',
+      'abc',
+      '123',
+      '-legacy',
+      'legacy-',
+      'legacy--id',
+      'seed legacy id',
+      'seed/legacy-id',
+      'seed\\legacy-id',
+      'seed%legacy-id',
+      'seed?legacy-id',
+      'seed#legacy-id',
+      'seed&legacy-id',
+      `seed-${'a'.repeat(100)}`,
+    ])('rejects unsafe read ID: %s', (liquidationId) => {
+      expect(
+        validate(LiquidationReadParamDto, { liquidationId }).map((error) => error.property),
+      ).toContain('liquidationId');
+    });
   });
 
   describe('CancelLiquidationDto.reason', () => {

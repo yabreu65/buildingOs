@@ -20,6 +20,7 @@ import {
   ListLiquidationsQueryDto,
   LiquidationDetailDto,
   LiquidationParamDto,
+  LiquidationReadParamDto,
   LiquidationResponseDto,
   PublishLiquidationDto,
 } from './expense-ledger.dto';
@@ -46,7 +47,7 @@ export class LiquidationsController {
 
   @Get(':liquidationId')
   async getLiquidation(
-    @Param() params: LiquidationParamDto,
+    @Param() params: LiquidationReadParamDto,
     @Request() req: AuthenticatedRequest,
   ): Promise<LiquidationDetailDto> {
     const context = this.resolveRequestContext(req);
