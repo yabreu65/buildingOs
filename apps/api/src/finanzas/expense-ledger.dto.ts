@@ -277,6 +277,18 @@ export class LiquidationParamDto {
   liquidationId!: string;
 }
 
+/**
+ * Read-only liquidation path parameters support modern CUIDs and the
+ * lowercase, hyphen-separated IDs persisted by historical fixtures.
+ * Lifecycle mutations intentionally continue using LiquidationParamDto.
+ */
+export class LiquidationReadParamDto {
+  @IsString()
+  @Length(1, 100)
+  @Matches(/^(?:c[0-9a-z]{24}|[a-z0-9]+(?:-[a-z0-9]+)+)$/)
+  liquidationId!: string;
+}
+
 export interface LiquidationResponseDto {
   id: string;
   tenantId: string;
