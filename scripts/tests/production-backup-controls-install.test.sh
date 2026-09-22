@@ -9,6 +9,7 @@ readonly SOURCE_ROOT="$TEST_ROOT/source"
 readonly DEST_ROOT="$TEST_ROOT/dest"
 readonly LEGACY_BASE_SHA='26f9f4c44d20aded9639fe473c56850122fc06f6'
 readonly LEGACY_CONTROL_COMMIT='a92b615c6978a0b3f4dff76944f44f01b1fdd130'
+readonly LEGACY_SUDOERS_SHA='35dbfb9d07a6a0b8a2797bd86f27ea94b0ae991f35653a544da8895be510475c'
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 PASS_COUNT=0
@@ -112,6 +113,18 @@ make_legacy_release() {
   chmod 0755 "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight" "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/lib"
 }
 
+make_legacy_release_with_sudoers() {
+  local sudoers="$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight"
+  make_legacy_release
+  mkdir -p "$DEST_ROOT/etc/sudoers.d"
+  git -C "$ROOT_DIR" show "$LEGACY_BASE_SHA:infra/production/sudoers/buildingos-production-backup-preflight" > "$sudoers"
+  chmod 0440 "$sudoers"
+  [[ "$(shasum -a 256 "$sudoers" | awk '{print $1}')" == "$LEGACY_SUDOERS_SHA" ]] || {
+    printf 'legacy sudoers fixture hash mismatch\n' >&2
+    exit 1
+  }
+}
+
 make_source
 CANDIDATE_ONE="$(source_sha)"
 printf 'untracked\n' > "$SOURCE_ROOT/untracked-source-artifact"
@@ -129,6 +142,45 @@ assert_success 'read-only check accepts a valid source release without creating 
   "$INSTALLER" --source-root "$SOURCE_ROOT" --dest-root "$CHECK_DEST" --tooling-source-sha "$CANDIDATE_ONE" --test-mode local-unprivileged --check
 [[ ! -e "$CHECK_DEST" ]] && pass 'read-only check does not create destination paths' || fail_test 'read-only check does not create destination paths'
 
+make_legacy_release_with_sudoers
+REAL_LEGACY_STATE="$(protected_tree_state)"
+assert_success 'real legacy plus sudoers release passes read-only validation' run_check "$CANDIDATE_ONE"
+assert_equal 'real legacy sudoers fixture keeps the audited hash' "$(shasum -a 256 "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" | awk '{print $1}')" "$LEGACY_SUDOERS_SHA"
+assert_equal 'real legacy sudoers fixture keeps root mode 0440' "$(stat -c '%a' "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" 2>/dev/null || stat -f '%Lp' "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight")" '440'
+SUDOERS="$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight"
+chmod 0644 "$SUDOERS"
+printf 'wrong sudoers bytes\n' > "$SUDOERS"
+chmod 0440 "$SUDOERS"
+assert_failure 'legacy sudoers wrong hash is rejected' run_check "$CANDIDATE_ONE"
+chmod 0644 "$SUDOERS"
+git -C "$ROOT_DIR" show "$LEGACY_BASE_SHA:infra/production/sudoers/buildingos-production-backup-preflight" > "$SUDOERS"
+chmod 0644 "$SUDOERS"
+assert_failure 'legacy sudoers wrong mode is rejected' run_check "$CANDIDATE_ONE"
+chmod 0440 "$SUDOERS"
+mv "$SUDOERS" "$SUDOERS.real"
+ln -s "$(basename "$SUDOERS.real")" "$SUDOERS"
+assert_failure 'legacy sudoers symlink is rejected' run_check "$CANDIDATE_ONE"
+rm "$SUDOERS"
+mv "$SUDOERS.real" "$SUDOERS"
+printf 'unknown\n' > "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
+chmod 0644 "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
+assert_failure 'real legacy plus sudoers with an extra artifact is rejected' run_check "$CANDIDATE_ONE"
+rm "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
+mv "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh" "$TEST_ROOT/helper.saved"
+assert_failure 'real legacy plus sudoers missing a required artifact is rejected' run_check "$CANDIDATE_ONE"
+mv "$TEST_ROOT/helper.saved" "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh"
+assert_success 'real legacy plus sudoers migrates to canonical' run_install "$CANDIDATE_ONE"
+REAL_LEGACY_SNAPSHOT="$(awk -F= '/^ROLLBACK_SNAPSHOT=/{print $2}' "$TEST_ROOT/output")"
+assert_contains 'real legacy snapshot records explicit layout classification' 'layout=legacy_with_sudoers' "$REAL_LEGACY_SNAPSHOT/layout"
+assert_success 'canonical release rolls back to real legacy plus sudoers' "$INSTALLER" --dest-root "$DEST_ROOT" --test-mode local-unprivileged --apply --rollback "$REAL_LEGACY_SNAPSHOT"
+assert_equal 'real legacy rollback restores bytes metadata and absence exactly' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
+assert_failure 'real legacy failure after destination preparation rolls back exactly' run_install "$CANDIDATE_ONE" --test-fail-after-prepare-destination
+assert_equal 'real legacy prepare failure restores exact state' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
+assert_failure 'real legacy failure during stage rolls back exactly' run_install "$CANDIDATE_ONE" --test-fail-during-stage-release
+assert_equal 'real legacy stage failure restores exact state' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
+assert_failure 'real legacy failure after publish rolls back exactly' run_install "$CANDIDATE_ONE" --test-fail-after-publish
+assert_equal 'real legacy publish failure restores exact state' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
+rm "$SUDOERS"
 make_legacy_release
 LEGACY_STATE="$(protected_tree_state)"
 assert_success 'recognized legacy release passes read-only validation' run_check "$CANDIDATE_ONE"

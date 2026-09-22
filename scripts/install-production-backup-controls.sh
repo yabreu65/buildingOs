@@ -21,6 +21,7 @@ readonly ROLLBACK_ROOT='/var/lib/buildingos-backup-preflight/rollback'
 readonly LEGACY_LAUNCHER_SHA256='0d7fe3ecf70eab0954f92d92dc00bf9a17b7ee24fd704dadef1bece887d14789'
 readonly LEGACY_CONTROL_SHA256='54ec38c730f727a626510abd5b905eff2744d51c70a98682ada882183bb4ae70'
 readonly LEGACY_HELPER_SHA256='e7799f2c7e6adcdcc38625ce3af99dd41bdea61a27a3c886f03efa8e6720f341'
+readonly LEGACY_SUDOERS_SHA256='35dbfb9d07a6a0b8a2797bd86f27ea94b0ae991f35653a544da8895be510475c'
 
 SOURCE_ROOT=''
 DEST_ROOT=''
@@ -323,6 +324,26 @@ validate_existing_layout() {
   fi
 
   if path_is_present "$launcher" && path_is_present "$control" && path_is_present "$helper" &&
+    path_is_present "$sudoers" && ! path_is_present "$object_exec" && ! path_is_present "$manifest" &&
+    ! path_is_present "$service" && ! path_is_present "$timer"; then
+    assert_file_policy "$launcher" 755 'legacy launcher'
+    assert_file_policy "$control" 755 'legacy control'
+    assert_file_policy "$helper" 644 'legacy helper'
+    assert_file_policy "$sudoers" 440 'legacy sudoers policy'
+    assert_sha256 "$launcher" "$LEGACY_LAUNCHER_SHA256" 'legacy launcher'
+    assert_sha256 "$control" "$LEGACY_CONTROL_SHA256" 'legacy control'
+    assert_sha256 "$helper" "$LEGACY_HELPER_SHA256" 'legacy helper'
+    assert_sha256 "$sudoers" "$LEGACY_SUDOERS_SHA256" 'legacy sudoers policy'
+    assert_dir_policy "$(destination_path "$RELEASE_DIR")" 'legacy control directory'
+    assert_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'legacy control library directory'
+    if command -v visudo >/dev/null 2>&1; then
+      visudo -cf "$sudoers" >/dev/null || fail 'legacy sudoers policy fails visudo validation'
+    fi
+    EXISTING_LAYOUT='legacy_with_sudoers'
+    return 0
+  fi
+
+  if path_is_present "$launcher" && path_is_present "$control" && path_is_present "$helper" &&
     ! path_is_present "$object_exec" && ! path_is_present "$manifest" && ! path_is_present "$sudoers" &&
     ! path_is_present "$service" && ! path_is_present "$timer"; then
     assert_file_policy "$launcher" 755 'legacy launcher'
@@ -451,6 +472,7 @@ snapshot_layout_from_entries() {
   case "$launcher:$control:$helper:$object_exec:$manifest:$sudoers:$service:$timer" in
     0:0:0:0:0:0:0:0) printf 'empty\n' ;;
     1:1:1:0:0:0:0:0) printf 'legacy\n' ;;
+    1:1:1:0:0:1:0:0) printf 'legacy_with_sudoers\n' ;;
     1:1:1:1:1:1:1:1) printf 'canonical\n' ;;
     *) fail 'rollback snapshot contains an unrecognized protected release layout' ;;
   esac
@@ -518,7 +540,7 @@ validate_snapshot() {
       *) fail "rollback presence marker is invalid for $label" ;;
     esac
   done
-  expected_layout="$(awk -F= '$1 == "layout" { count++; value=$2 } END { if (count == 1 && value ~ /^(empty|legacy|canonical)$/) print value; else exit 1 }' "$SNAPSHOT/layout")" || fail 'rollback layout classification is malformed'
+  expected_layout="$(awk -F= '$1 == "layout" { count++; value=$2 } END { if (count == 1 && value ~ /^(empty|legacy|legacy_with_sudoers|canonical)$/) print value; else exit 1 }' "$SNAPSHOT/layout")" || fail 'rollback layout classification is malformed'
   actual_layout="$(snapshot_layout_from_entries)"
   [[ "$expected_layout" == "$actual_layout" ]] || fail 'rollback layout classification does not match artifact states'
 }
