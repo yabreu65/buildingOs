@@ -7,7 +7,8 @@ readonly POSTGRES_BACKUP_SERVICE='pawtech-postgres-backup.service'
 readonly POSTGRES_BACKUP_TIMER='pawtech-postgres-backup.timer'
 readonly OBJECT_BACKUP_SERVICE='pawtech-buildingos-object-backup.service'
 readonly OBJECT_BACKUP_TIMER='pawtech-buildingos-object-backup.timer'
-readonly OBJECT_BACKUP_EXEC='/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh'
+readonly OBJECT_BACKUP_EXEC='/usr/local/libexec/buildingos-backup/backup-object-storage.sh'
+readonly OBJECT_BACKUP_WORKING_DIRECTORY='/var/lib/buildingos-object-backup'
 readonly DEFAULT_OBJECT_BACKUP_ENV_FILE='/etc/buildingos/object-backup.env'
 readonly DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG='/etc/buildingos/object-backup-rclone.conf'
 readonly OBJECT_BACKUP_RECEIPT='/var/lib/buildingos-object-backup/object-backup-receipt.json'
@@ -200,7 +201,7 @@ checkout_has_only_approved_ignored_files() {
   done < "$EXPECTED_APP_DIR/.dockerignore"
   [[ "$runtime_env_excluded" == true ]] || return 1
 
-  if ! ignored_paths="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null)"; then
+  if ! ignored_paths="$(git -c safe.directory="$EXPECTED_APP_DIR" --no-optional-locks -C "$EXPECTED_APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null)"; then
     return 1
   fi
   if [[ -n "$ignored_paths" ]]; then
@@ -322,8 +323,8 @@ inspect_runtime() {
   local api_image web_image status_output
 
   if [[ -d "$EXPECTED_APP_DIR/.git" && ! -L "$EXPECTED_APP_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
-    production_sha="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
-    if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]] && status_output="$(git --no-optional-locks -C "$EXPECTED_APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" &&
+    production_sha="$(git -c safe.directory="$EXPECTED_APP_DIR" --no-optional-locks -C "$EXPECTED_APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
+    if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]] && status_output="$(git -c safe.directory="$EXPECTED_APP_DIR" --no-optional-locks -C "$EXPECTED_APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" &&
       [[ -z "$status_output" ]] && checkout_has_only_approved_ignored_files; then
       checkout_status='CLEAN'
     fi
@@ -338,7 +339,7 @@ inspect_runtime() {
   printf 'API_REVISION=%s\n' "$(safe_output "$api_revision")"
   printf 'WEB_REVISION=%s\n' "$(safe_output "$web_revision")"
   printf 'PRODUCTION_CHECKOUT_STATUS=%s\n' "$checkout_status"
-  if [[ "$production_sha" == "$CANDIDATE_SHA" && "$api_revision" == "$CANDIDATE_SHA" && "$web_revision" == "$CANDIDATE_SHA" && "$checkout_status" == CLEAN ]]; then
+  if [[ "$production_sha" == "$EXPECTED_RUNTIME_SHA" && "$api_revision" == "$EXPECTED_RUNTIME_SHA" && "$web_revision" == "$EXPECTED_RUNTIME_SHA" && "$checkout_status" == CLEAN ]]; then
     printf 'RUNTIME_IDENTITY=CONSISTENT\n'
   else
     printf 'RUNTIME_IDENTITY=INCONSISTENT\n'
@@ -425,7 +426,7 @@ inspect_service() {
   [[ "$group" == yoryi ]] || fail_check "$unit Group is not yoryi"
   [[ "$unit_type" == oneshot ]] || fail_check "$unit Type is not oneshot"
   [[ "$env_files" == "$expected_env" || "$env_files" == "-$expected_env" || "$env_files" == "$expected_env (ignore_errors=no)" || "$env_files" == "-$expected_env (ignore_errors=no)" ]] || fail_check "$unit EnvironmentFile is unexpected"
-  [[ "$workdir" == "$EXPECTED_APP_DIR" ]] || fail_check "$unit WorkingDirectory is unexpected"
+  [[ "$workdir" == "$OBJECT_BACKUP_WORKING_DIRECTORY" ]] || fail_check "$unit WorkingDirectory is unexpected"
   systemd_exec_matches "$exec_start" "$expected_exec" || fail_check "$unit ExecStart is unexpected"
   systemd_timeout_matches "$timeout" || fail_check "$unit TimeoutStartSec is not 6h"
   inspect_auxiliary_commands "$label" "$unit"
@@ -599,9 +600,9 @@ main() {
   local required_commands=(awk bash date docker git stat systemctl)
   local runtime_app_dir
 
-  [[ $# -eq 1 ]] || { printf 'Usage: %s <candidate_sha>\n' "${0##*/}" >&2; return 64; }
-  [[ "$1" =~ ^[0-9a-f]{40}$ ]] || { printf 'ERROR: candidate SHA is not exactly 40 lowercase hexadecimal characters\n' >&2; return 1; }
-  readonly CANDIDATE_SHA="$1"
+  [[ $# -eq 1 ]] || { printf 'Usage: %s <expected_runtime_sha>\n' "${0##*/}" >&2; return 64; }
+  [[ "$1" =~ ^[0-9a-f]{40}$ ]] || { printf 'ERROR: expected runtime SHA is not exactly 40 lowercase hexadecimal characters\n' >&2; return 1; }
+  readonly EXPECTED_RUNTIME_SHA="$1"
 
   OBJECT_BACKUP_ENV_FILE="$DEFAULT_OBJECT_BACKUP_ENV_FILE"
   OBJECT_BACKUP_RCLONE_CONFIG="$DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG"
@@ -619,7 +620,7 @@ main() {
     fi
   done
 
-  printf 'PRODUCTION_BACKUP_PREFLIGHT\nCANDIDATE_SHA=%s\n' "$CANDIDATE_SHA"
+  printf 'PRODUCTION_BACKUP_PREFLIGHT\nEXPECTED_RUNTIME_SHA=%s\n' "$EXPECTED_RUNTIME_SHA"
   if [[ "$missing_dependency" == true ]]; then
     printf 'DEPENDENCIES_READY=NO\nPOSTGRES_BACKUP_TOPOLOGY=FAIL\nOBJECT_BACKUP_TOPOLOGY=FAIL\nOBJECT_BACKUP_ENV=FAIL\nBACKUP_CONCURRENCY_SAFE=NO\n'
   else

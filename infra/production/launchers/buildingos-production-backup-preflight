@@ -1,52 +1,177 @@
 #!/bin/sh
 set -eu
 
-readonly CONTROL_DIR='/usr/local/libexec/buildingos-backup-preflight'
-readonly CONTROL_LIB_DIR='/usr/local/libexec/buildingos-backup-preflight/lib'
-readonly PREFLIGHT_SCRIPT='/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh'
-readonly ENDPOINT_HELPER='/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh'
-readonly INSTALLED_LAUNCHER='/usr/local/sbin/buildingos-production-backup-preflight'
-readonly STAT_COMMAND='/usr/bin/stat'
-readonly SAFE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+CONTROL_DIR='/usr/local/libexec/buildingos-backup-preflight'
+CONTROL_LIB_DIR='/usr/local/libexec/buildingos-backup-preflight/lib'
+PREFLIGHT_SCRIPT='/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh'
+ENDPOINT_HELPER='/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh'
+OBJECT_BACKUP_EXEC='/usr/local/libexec/buildingos-backup/backup-object-storage.sh'
+MANIFEST='/usr/local/libexec/buildingos-backup-preflight/manifest'
+INSTALLED_LAUNCHER='/usr/local/sbin/buildingos-production-backup-preflight'
+SUDOERS_POLICY='/etc/sudoers.d/buildingos-production-backup-preflight'
+OBJECT_SERVICE_UNIT='/etc/systemd/system/pawtech-buildingos-object-backup.service'
+OBJECT_TIMER_UNIT='/etc/systemd/system/pawtech-buildingos-object-backup.timer'
+STAT_COMMAND='/usr/bin/stat'
+SAFE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+EXPECTED_UID=0
+EXPECTED_GID=0
+TEST_MODE=false
 
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
   exit 1
 }
 
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -- "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 -- "$1" | awk '{print $1}'
+  else
+    fail 'no SHA-256 command is available'
+  fi
+}
+
+hash_text() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    fail 'no SHA-256 command is available'
+  fi
+}
+
 assert_metadata() {
   path="$1"
   expected_mode="$2"
-  metadata="$($STAT_COMMAND -c '%u:%g:%a' -- "$path")" || fail "unable to inspect trusted control metadata: $path"
-  [ "$metadata" = "0:0:$expected_mode" ] || fail "unsafe trusted control metadata: $path"
+  metadata="$($STAT_COMMAND -c '%u:%g:%a' -- "$path" 2>/dev/null || $STAT_COMMAND -f '%u:%g:%Lp' "$path")" || fail "unable to inspect trusted control metadata: $path"
+  [ "$metadata" = "$EXPECTED_UID:$EXPECTED_GID:$expected_mode" ] || fail "unsafe trusted control metadata: $path"
 }
 
-[ "$#" -eq 1 ] || fail 'exactly one candidate SHA is required'
-candidate_sha="$1"
-[ "${#candidate_sha}" -eq 40 ] || fail 'candidate SHA must be exactly 40 lowercase hexadecimal characters'
-case "$candidate_sha" in
-  *[!0-9a-f]*) fail 'candidate SHA must be exactly 40 lowercase hexadecimal characters' ;;
+release_payload() {
+  tooling_source_sha="$1"
+  launcher_hash="$2"
+  control_hash="$3"
+  helper_hash="$4"
+  object_exec_hash="$5"
+  sudoers_hash="$6"
+  service_hash="$7"
+  timer_hash="$8"
+  printf 'manifest_version=1\n'
+  printf 'tooling_source_sha=%s\n' "$tooling_source_sha"
+  printf 'launcher_path=/usr/local/sbin/buildingos-production-backup-preflight\n'
+  printf 'launcher_sha256=%s\n' "$launcher_hash"
+  printf 'control_path=/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh\n'
+  printf 'control_sha256=%s\n' "$control_hash"
+  printf 'helper_path=/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh\n'
+  printf 'helper_sha256=%s\n' "$helper_hash"
+  printf 'object_exec_path=/usr/local/libexec/buildingos-backup/backup-object-storage.sh\n'
+  printf 'object_exec_sha256=%s\n' "$object_exec_hash"
+  printf 'sudoers_path=/etc/sudoers.d/buildingos-production-backup-preflight\n'
+  printf 'sudoers_sha256=%s\n' "$sudoers_hash"
+  printf 'object_service_path=/etc/systemd/system/pawtech-buildingos-object-backup.service\n'
+  printf 'object_service_sha256=%s\n' "$service_hash"
+  printf 'object_timer_path=/etc/systemd/system/pawtech-buildingos-object-backup.timer\n'
+  printf 'object_timer_sha256=%s\n' "$timer_hash"
+}
+
+manifest_tooling_source_sha() {
+  awk -F= '$1 == "tooling_source_sha" { count++; value=$2 } END { if (count == 1 && value ~ /^[0-9a-f]{40}$/) print value; else exit 1 }' "$MANIFEST"
+}
+
+assert_manifest_matches() {
+  tooling_source_sha="$(manifest_tooling_source_sha)" || fail 'installed manifest tooling source SHA is invalid'
+  launcher_hash="$(hash_file "$INSTALLED_LAUNCHER")"
+  control_hash="$(hash_file "$PREFLIGHT_SCRIPT")"
+  helper_hash="$(hash_file "$ENDPOINT_HELPER")"
+  object_exec_hash="$(hash_file "$OBJECT_BACKUP_EXEC")"
+  sudoers_hash="$(hash_file "$SUDOERS_POLICY")"
+  service_hash="$(hash_file "$OBJECT_SERVICE_UNIT")"
+  timer_hash="$(hash_file "$OBJECT_TIMER_UNIT")"
+  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" | hash_text)"
+  expected_manifest="$(mktemp "${MANIFEST}.expected.XXXXXX")" || fail 'unable to create temporary manifest'
+  release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" > "$expected_manifest"
+  printf 'release_sha256=%s\n' "$release_hash" >> "$expected_manifest"
+  if ! cmp -s "$expected_manifest" "$MANIFEST"; then
+    rm -f -- "$expected_manifest"
+    fail 'installed manifest is stale, malformed, or does not match protected artifacts'
+  fi
+  rm -f -- "$expected_manifest"
+}
+
+if [ "${BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE:-}" = LOCAL_ISOLATED_ONLY ]; then
+  test_root="${BUILDINGOS_PREFLIGHT_LAUNCHER_TEST_ROOT:-}"
+  case "$test_root" in
+    /*) ;;
+    *) fail 'isolated launcher test root must be an absolute path' ;;
+  esac
+  [ "$test_root" != / ] || fail 'isolated launcher test root cannot be /'
+  [ -d "$test_root" ] && [ ! -L "$test_root" ] || fail 'isolated launcher test root is unavailable'
+  CONTROL_DIR="$test_root/usr/local/libexec/buildingos-backup-preflight"
+  CONTROL_LIB_DIR="$CONTROL_DIR/lib"
+  PREFLIGHT_SCRIPT="$CONTROL_DIR/production-backup-preflight.sh"
+  ENDPOINT_HELPER="$CONTROL_LIB_DIR/endpoint-identity.sh"
+  OBJECT_BACKUP_EXEC="$test_root/usr/local/libexec/buildingos-backup/backup-object-storage.sh"
+  MANIFEST="$CONTROL_DIR/manifest"
+  INSTALLED_LAUNCHER="$test_root/usr/local/sbin/buildingos-production-backup-preflight"
+  SUDOERS_POLICY="$test_root/etc/sudoers.d/buildingos-production-backup-preflight"
+  OBJECT_SERVICE_UNIT="$test_root/etc/systemd/system/pawtech-buildingos-object-backup.service"
+  OBJECT_TIMER_UNIT="$test_root/etc/systemd/system/pawtech-buildingos-object-backup.timer"
+  EXPECTED_UID="$(id -u)"
+  EXPECTED_GID="$(id -g)"
+  TEST_MODE=true
+fi
+
+[ "$#" -eq 1 ] || fail 'exactly one expected runtime SHA is required'
+expected_runtime_sha="$1"
+[ "${#expected_runtime_sha}" -eq 40 ] || fail 'expected runtime SHA must be exactly 40 lowercase hexadecimal characters'
+case "$expected_runtime_sha" in
+  *[!0-9a-f]*) fail 'expected runtime SHA must be exactly 40 lowercase hexadecimal characters' ;;
 esac
 
 [ -d "$CONTROL_DIR" ] && [ ! -L "$CONTROL_DIR" ] || fail 'trusted control directory is unavailable'
 [ -d "$CONTROL_LIB_DIR" ] && [ ! -L "$CONTROL_LIB_DIR" ] || fail 'trusted control library directory is unavailable'
 [ -f "$PREFLIGHT_SCRIPT" ] && [ ! -L "$PREFLIGHT_SCRIPT" ] || fail 'trusted preflight control is unavailable'
 [ -f "$ENDPOINT_HELPER" ] && [ ! -L "$ENDPOINT_HELPER" ] || fail 'trusted endpoint helper is unavailable'
+[ -f "$OBJECT_BACKUP_EXEC" ] && [ ! -L "$OBJECT_BACKUP_EXEC" ] || fail 'trusted Object Storage executable is unavailable'
+[ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ] || fail 'trusted manifest is unavailable'
 [ -f "$INSTALLED_LAUNCHER" ] && [ ! -L "$INSTALLED_LAUNCHER" ] || fail 'trusted launcher is unavailable'
+[ -f "$SUDOERS_POLICY" ] && [ ! -L "$SUDOERS_POLICY" ] || fail 'trusted sudoers policy is unavailable'
+[ -f "$OBJECT_SERVICE_UNIT" ] && [ ! -L "$OBJECT_SERVICE_UNIT" ] || fail 'trusted Object Storage service unit is unavailable'
+[ -f "$OBJECT_TIMER_UNIT" ] && [ ! -L "$OBJECT_TIMER_UNIT" ] || fail 'trusted Object Storage timer unit is unavailable'
 assert_metadata "$CONTROL_DIR" 755
 assert_metadata "$CONTROL_LIB_DIR" 755
 assert_metadata "$PREFLIGHT_SCRIPT" 755
 assert_metadata "$ENDPOINT_HELPER" 644
+assert_metadata "$OBJECT_BACKUP_EXEC" 755
+assert_metadata "$MANIFEST" 644
 assert_metadata "$INSTALLED_LAUNCHER" 755
+assert_metadata "$SUDOERS_POLICY" 440
+assert_metadata "$OBJECT_SERVICE_UNIT" 644
+assert_metadata "$OBJECT_TIMER_UNIT" 644
+assert_manifest_matches
 
 unset BASH_ENV ENV CDPATH GLOBIGNORE \
   LD_PRELOAD LD_LIBRARY_PATH \
-  BUILDINGOS_PREFLIGHT_TEST_MODE \
   PREFLIGHT_APP_DIR PREFLIGHT_ENV_FILE PREFLIGHT_SSE_FILE PREFLIGHT_STATE_DIR \
   PREFLIGHT_EXPECTED_ENV_OWNER PREFLIGHT_EXPECTED_ENV_GROUP \
   PREFLIGHT_EXPECTED_STATE_OWNER PREFLIGHT_EXPECTED_STATE_GROUP \
   PREFLIGHT_EXPECTED_SSE_OWNER PREFLIGHT_EXPECTED_SSE_GROUP
 
+if [ "$TEST_MODE" = true ]; then
+  exec /usr/bin/env -i \
+    PATH="$SAFE_PATH" \
+    HOME=/root \
+    USER=root \
+    LOGNAME=root \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY \
+    /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$expected_runtime_sha" </dev/null
+fi
+
+unset BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE BUILDINGOS_PREFLIGHT_LAUNCHER_TEST_ROOT
 exec /usr/bin/env -i \
   PATH="$SAFE_PATH" \
   HOME=/root \
@@ -54,4 +179,4 @@ exec /usr/bin/env -i \
   LOGNAME=root \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
-  /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$candidate_sha" </dev/null
+  /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$expected_runtime_sha" </dev/null
