@@ -82,6 +82,7 @@ manifest_tooling_source_sha() {
 
 assert_manifest_matches() {
   tooling_source_sha="$(manifest_tooling_source_sha)" || fail 'installed manifest tooling source SHA is invalid'
+  [ "$tooling_source_sha" = "$EXPECTED_TOOLING_SOURCE_SHA" ] || fail 'installed manifest tooling source SHA does not match the expected tooling source SHA'
   launcher_hash="$(hash_file "$INSTALLED_LAUNCHER")"
   control_hash="$(hash_file "$PREFLIGHT_SCRIPT")"
   helper_hash="$(hash_file "$ENDPOINT_HELPER")"
@@ -90,14 +91,12 @@ assert_manifest_matches() {
   service_hash="$(hash_file "$OBJECT_SERVICE_UNIT")"
   timer_hash="$(hash_file "$OBJECT_TIMER_UNIT")"
   release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" | hash_text)"
-  expected_manifest="$(mktemp "${MANIFEST}.expected.XXXXXX")" || fail 'unable to create temporary manifest'
-  release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" > "$expected_manifest"
-  printf 'release_sha256=%s\n' "$release_hash" >> "$expected_manifest"
-  if ! cmp -s "$expected_manifest" "$MANIFEST"; then
-    rm -f -- "$expected_manifest"
+  if ! {
+    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash"
+    printf 'release_sha256=%s\n' "$release_hash"
+  } | cmp -s - "$MANIFEST"; then
     fail 'installed manifest is stale, malformed, or does not match protected artifacts'
   fi
-  rm -f -- "$expected_manifest"
 }
 
 if [ "${BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE:-}" = LOCAL_ISOLATED_ONLY ]; then
@@ -123,12 +122,15 @@ if [ "${BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE:-}" = LOCAL_ISOLATED_ONLY ]; then
   TEST_MODE=true
 fi
 
-[ "$#" -eq 1 ] || fail 'exactly one expected runtime SHA is required'
-expected_runtime_sha="$1"
-[ "${#expected_runtime_sha}" -eq 40 ] || fail 'expected runtime SHA must be exactly 40 lowercase hexadecimal characters'
-case "$expected_runtime_sha" in
-  *[!0-9a-f]*) fail 'expected runtime SHA must be exactly 40 lowercase hexadecimal characters' ;;
-esac
+[ "$#" -eq 2 ] || fail 'expected tooling source SHA and expected runtime SHA are required'
+EXPECTED_TOOLING_SOURCE_SHA="$1"
+EXPECTED_RUNTIME_SHA="$2"
+for expected_sha in "$EXPECTED_TOOLING_SOURCE_SHA" "$EXPECTED_RUNTIME_SHA"; do
+  [ "${#expected_sha}" -eq 40 ] || fail 'expected SHA must be exactly 40 lowercase hexadecimal characters'
+  case "$expected_sha" in
+    *[!0-9a-f]*) fail 'expected SHA must be exactly 40 lowercase hexadecimal characters' ;;
+  esac
+done
 
 [ -d "$CONTROL_DIR" ] && [ ! -L "$CONTROL_DIR" ] || fail 'trusted control directory is unavailable'
 [ -d "$CONTROL_LIB_DIR" ] && [ ! -L "$CONTROL_LIB_DIR" ] || fail 'trusted control library directory is unavailable'
@@ -168,7 +170,7 @@ if [ "$TEST_MODE" = true ]; then
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY \
-    /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$expected_runtime_sha" </dev/null
+    /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$EXPECTED_RUNTIME_SHA" </dev/null
 fi
 
 unset BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE BUILDINGOS_PREFLIGHT_LAUNCHER_TEST_ROOT
@@ -179,4 +181,4 @@ exec /usr/bin/env -i \
   LOGNAME=root \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
-  /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$expected_runtime_sha" </dev/null
+  /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$EXPECTED_RUNTIME_SHA" </dev/null

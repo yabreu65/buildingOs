@@ -18,6 +18,9 @@ readonly SUDOERS_PATH='/etc/sudoers.d/buildingos-production-backup-preflight'
 readonly OBJECT_SERVICE_PATH='/etc/systemd/system/pawtech-buildingos-object-backup.service'
 readonly OBJECT_TIMER_PATH='/etc/systemd/system/pawtech-buildingos-object-backup.timer'
 readonly ROLLBACK_ROOT='/var/lib/buildingos-backup-preflight/rollback'
+readonly LEGACY_LAUNCHER_SHA256='0d7fe3ecf70eab0954f92d92dc00bf9a17b7ee24fd704dadef1bece887d14789'
+readonly LEGACY_CONTROL_SHA256='54ec38c730f727a626510abd5b905eff2744d51c70a98682ada882183bb4ae70'
+readonly LEGACY_HELPER_SHA256='e7799f2c7e6adcdcc38625ce3af99dd41bdea61a27a3c886f03efa8e6720f341'
 
 SOURCE_ROOT=''
 DEST_ROOT=''
@@ -26,8 +29,13 @@ ACTION='check'
 ROLLBACK_SNAPSHOT=''
 TEST_MODE=''
 TEST_FAIL_AFTER_PUBLISH=false
+TEST_FAIL_AFTER_PREPARE_DESTINATION=false
+TEST_FAIL_DURING_STAGE_RELEASE=false
 TEST_FORCE_CROSS_DEVICE=false
 SNAPSHOT=''
+EXISTING_LAYOUT=''
+TRANSACTION_ACTIVE=false
+ROLLBACK_IN_PROGRESS=false
 STAGED_LAUNCHER=''
 STAGED_CONTROL=''
 STAGED_HELPER=''
@@ -89,6 +97,15 @@ cleanup() {
   for staged in "$STAGED_LAUNCHER" "$STAGED_CONTROL" "$STAGED_HELPER" "$STAGED_OBJECT_EXEC" "$STAGED_MANIFEST" "$STAGED_SUDOERS" "$STAGED_OBJECT_SERVICE" "$STAGED_OBJECT_TIMER" "$STAGED_ROLLBACK"; do
     [[ -z "$staged" || (! -e "$staged" && ! -L "$staged") ]] || rm -f -- "$staged"
   done
+  if [[ "$status" -ne 0 && "$TRANSACTION_ACTIVE" == true && "$ROLLBACK_IN_PROGRESS" == false ]]; then
+    ROLLBACK_IN_PROGRESS=true
+    if ! restore_snapshot; then
+      printf 'ERROR: automatic rollback failed; manual rollback is required\n' >&2
+      status=1
+    fi
+    ROLLBACK_IN_PROGRESS=false
+  fi
+  trap - EXIT
   exit "$status"
 }
 trap cleanup EXIT
@@ -186,6 +203,11 @@ assert_dir_policy() {
   [[ "$(file_metadata "$path")" == "$EXPECTED_UID:$EXPECTED_GID:755" ]] || fail "unsafe $label owner or mode"
 }
 
+assert_sha256() {
+  local path="$1" expected="$2" label="$3"
+  [[ "$(sha256_file "$path")" == "$expected" ]] || fail "$label bytes do not match the audited legacy release"
+}
+
 source_path() {
   printf '%s/%s\n' "$SOURCE_ROOT" "$1"
 }
@@ -233,15 +255,22 @@ write_manifest() {
 
 validate_manifest() {
   local manifest="$1" tooling_source_sha="$2" launcher="$3" control="$4" helper="$5" object_exec="$6" sudoers="$7" service="$8" timer="$9"
-  local expected_file
+  local launcher_hash control_hash helper_hash object_exec_hash sudoers_hash service_hash timer_hash release_hash
   assert_regular_file "$manifest" 'manifest'
-  expected_file="$(mktemp "${manifest%/*}/.manifest-expected.XXXXXX")"
-  write_manifest "$expected_file" "$tooling_source_sha" "$launcher" "$control" "$helper" "$object_exec" "$sudoers" "$service" "$timer"
-  if ! cmp -s "$expected_file" "$manifest"; then
-    rm -f -- "$expected_file"
+  launcher_hash="$(sha256_file "$launcher")"
+  control_hash="$(sha256_file "$control")"
+  helper_hash="$(sha256_file "$helper")"
+  object_exec_hash="$(sha256_file "$object_exec")"
+  sudoers_hash="$(sha256_file "$sudoers")"
+  service_hash="$(sha256_file "$service")"
+  timer_hash="$(sha256_file "$timer")"
+  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" | sha256_text)"
+  if ! {
+    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash"
+    printf 'release_sha256=%s\n' "$release_hash"
+  } | cmp -s - "$manifest"; then
     fail 'manifest is missing, stale, malformed, or does not match installed artifacts'
   fi
-  rm -f -- "$expected_file"
 }
 
 validate_source() {
@@ -271,8 +300,12 @@ validate_source() {
   fi
 }
 
+path_is_present() {
+  [[ -e "$1" || -L "$1" ]]
+}
+
 validate_existing_layout() {
-  local launcher control helper object_exec manifest sudoers service timer present=0
+  local launcher control helper object_exec manifest sudoers service timer
   launcher="$(destination_path "$LAUNCHER_PATH")"
   control="$(destination_path "$CONTROL_PATH")"
   helper="$(destination_path "$HELPER_PATH")"
@@ -281,22 +314,48 @@ validate_existing_layout() {
   sudoers="$(destination_path "$SUDOERS_PATH")"
   service="$(destination_path "$OBJECT_SERVICE_PATH")"
   timer="$(destination_path "$OBJECT_TIMER_PATH")"
-  for path in "$launcher" "$control" "$helper" "$object_exec" "$manifest" "$sudoers" "$service" "$timer"; do
-    [[ ! -e "$path" && ! -L "$path" ]] || present=$((present + 1))
-  done
-  [[ "$present" -eq 0 || "$present" -eq 8 ]] || fail 'destination contains a partial protected release'
-  [[ "$present" -eq 0 ]] && return 0
-  assert_file_policy "$launcher" 755 'installed launcher'
-  assert_file_policy "$control" 755 'installed control'
-  assert_file_policy "$helper" 644 'installed helper'
-  assert_file_policy "$object_exec" 755 'installed Object Storage executable'
-  assert_file_policy "$manifest" 644 'installed manifest'
-  assert_file_policy "$sudoers" 440 'installed sudoers policy'
-  assert_file_policy "$service" 644 'installed Object Storage service'
-  assert_file_policy "$timer" 644 'installed Object Storage timer'
-  assert_dir_policy "$(destination_path "$RELEASE_DIR")" 'installed control directory'
-  assert_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'installed control library directory'
-  assert_dir_policy "$(destination_path "$OBJECT_EXEC_DIR")" 'installed Object Storage executable directory'
+
+  if ! path_is_present "$launcher" && ! path_is_present "$control" && ! path_is_present "$helper" &&
+    ! path_is_present "$object_exec" && ! path_is_present "$manifest" && ! path_is_present "$sudoers" &&
+    ! path_is_present "$service" && ! path_is_present "$timer"; then
+    EXISTING_LAYOUT='empty'
+    return 0
+  fi
+
+  if path_is_present "$launcher" && path_is_present "$control" && path_is_present "$helper" &&
+    ! path_is_present "$object_exec" && ! path_is_present "$manifest" && ! path_is_present "$sudoers" &&
+    ! path_is_present "$service" && ! path_is_present "$timer"; then
+    assert_file_policy "$launcher" 755 'legacy launcher'
+    assert_file_policy "$control" 755 'legacy control'
+    assert_file_policy "$helper" 644 'legacy helper'
+    assert_sha256 "$launcher" "$LEGACY_LAUNCHER_SHA256" 'legacy launcher'
+    assert_sha256 "$control" "$LEGACY_CONTROL_SHA256" 'legacy control'
+    assert_sha256 "$helper" "$LEGACY_HELPER_SHA256" 'legacy helper'
+    assert_dir_policy "$(destination_path "$RELEASE_DIR")" 'legacy control directory'
+    assert_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'legacy control library directory'
+    EXISTING_LAYOUT='legacy'
+    return 0
+  fi
+
+  if path_is_present "$launcher" && path_is_present "$control" && path_is_present "$helper" &&
+    path_is_present "$object_exec" && path_is_present "$manifest" && path_is_present "$sudoers" &&
+    path_is_present "$service" && path_is_present "$timer"; then
+    assert_file_policy "$launcher" 755 'installed launcher'
+    assert_file_policy "$control" 755 'installed control'
+    assert_file_policy "$helper" 644 'installed helper'
+    assert_file_policy "$object_exec" 755 'installed Object Storage executable'
+    assert_file_policy "$manifest" 644 'installed manifest'
+    assert_file_policy "$sudoers" 440 'installed sudoers policy'
+    assert_file_policy "$service" 644 'installed Object Storage service'
+    assert_file_policy "$timer" 644 'installed Object Storage timer'
+    assert_dir_policy "$(destination_path "$RELEASE_DIR")" 'installed control directory'
+    assert_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'installed control library directory'
+    assert_dir_policy "$(destination_path "$OBJECT_EXEC_DIR")" 'installed Object Storage executable directory'
+    EXISTING_LAYOUT='canonical'
+    return 0
+  fi
+
+  fail 'destination contains an unrecognized partial protected release'
 }
 
 validate_destination_readonly() {
@@ -329,9 +388,9 @@ stage_file_in_target_directory() {
   staged="$(mktemp "${destination%/*}/.${label}.XXXXXX")" || fail "unable to create staging file for $label"
   set_staged_path "$label" "$staged"
   assert_same_filesystem "$staged" "${destination%/*}"
-  cp -- "$source" "$staged"
-  set_file_policy "$staged" "$mode"
-  assert_file_policy "$staged" "$mode" "staged $label"
+  cp -- "$source" "$staged" || fail "unable to stage $label"
+  set_file_policy "$staged" "$mode" || fail "unable to set staged $label policy"
+  assert_file_policy "$staged" "$mode" "staged $label" || fail "staged $label policy validation failed"
 }
 
 stage_release() {
@@ -345,15 +404,16 @@ stage_release() {
   source_timer="$(source_path infra/production/systemd/pawtech-buildingos-object-backup.timer)"
   stage_file_in_target_directory launcher "$source_launcher" "$(destination_path "$LAUNCHER_PATH")" 755
   stage_file_in_target_directory control "$source_control" "$(destination_path "$CONTROL_PATH")" 755
+  [[ "$TEST_FAIL_DURING_STAGE_RELEASE" == false ]] || fail 'injected stage release failure'
   stage_file_in_target_directory helper "$source_helper" "$(destination_path "$HELPER_PATH")" 644
   stage_file_in_target_directory object_exec "$source_object_exec" "$(destination_path "$OBJECT_EXEC_PATH")" 755
   stage_file_in_target_directory sudoers "$source_sudoers" "$(destination_path "$SUDOERS_PATH")" 440
   stage_file_in_target_directory object_service "$source_service" "$(destination_path "$OBJECT_SERVICE_PATH")" 644
   stage_file_in_target_directory object_timer "$source_timer" "$(destination_path "$OBJECT_TIMER_PATH")" 644
   stage_file_in_target_directory manifest /dev/null "$(destination_path "$MANIFEST_PATH")" 644
-  write_manifest "$(staged_path manifest)" "$TOOLING_SOURCE_SHA" "$(staged_path launcher)" "$(staged_path control)" "$(staged_path helper)" "$(staged_path object_exec)" "$(staged_path sudoers)" "$(staged_path object_service)" "$(staged_path object_timer)"
-  assert_file_policy "$(staged_path manifest)" 644 'staged manifest'
-  validate_manifest "$(staged_path manifest)" "$TOOLING_SOURCE_SHA" "$(staged_path launcher)" "$(staged_path control)" "$(staged_path helper)" "$(staged_path object_exec)" "$(staged_path sudoers)" "$(staged_path object_service)" "$(staged_path object_timer)"
+  write_manifest "$(staged_path manifest)" "$TOOLING_SOURCE_SHA" "$(staged_path launcher)" "$(staged_path control)" "$(staged_path helper)" "$(staged_path object_exec)" "$(staged_path sudoers)" "$(staged_path object_service)" "$(staged_path object_timer)" || fail 'unable to write staged manifest'
+  assert_file_policy "$(staged_path manifest)" 644 'staged manifest' || fail 'staged manifest policy validation failed'
+  validate_manifest "$(staged_path manifest)" "$TOOLING_SOURCE_SHA" "$(staged_path launcher)" "$(staged_path control)" "$(staged_path helper)" "$(staged_path object_exec)" "$(staged_path sudoers)" "$(staged_path object_service)" "$(staged_path object_timer)" || fail 'staged manifest validation failed'
   if command -v visudo >/dev/null 2>&1; then
     visudo -cf "$(staged_path sudoers)" >/dev/null || fail 'staged sudoers policy fails visudo validation'
   fi
@@ -378,6 +438,24 @@ snapshot_node() {
 
 snapshot_labels=(launcher control helper object_exec manifest sudoers object_service object_timer control_dir control_lib_dir object_exec_dir)
 
+snapshot_layout_from_entries() {
+  local launcher control helper object_exec manifest sudoers service timer
+  launcher="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/launcher.meta")"
+  control="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/control.meta")"
+  helper="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/helper.meta")"
+  object_exec="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/object_exec.meta")"
+  manifest="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/manifest.meta")"
+  sudoers="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/sudoers.meta")"
+  service="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/object_service.meta")"
+  timer="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/object_timer.meta")"
+  case "$launcher:$control:$helper:$object_exec:$manifest:$sudoers:$service:$timer" in
+    0:0:0:0:0:0:0:0) printf 'empty\n' ;;
+    1:1:1:0:0:0:0:0) printf 'legacy\n' ;;
+    1:1:1:1:1:1:1:1) printf 'canonical\n' ;;
+    *) fail 'rollback snapshot contains an unrecognized protected release layout' ;;
+  esac
+}
+
 create_snapshot() {
   local rollback_dir
   rollback_dir="$(destination_path "$ROLLBACK_ROOT")"
@@ -394,6 +472,7 @@ create_snapshot() {
   snapshot_node sudoers "$(destination_path "$SUDOERS_PATH")"
   snapshot_node object_service "$(destination_path "$OBJECT_SERVICE_PATH")"
   snapshot_node object_timer "$(destination_path "$OBJECT_TIMER_PATH")"
+  printf 'layout=%s\n' "$EXISTING_LAYOUT" > "$SNAPSHOT/layout"
   snapshot_node control_dir "$(destination_path "$RELEASE_DIR")"
   snapshot_node control_lib_dir "$(destination_path "$RELEASE_DIR/lib")"
   snapshot_node object_exec_dir "$(destination_path "$OBJECT_EXEC_DIR")"
@@ -415,8 +494,9 @@ validate_snapshot_path() {
 }
 
 validate_snapshot() {
-  local label metadata type present expected_digest actual_digest
+  local label metadata type present expected_digest actual_digest expected_layout actual_layout
   validate_snapshot_path
+  [[ -f "$SNAPSHOT/layout" && ! -L "$SNAPSHOT/layout" ]] || fail 'rollback layout classification is unavailable'
   for label in "${snapshot_labels[@]}"; do
     metadata="$SNAPSHOT/$label.meta"
     [[ -f "$metadata" && ! -L "$metadata" ]] || fail "rollback metadata is unavailable for $label"
@@ -438,6 +518,9 @@ validate_snapshot() {
       *) fail "rollback presence marker is invalid for $label" ;;
     esac
   done
+  expected_layout="$(awk -F= '$1 == "layout" { count++; value=$2 } END { if (count == 1 && value ~ /^(empty|legacy|canonical)$/) print value; else exit 1 }' "$SNAPSHOT/layout")" || fail 'rollback layout classification is malformed'
+  actual_layout="$(snapshot_layout_from_entries)"
+  [[ "$expected_layout" == "$actual_layout" ]] || fail 'rollback layout classification does not match artifact states'
 }
 
 restore_file_entry() {
@@ -540,15 +623,15 @@ prepare_destination() {
   for path in "$LAUNCHER_PATH" "$CONTROL_PATH" "$HELPER_PATH" "$OBJECT_EXEC_PATH" "$MANIFEST_PATH" "$SUDOERS_PATH" "$OBJECT_SERVICE_PATH" "$OBJECT_TIMER_PATH" "$ROLLBACK_ROOT"; do
     assert_not_symlink_path "$(destination_path "$path")"
   done
-  mkdir -p -- "$DEST_ROOT"
+  mkdir -p -- "$DEST_ROOT" || fail 'unable to create destination root'
   mkdir -p -- \
     "$(destination_path "$RELEASE_DIR/lib")" \
     "$(destination_path "$OBJECT_EXEC_DIR")" \
     "$(destination_path /usr/local/sbin)" \
     "$(destination_path /etc/sudoers.d)" \
-    "$(destination_path /etc/systemd/system)"
-  chown "$EXPECTED_UID:$EXPECTED_GID" "$(destination_path "$RELEASE_DIR")" "$(destination_path "$RELEASE_DIR/lib")" "$(destination_path "$OBJECT_EXEC_DIR")"
-  chmod 755 "$(destination_path "$RELEASE_DIR")" "$(destination_path "$RELEASE_DIR/lib")" "$(destination_path "$OBJECT_EXEC_DIR")"
+    "$(destination_path /etc/systemd/system)" || fail 'unable to prepare destination directories'
+  chown "$EXPECTED_UID:$EXPECTED_GID" "$(destination_path "$RELEASE_DIR")" "$(destination_path "$RELEASE_DIR/lib")" "$(destination_path "$OBJECT_EXEC_DIR")" || fail 'unable to set destination directory ownership'
+  chmod 755 "$(destination_path "$RELEASE_DIR")" "$(destination_path "$RELEASE_DIR/lib")" "$(destination_path "$OBJECT_EXEC_DIR")" || fail 'unable to set destination directory modes'
 }
 
 systemd_reload_required() {
@@ -569,6 +652,8 @@ parse_args() {
       --dest-root) DEST_ROOT="${2:-}"; shift 2 ;;
       --tooling-source-sha) TOOLING_SOURCE_SHA="${2:-}"; shift 2 ;;
       --test-force-cross-device) TEST_FORCE_CROSS_DEVICE=true; shift ;;
+      --test-fail-after-prepare-destination) TEST_FAIL_AFTER_PREPARE_DESTINATION=true; shift ;;
+      --test-fail-during-stage-release) TEST_FAIL_DURING_STAGE_RELEASE=true; shift ;;
       --check) ACTION='check'; shift ;;
       --apply) ACTION='apply'; shift ;;
       --rollback) ROLLBACK_SNAPSHOT="${2:-}"; shift 2 ;;
@@ -591,15 +676,17 @@ parse_args() {
   if [[ -n "$ROLLBACK_SNAPSHOT" ]]; then
     [[ "$ACTION" == apply ]] || fail 'rollback requires --apply'
     [[ -z "$SOURCE_ROOT" && -z "$TOOLING_SOURCE_SHA" ]] || fail 'rollback does not accept source release arguments'
-    [[ "$TEST_FAIL_AFTER_PUBLISH" == false && "$TEST_FORCE_CROSS_DEVICE" == false ]] || fail 'test publication flags are not valid for rollback'
+    [[ "$TEST_FAIL_AFTER_PUBLISH" == false && "$TEST_FAIL_AFTER_PREPARE_DESTINATION" == false && "$TEST_FAIL_DURING_STAGE_RELEASE" == false && "$TEST_FORCE_CROSS_DEVICE" == false ]] || fail 'test publication flags are not valid for rollback'
   else
     [[ -n "$SOURCE_ROOT" && -n "$TOOLING_SOURCE_SHA" ]] || fail 'source root and tooling source SHA are required'
     [[ "$TOOLING_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'tooling source SHA must be exactly 40 lowercase hexadecimal characters'
     [[ "$TEST_FORCE_CROSS_DEVICE" == false || "$TEST_MODE" == local-unprivileged ]] || fail 'cross-device fixture is limited to isolated test mode'
+    [[ "$TEST_FAIL_AFTER_PREPARE_DESTINATION" == false && "$TEST_FAIL_DURING_STAGE_RELEASE" == false || "$TEST_MODE" == local-unprivileged ]] || fail 'failure fixtures are limited to isolated test mode'
   fi
 }
 
 main() {
+  local daemon_reload_required
   parse_args "$@"
   if [[ -n "$ROLLBACK_SNAPSHOT" ]]; then
     SNAPSHOT="$ROLLBACK_SNAPSHOT"
@@ -616,21 +703,26 @@ main() {
     return
   fi
   create_snapshot
+  TRANSACTION_ACTIVE=true
   if ! prepare_destination; then
-    restore_snapshot
     fail 'destination preparation failed; previous release restored'
   fi
-  stage_release
-  validate_existing_layout
+  [[ "$TEST_FAIL_AFTER_PREPARE_DESTINATION" == false ]] || fail 'injected destination preparation failure'
+  if ! stage_release; then
+    fail 'release staging failed; previous release restored'
+  fi
+  if ! validate_existing_layout; then
+    fail 'pre-publication validation failed; previous release restored'
+  fi
   if ! publish_stage; then
-    restore_snapshot
     fail 'publish failed; previous release restored'
   fi
   if ! validate_published_release; then
-    restore_snapshot
     fail 'post-publish validation failed; previous release restored'
   fi
-  printf 'INSTALL_STATUS=PASS\nROLLBACK_SNAPSHOT=%s\nDAEMON_RELOAD_REQUIRED=%s\n' "$SNAPSHOT" "$(systemd_reload_required)"
+  daemon_reload_required="$(systemd_reload_required)" || fail 'unable to determine whether a daemon reload is required'
+  printf 'INSTALL_STATUS=PASS\nROLLBACK_SNAPSHOT=%s\nDAEMON_RELOAD_REQUIRED=%s\n' "$SNAPSHOT" "$daemon_reload_required"
+  TRANSACTION_ACTIVE=false
 }
 
 main "$@"

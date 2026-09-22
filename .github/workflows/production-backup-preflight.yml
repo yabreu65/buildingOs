@@ -3,6 +3,10 @@ name: Production backup preflight
 on:
   workflow_dispatch:
     inputs:
+      tooling_source_sha:
+        description: SHA of the tooling release installed on production
+        required: true
+        type: string
       runtime_sha:
         description: Certified runtime SHA under preflight review
         required: true
@@ -22,7 +26,7 @@ jobs:
     timeout-minutes: 20
     environment: production
     env:
-      TOOLING_SOURCE_SHA: ${{ github.sha }}
+      TOOLING_SOURCE_SHA: ${{ inputs.tooling_source_sha }}
       EXPECTED_RUNTIME_SHA: ${{ inputs.runtime_sha }}
       SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
       SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
@@ -71,6 +75,7 @@ jobs:
             -o ServerAliveCountMax=6
             -p "$SSH_PORT"
           )
+          printf -v quoted_tooling '%q' "$TOOLING_SOURCE_SHA"
           printf -v quoted_runtime '%q' "$EXPECTED_RUNTIME_SHA"
           ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" \
-            "sudo -n /usr/local/sbin/buildingos-production-backup-preflight $quoted_runtime"
+            "sudo -n /usr/local/sbin/buildingos-production-backup-preflight $quoted_tooling $quoted_runtime"
