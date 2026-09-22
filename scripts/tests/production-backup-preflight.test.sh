@@ -12,6 +12,7 @@ readonly BIN_DIR="$TEST_ROOT/bin"
 readonly ENV_FILE="$TEST_ROOT/object-backup.env"
 readonly APP_DIR="$TEST_ROOT/app"
 readonly RCLONE_CONFIG_FILE="$TEST_ROOT/object-backup-rclone.conf"
+readonly GIT_LOG="$TEST_ROOT/git.log"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 PASS_COUNT=0
@@ -67,6 +68,7 @@ chmod +x "$BIN_DIR/stat"
 cat > "$BIN_DIR/git" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+printf '%s\n' "$*" >> "${MOCK_GIT_LOG:?}"
 case "$*" in
   *'rev-parse HEAD'*) printf '%s\n' "${MOCK_CHECKOUT_SHA:-2ac603be8018ffc3df67fb4e84149aea4f780cea}" ;;
   *'status --porcelain'*)
@@ -195,16 +197,16 @@ case "$property:$unit" in
     ;;
   User:pawtech-buildingos-object-backup.service|Group:pawtech-buildingos-object-backup.service) printf 'yoryi\n' ;;
   EnvironmentFiles:pawtech-buildingos-object-backup.service) printf '%s\n' "${PREFLIGHT_ENV_FILE:-/etc/buildingos/object-backup.env}" ;;
-  WorkingDirectory:pawtech-buildingos-object-backup.service) printf '%s\n' "${PREFLIGHT_APP_DIR:-/opt/pawtech/apps/buildingos/buildingos-app}" ;;
+  WorkingDirectory:pawtech-buildingos-object-backup.service) printf '%s\n' "${PREFLIGHT_OBJECT_WORKING_DIRECTORY:-/var/lib/buildingos-object-backup}" ;;
   Type:pawtech-postgres-backup.service|Type:pawtech-buildingos-object-backup.service) printf 'oneshot\n' ;;
   ExecStart:pawtech-postgres-backup.service) printf '%s\n' '{ path=/opt/pawtech/backups/scripts/backup-postgres.sh ; argv[]=/opt/pawtech/backups/scripts/backup-postgres.sh ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=0 ; status=0 }' ;;
   ExecStart:pawtech-buildingos-object-backup.service)
     case "${MOCK_OBJECT_EXECSTART_MODE:-NORMAL}" in
       WRONG) printf '%s\n' '{ path=/opt/wrong/backup.sh ; argv[]=/opt/wrong/backup.sh ; ignore_errors=no }' ;;
-      SECOND) printf '%s\n' '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh ; ignore_errors=no } { path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh ; ignore_errors=no }' ;;
-      IGNORE) printf '%s\n' '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh ; ignore_errors=yes }' ;;
-      MALFORMED) printf '%s\n' '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh' ;;
-      *) printf '%s\n' '{ path=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh ; argv[]=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-object-storage.sh ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=0 ; status=0 }' ;;
+      SECOND) printf '%s\n' '{ path=/usr/local/libexec/buildingos-backup/backup-object-storage.sh ; argv[]=/usr/local/libexec/buildingos-backup/backup-object-storage.sh ; ignore_errors=no } { path=/usr/local/libexec/buildingos-backup/backup-object-storage.sh ; argv[]=/usr/local/libexec/buildingos-backup/backup-object-storage.sh ; ignore_errors=no }' ;;
+      IGNORE) printf '%s\n' '{ path=/usr/local/libexec/buildingos-backup/backup-object-storage.sh ; argv[]=/usr/local/libexec/buildingos-backup/backup-object-storage.sh ; ignore_errors=yes }' ;;
+      MALFORMED) printf '%s\n' '{ path=/usr/local/libexec/buildingos-backup/backup-object-storage.sh ; argv[]=/usr/local/libexec/buildingos-backup/backup-object-storage.sh' ;;
+      *) printf '%s\n' '{ path=/usr/local/libexec/buildingos-backup/backup-object-storage.sh ; argv[]=/usr/local/libexec/buildingos-backup/backup-object-storage.sh ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=0 ; status=0 }' ;;
     esac
     ;;
   TimeoutStartUSec:pawtech-buildingos-object-backup.service)
@@ -238,9 +240,9 @@ printf '[prod]\ntype = s3\n' > "$RCLONE_CONFIG_FILE"
 chmod 0600 "$RCLONE_CONFIG_FILE"
 
 run_preflight() {
-  local candidate="${1-2ac603be8018ffc3df67fb4e84149aea4f780cea}"
+  local runtime_sha="${1-2ac603be8018ffc3df67fb4e84149aea4f780cea}"
   set +e
-  RUN_OUTPUT="$(PATH="$BIN_DIR" BUILDINGOS_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY PREFLIGHT_APP_DIR="$APP_DIR" PREFLIGHT_ENV_FILE="$ENV_FILE" PREFLIGHT_RCLONE_CONFIG_FILE="$RCLONE_CONFIG_FILE" /bin/bash "$PREFLIGHT" 2>&1 "$candidate")"
+  RUN_OUTPUT="$(PATH="$BIN_DIR" MOCK_GIT_LOG="$GIT_LOG" BUILDINGOS_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY PREFLIGHT_APP_DIR="$APP_DIR" PREFLIGHT_ENV_FILE="$ENV_FILE" PREFLIGHT_RCLONE_CONFIG_FILE="$RCLONE_CONFIG_FILE" /bin/bash "$PREFLIGHT" 2>&1 "$runtime_sha")"
   RUN_RC=$?
   set -e
 }
@@ -254,6 +256,9 @@ assert_contains 'PostgreSQL timer future trigger is accepted' 'POSTGRES_BACKUP_T
 assert_contains 'PostgreSQL service inactive is accepted' 'POSTGRES_BACKUP_SERVICE_STATE=inactive' "$RUN_OUTPUT"
 assert_contains 'runtime checkout is clean' 'PRODUCTION_CHECKOUT_STATUS=CLEAN' "$RUN_OUTPUT"
 assert_contains 'runtime identity is consistent' 'RUNTIME_IDENTITY=CONSISTENT' "$RUN_OUTPUT"
+assert_contains 'every Git command pins the exact checkout safe.directory' "-c safe.directory=$APP_DIR" "$(< "$GIT_LOG")"
+assert_absent 'Git commands never trust wildcard safe.directory' 'safe.directory=*' "$(< "$GIT_LOG")"
+assert_absent 'Git commands never mutate global configuration' 'config --global' "$(< "$GIT_LOG")"
 assert_contains 'PostgreSQL service type is validated' 'POSTGRES_BACKUP_SERVICE_TYPE=oneshot' "$RUN_OUTPUT"
 assert_contains 'PostgreSQL ExecStart is validated' 'POSTGRES_BACKUP_SERVICE_EXECSTART_MATCH=YES' "$RUN_OUTPUT"
 assert_contains 'PostgreSQL ExecCondition is empty' 'POSTGRES_BACKUP_SERVICE_EXEC_CONDITION_EMPTY=YES' "$RUN_OUTPUT"
@@ -314,8 +319,8 @@ assert_failure 'absurd future Object Storage trigger fails closed'
 unset MOCK_NEXT_TRIGGER
 
 run_preflight deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
-assert_failure 'candidate SHA mismatch fails runtime identity gate'
-assert_contains 'candidate mismatch reports inconsistent runtime' 'RUNTIME_IDENTITY=INCONSISTENT' "$RUN_OUTPUT"
+assert_failure 'runtime SHA mismatch fails runtime identity gate'
+assert_contains 'runtime mismatch reports inconsistent runtime' 'RUNTIME_IDENTITY=INCONSISTENT' "$RUN_OUTPUT"
 MOCK_API_REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa run_preflight
 assert_failure 'API revision mismatch fails runtime identity gate'
 unset MOCK_API_REVISION
@@ -500,7 +505,13 @@ preflight_text="$(< "$PREFLIGHT")"
 
 launcher_text="$(< "$PRIVILEGED_LAUNCHER")"
 assert_contains 'launcher closes caller stdin' '</dev/null' "$launcher_text"
-assert_contains 'launcher pins installed control directory' "readonly CONTROL_DIR='/usr/local/libexec/buildingos-backup-preflight'" "$launcher_text"
+assert_contains 'launcher pins installed control directory' "CONTROL_DIR='/usr/local/libexec/buildingos-backup-preflight'" "$launcher_text"
+assert_contains 'launcher requires the generated manifest' "MANIFEST='/usr/local/libexec/buildingos-backup-preflight/manifest'" "$launcher_text"
+assert_contains 'launcher verifies installed release hashes through the manifest' 'assert_manifest_matches' "$launcher_text"
+assert_contains 'launcher requires external tooling source SHA' 'EXPECTED_TOOLING_SOURCE_SHA="$1"' "$launcher_text"
+assert_contains 'launcher passes only runtime SHA to the protected control' '"$PREFLIGHT_SCRIPT" "$EXPECTED_RUNTIME_SHA"' "$launcher_text"
+assert_absent 'launcher does not create a temporary manifest during validation' 'mktemp' "$launcher_text"
+assert_absent 'launcher does not remove protected manifest validation files' 'rm -f' "$launcher_text"
 assert_contains 'launcher clears BASH_ENV' 'unset BASH_ENV ENV' "$launcher_text"
 assert_contains 'launcher uses fixed PATH' 'PATH="$SAFE_PATH"' "$launcher_text"
 assert_absent 'launcher does not execute mutable checkout scripts' '/opt/pawtech/apps/buildingos/buildingos-app' "$launcher_text"
@@ -508,6 +519,11 @@ assert_absent 'launcher does not evaluate caller input' 'eval ' "$launcher_text"
 
 workflow_text="$(< "$WORKFLOW")"
 assert_contains 'workflow is manually dispatched' 'workflow_dispatch:' "$workflow_text"
+assert_contains 'workflow names the tooling source input separately' 'tooling_source_sha:' "$workflow_text"
+assert_contains 'workflow names the runtime input separately' 'runtime_sha:' "$workflow_text"
+assert_contains 'workflow forwards the expected tooling source SHA' 'quoted_tooling' "$workflow_text"
+assert_contains 'workflow forwards the expected runtime SHA' 'quoted_runtime' "$workflow_text"
+assert_absent 'workflow does not use the retired candidate variable' 'CANDIDATE_SHA' "$workflow_text"
 assert_absent 'workflow has no push trigger' 'push:' "$workflow_text"
 assert_absent 'workflow has no scheduled trigger' 'schedule:' "$workflow_text"
 assert_contains 'workflow uses read-only production environment' 'environment: production' "$workflow_text"
