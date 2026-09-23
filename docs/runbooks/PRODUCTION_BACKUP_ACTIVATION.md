@@ -389,6 +389,24 @@ last, only after all validation and active-checkout revalidation pass. Each
 root-owned staged file is SHA-256 checked against the exact
 `CONTROL_SOURCE_SHA` Git object before publication.
 
+### Directory policy for the replacement installer
+
+Existing trusted parent directories are validated without modification. They
+must be regular, non-symlink directories owned by `root:root` with mode either
+`0750` or `0755`; this includes `/etc/sudoers.d`. In particular, an existing
+`/etc/sudoers.d` at `0750` is valid and must not be chmodded or chowned merely
+for this installation. Group- or world-writable parents, other modes, and any
+owner/group mismatch are rejected so an untrusted principal cannot replace a
+staged or published privileged artifact.
+
+The release-created payload directories are a separate contract:
+`/usr/local/libexec/buildingos-backup-preflight`, its `lib` directory, and
+`/usr/local/libexec/buildingos-backup` remain exactly `root:root 0755`. They
+contain the installed root-executed payload and are intentionally not broadened
+to the trusted-parent `0750` allowance. This preserves a stable, auditable
+payload layout while allowing administrators to retain a stricter `0750` mode
+for pre-existing trusted parents.
+
 Rollback under the same approved change window removes the authorization
 first, validates sudoers, and then removes only these newly installed paths:
 
