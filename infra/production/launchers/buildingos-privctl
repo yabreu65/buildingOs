@@ -265,7 +265,7 @@ validate_receipt() {
     *) fail ;;
   esac
   case "$receipt_line" in
-    *'"destination":"backup-remote:buildingos-production-backup"'* ) ;;
+    *'"destination":"backup:buildingos-production-backup"'* ) ;;
     *) fail ;;
   esac
   case "$receipt_line" in

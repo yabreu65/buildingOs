@@ -157,7 +157,7 @@ make_fixture() {
   printf 'protected\n' > "$FAKE_ROOT/etc/sudoers.d/buildingos-privctl"
   printf 'protected\n' > "$OBJECT_SERVICE_UNIT"
   printf 'protected\n' > "$OBJECT_TIMER_UNIT"
-  printf 'OBJECT_BACKUP_SOURCE=prod:buildingos-production\nOBJECT_BACKUP_DESTINATION=backup-remote:buildingos-production-backup\n' > "$FAKE_ROOT/etc/buildingos/object-backup.env"
+  printf 'OBJECT_BACKUP_SOURCE=prod:buildingos-production\nOBJECT_BACKUP_DESTINATION=backup:buildingos-production-backup\n' > "$FAKE_ROOT/etc/buildingos/object-backup.env"
   chmod 0755 "$FAKE_ROOT/usr/local/sbin/buildingos-production-backup-preflight" "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh" "$FAKE_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh"
   chmod 0644 "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh" "$OBJECT_SERVICE_UNIT" "$OBJECT_TIMER_UNIT" "$FAKE_ROOT/etc/buildingos/object-backup.env"
   chmod 0440 "$FAKE_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" "$FAKE_ROOT/etc/sudoers.d/buildingos-privctl"
@@ -199,12 +199,12 @@ write_receipt() {
 }
 
 make_fixture
-write_receipt 'prod:buildingos-production' 'backup-remote:buildingos-production-backup'
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
 assert_success 'production receipt remotes are accepted for timer start' "$FAKE_LAUNCHER" object-backup-timer-start
 assert_contains 'accepted receipt starts only the fixed object timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
 
 : > "$SYSTEMCTL_LOG"
-write_receipt 'unexpected:buildingos-production' 'backup-remote:buildingos-production-backup'
+write_receipt 'unexpected:buildingos-production' 'backup:buildingos-production-backup'
 assert_failure 'unexpected source remote is rejected' "$FAKE_LAUNCHER" object-backup-timer-start
 assert_empty 'rejected source receipt does not start the timer' "$SYSTEMCTL_LOG"
 
