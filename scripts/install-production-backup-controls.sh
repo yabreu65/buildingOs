@@ -206,7 +206,14 @@ assert_file_policy() {
   [[ "$(file_metadata "$path")" == "$EXPECTED_UID:$EXPECTED_GID:$mode" ]] || fail "unsafe $label owner or mode"
 }
 
-assert_dir_policy() {
+assert_trusted_parent_dir_policy() {
+  local path="$1" label="$2" metadata
+  [[ -d "$path" && ! -L "$path" ]] || fail "$label must be a directory, not a symlink"
+  metadata="$(file_metadata "$path")"
+  [[ "$metadata" =~ ^$EXPECTED_UID:$EXPECTED_GID:(750|755)$ ]] || fail "unsafe $label owner or mode"
+}
+
+assert_release_payload_dir_policy() {
   local path="$1" label="$2"
   [[ -d "$path" && ! -L "$path" ]] || fail "$label must be a directory, not a symlink"
   [[ "$(file_metadata "$path")" == "$EXPECTED_UID:$EXPECTED_GID:755" ]] || fail "unsafe $label owner or mode"
@@ -358,8 +365,8 @@ validate_existing_layout() {
     assert_sha256 "$control" "$LEGACY_CONTROL_SHA256" 'legacy control'
     assert_sha256 "$helper" "$LEGACY_HELPER_SHA256" 'legacy helper'
     assert_sha256 "$sudoers" "$LEGACY_SUDOERS_SHA256" 'legacy sudoers policy'
-    assert_dir_policy "$(destination_path "$RELEASE_DIR")" 'legacy control directory'
-    assert_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'legacy control library directory'
+    assert_release_payload_dir_policy "$(destination_path "$RELEASE_DIR")" 'legacy control directory'
+    assert_release_payload_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'legacy control library directory'
     if command -v visudo >/dev/null 2>&1; then
       visudo -cf "$sudoers" >/dev/null || fail 'legacy sudoers policy fails visudo validation'
     fi
@@ -377,8 +384,8 @@ validate_existing_layout() {
     assert_sha256 "$launcher" "$LEGACY_LAUNCHER_SHA256" 'legacy launcher'
     assert_sha256 "$control" "$LEGACY_CONTROL_SHA256" 'legacy control'
     assert_sha256 "$helper" "$LEGACY_HELPER_SHA256" 'legacy helper'
-    assert_dir_policy "$(destination_path "$RELEASE_DIR")" 'legacy control directory'
-    assert_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'legacy control library directory'
+    assert_release_payload_dir_policy "$(destination_path "$RELEASE_DIR")" 'legacy control directory'
+    assert_release_payload_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'legacy control library directory'
     EXISTING_LAYOUT='legacy'
     return 0
   fi
@@ -395,9 +402,9 @@ validate_existing_layout() {
     assert_file_policy "$sudoers" 440 'installed sudoers policy'
     assert_file_policy "$service" 644 'installed Object Storage service'
     assert_file_policy "$timer" 644 'installed Object Storage timer'
-    assert_dir_policy "$(destination_path "$RELEASE_DIR")" 'installed control directory'
-    assert_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'installed control library directory'
-    assert_dir_policy "$(destination_path "$OBJECT_EXEC_DIR")" 'installed Object Storage executable directory'
+    assert_release_payload_dir_policy "$(destination_path "$RELEASE_DIR")" 'installed control directory'
+    assert_release_payload_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'installed control library directory'
+    assert_release_payload_dir_policy "$(destination_path "$OBJECT_EXEC_DIR")" 'installed Object Storage executable directory'
     EXISTING_LAYOUT='canonical'
     return 0
   fi
@@ -416,9 +423,9 @@ validate_existing_layout() {
     assert_file_policy "$timer" 644 'installed Object Storage timer'
     assert_file_policy "$privctl_launcher" 755 'installed privctl launcher'
     assert_file_policy "$privctl_sudoers" 440 'installed privctl sudoers policy'
-    assert_dir_policy "$(destination_path "$RELEASE_DIR")" 'installed control directory'
-    assert_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'installed control library directory'
-    assert_dir_policy "$(destination_path "$OBJECT_EXEC_DIR")" 'installed Object Storage executable directory'
+    assert_release_payload_dir_policy "$(destination_path "$RELEASE_DIR")" 'installed control directory'
+    assert_release_payload_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'installed control library directory'
+    assert_release_payload_dir_policy "$(destination_path "$OBJECT_EXEC_DIR")" 'installed Object Storage executable directory'
     EXISTING_LAYOUT='canonical_with_privctl'
     return 0
   fi
@@ -431,6 +438,7 @@ validate_destination_readonly() {
   for path in "$LAUNCHER_PATH" "$CONTROL_PATH" "$HELPER_PATH" "$OBJECT_EXEC_PATH" "$MANIFEST_PATH" "$SUDOERS_PATH" "$PRIVCTL_LAUNCHER_PATH" "$PRIVCTL_SUDOERS_PATH" "$OBJECT_SERVICE_PATH" "$OBJECT_TIMER_PATH"; do
     assert_not_symlink_path "$(destination_path "$path")"
   done
+  validate_existing_trusted_parent_dirs
   validate_existing_layout
 }
 
@@ -733,11 +741,33 @@ publish_stage() {
   clear_staged_path manifest
 }
 
+validate_existing_trusted_parent_dirs() {
+  local path destination
+  for path in /usr /usr/local /usr/local/sbin /usr/local/libexec /etc /etc/sudoers.d /etc/systemd /etc/systemd/system; do
+    destination="$(destination_path "$path")"
+    if path_is_present "$destination"; then
+      assert_trusted_parent_dir_policy "$destination" "trusted destination directory $path"
+    fi
+  done
+}
+
 validate_destination_parent_dirs() {
   local path
-  for path in /usr /usr/local /usr/local/sbin /usr/local/libexec /usr/local/libexec/buildingos-backup /usr/local/libexec/buildingos-backup-preflight /etc /etc/sudoers.d /etc/systemd /etc/systemd/system; do
-    assert_dir_policy "$(destination_path "$path")" "trusted destination directory $path"
+  for path in /usr /usr/local /usr/local/sbin /usr/local/libexec /etc /etc/sudoers.d /etc/systemd /etc/systemd/system; do
+    assert_trusted_parent_dir_policy "$(destination_path "$path")" "trusted destination directory $path"
   done
+}
+
+prepare_release_payload_dir() {
+  local path="$1" label="$2"
+  if path_is_present "$path"; then
+    assert_release_payload_dir_policy "$path" "$label"
+    return
+  fi
+  mkdir -- "$path" || fail "unable to create $label"
+  chown "$EXPECTED_UID:$EXPECTED_GID" "$path" || fail "unable to set $label ownership"
+  chmod 755 "$path" || fail "unable to set $label mode"
+  assert_release_payload_dir_policy "$path" "$label"
 }
 
 prepare_destination() {
@@ -745,16 +775,17 @@ prepare_destination() {
   for path in "$LAUNCHER_PATH" "$CONTROL_PATH" "$HELPER_PATH" "$OBJECT_EXEC_PATH" "$MANIFEST_PATH" "$SUDOERS_PATH" "$PRIVCTL_LAUNCHER_PATH" "$PRIVCTL_SUDOERS_PATH" "$OBJECT_SERVICE_PATH" "$OBJECT_TIMER_PATH" "$ROLLBACK_ROOT"; do
     assert_not_symlink_path "$(destination_path "$path")"
   done
+  validate_existing_trusted_parent_dirs
   mkdir -p -- "$DEST_ROOT" || fail 'unable to create destination root'
   mkdir -p -- \
-    "$(destination_path "$RELEASE_DIR/lib")" \
-    "$(destination_path "$OBJECT_EXEC_DIR")" \
     "$(destination_path /usr/local/sbin)" \
+    "$(destination_path /usr/local/libexec)" \
     "$(destination_path /etc/sudoers.d)" \
     "$(destination_path /etc/systemd/system)" || fail 'unable to prepare destination directories'
   validate_destination_parent_dirs
-  chown "$EXPECTED_UID:$EXPECTED_GID" "$(destination_path "$RELEASE_DIR")" "$(destination_path "$RELEASE_DIR/lib")" "$(destination_path "$OBJECT_EXEC_DIR")" || fail 'unable to set destination directory ownership'
-  chmod 755 "$(destination_path "$RELEASE_DIR")" "$(destination_path "$RELEASE_DIR/lib")" "$(destination_path "$OBJECT_EXEC_DIR")" || fail 'unable to set destination directory modes'
+  prepare_release_payload_dir "$(destination_path "$RELEASE_DIR")" 'release control directory'
+  prepare_release_payload_dir "$(destination_path "$RELEASE_DIR/lib")" 'release control library directory'
+  prepare_release_payload_dir "$(destination_path "$OBJECT_EXEC_DIR")" 'release Object Storage executable directory'
 }
 
 systemd_reload_required() {

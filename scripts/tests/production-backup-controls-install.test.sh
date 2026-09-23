@@ -20,6 +20,7 @@ assert_success() { local name="$1"; shift; if "$@" >"$TEST_ROOT/output" 2>&1; th
 assert_failure() { local name="$1"; shift; if "$@" >"$TEST_ROOT/output" 2>&1; then fail_test "$name (unexpected success)"; else pass "$name"; fi; }
 assert_equal() { local name="$1" actual="$2" expected="$3"; [[ "$actual" == "$expected" ]] && pass "$name" || fail_test "$name"; }
 assert_contains() { local name="$1" value="$2" file="$3"; grep -Fq -- "$value" "$file" && pass "$name" || fail_test "$name"; }
+metadata_for() { stat -c '%u:%g:%a' -- "$1" 2>/dev/null || stat -f '%u:%g:%Lp' -- "$1"; }
 
 make_source() {
   mkdir -p "$SOURCE_ROOT/infra/production/launchers" "$SOURCE_ROOT/infra/production/sudoers" "$SOURCE_ROOT/infra/production/systemd" "$SOURCE_ROOT/scripts/lib"
@@ -210,6 +211,50 @@ assert_contains 'installed manifest records privctl launcher identity' 'privctl_
 assert_contains 'installed manifest records privctl sudoers identity' 'privctl_sudoers_path=/etc/sudoers.d/buildingos-privctl' "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
 assert_equal 'installed privctl launcher has mode 0755' "$(stat -c '%a' "$DEST_ROOT/usr/local/sbin/buildingos-privctl" 2>/dev/null || stat -f '%Lp' "$DEST_ROOT/usr/local/sbin/buildingos-privctl")" '755'
 assert_equal 'installed privctl sudoers has mode 0440' "$(stat -c '%a' "$DEST_ROOT/etc/sudoers.d/buildingos-privctl" 2>/dev/null || stat -f '%Lp' "$DEST_ROOT/etc/sudoers.d/buildingos-privctl")" '440'
+assert_equal 'release control directory remains root-owned mode 0755' "$(metadata_for "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight")" "$(id -u):$(id -g):755"
+assert_equal 'release control library directory remains root-owned mode 0755' "$(metadata_for "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/lib")" "$(id -u):$(id -g):755"
+assert_equal 'release Object Storage directory remains root-owned mode 0755' "$(metadata_for "$DEST_ROOT/usr/local/libexec/buildingos-backup")" "$(id -u):$(id -g):755"
+
+SUDOERS_PARENT="$DEST_ROOT/etc/sudoers.d"
+chmod 0750 "$SUDOERS_PARENT"
+SUDOERS_PARENT_0750_METADATA="$(metadata_for "$SUDOERS_PARENT")"
+assert_success 'existing trusted sudoers parent mode 0750 permits apply' run_install "$CANDIDATE_ONE"
+assert_equal 'apply preserves existing trusted sudoers parent mode 0750' "$(metadata_for "$SUDOERS_PARENT")" "$SUDOERS_PARENT_0750_METADATA"
+chmod 0755 "$SUDOERS_PARENT"
+assert_success 'existing trusted sudoers parent mode 0755 passes validation' run_check "$CANDIDATE_ONE"
+chmod 0750 "$SUDOERS_PARENT"
+
+UNSAFE_PARENT_TREE="$(protected_tree_state)"
+chmod 0775 "$SUDOERS_PARENT"
+UNSAFE_PARENT_METADATA="$(metadata_for "$SUDOERS_PARENT")"
+assert_failure 'unsafe group-writable trusted parent rejects apply without changing the release' run_install "$CANDIDATE_ONE"
+assert_equal 'unsafe-parent apply failure preserves protected release state' "$(protected_tree_state)" "$UNSAFE_PARENT_TREE"
+assert_equal 'unsafe-parent apply failure does not repair the parent' "$(metadata_for "$SUDOERS_PARENT")" "$UNSAFE_PARENT_METADATA"
+chmod 0777 "$SUDOERS_PARENT"
+assert_failure 'unsafe 0777 trusted parent is rejected' run_check "$CANDIDATE_ONE"
+chmod 0757 "$SUDOERS_PARENT"
+assert_failure 'unsafe world-writable trusted parent is rejected' run_check "$CANDIDATE_ONE"
+chmod 0750 "$SUDOERS_PARENT"
+
+mv "$SUDOERS_PARENT" "$SUDOERS_PARENT.real"
+ln -s "$(basename "$SUDOERS_PARENT.real")" "$SUDOERS_PARENT"
+assert_failure 'symlinked trusted sudoers parent is rejected' run_check "$CANDIDATE_ONE"
+rm "$SUDOERS_PARENT"
+mv "$SUDOERS_PARENT.real" "$SUDOERS_PARENT"
+
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown 1:0 "$SUDOERS_PARENT"
+  assert_failure 'trusted parent with wrong owner is rejected when ownership can be changed' run_check "$CANDIDATE_ONE"
+  chown 0:0 "$SUDOERS_PARENT"
+  chown 0:1 "$SUDOERS_PARENT"
+  assert_failure 'trusted parent with wrong group is rejected when ownership can be changed' run_check "$CANDIDATE_ONE"
+  chown 0:0 "$SUDOERS_PARENT"
+else
+  pass 'wrong trusted parent owner test skipped without chown capability'
+  pass 'wrong trusted parent group test skipped without chown capability'
+fi
+assert_equal 'trusted sudoers parent remains mode 0750 after rejection tests' "$(metadata_for "$SUDOERS_PARENT")" "$(id -u):$(id -g):750"
+
 chmod 0775 "$DEST_ROOT/usr/local/sbin"
 assert_failure 'writable privileged launcher parent is rejected' run_install "$CANDIDATE_ONE"
 chmod 0755 "$DEST_ROOT/usr/local/sbin"
