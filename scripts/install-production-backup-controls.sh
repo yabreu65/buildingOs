@@ -15,6 +15,8 @@ readonly HELPER_PATH="$RELEASE_DIR/lib/endpoint-identity.sh"
 readonly OBJECT_EXEC_PATH="$OBJECT_EXEC_DIR/backup-object-storage.sh"
 readonly MANIFEST_PATH="$RELEASE_DIR/manifest"
 readonly SUDOERS_PATH='/etc/sudoers.d/buildingos-production-backup-preflight'
+readonly PRIVCTL_LAUNCHER_PATH='/usr/local/sbin/buildingos-privctl'
+readonly PRIVCTL_SUDOERS_PATH='/etc/sudoers.d/buildingos-privctl'
 readonly OBJECT_SERVICE_PATH='/etc/systemd/system/pawtech-buildingos-object-backup.service'
 readonly OBJECT_TIMER_PATH='/etc/systemd/system/pawtech-buildingos-object-backup.timer'
 readonly ROLLBACK_ROOT='/var/lib/buildingos-backup-preflight/rollback'
@@ -43,6 +45,8 @@ STAGED_HELPER=''
 STAGED_OBJECT_EXEC=''
 STAGED_MANIFEST=''
 STAGED_SUDOERS=''
+STAGED_PRIVCTL_LAUNCHER=''
+STAGED_PRIVCTL_SUDOERS=''
 STAGED_OBJECT_SERVICE=''
 STAGED_OBJECT_TIMER=''
 STAGED_ROLLBACK=''
@@ -62,6 +66,8 @@ staged_path() {
     object_exec) printf '%s\n' "$STAGED_OBJECT_EXEC" ;;
     manifest) printf '%s\n' "$STAGED_MANIFEST" ;;
     sudoers) printf '%s\n' "$STAGED_SUDOERS" ;;
+    privctl_launcher) printf '%s\n' "$STAGED_PRIVCTL_LAUNCHER" ;;
+    privctl_sudoers) printf '%s\n' "$STAGED_PRIVCTL_SUDOERS" ;;
     object_service) printf '%s\n' "$STAGED_OBJECT_SERVICE" ;;
     object_timer) printf '%s\n' "$STAGED_OBJECT_TIMER" ;;
     rollback) printf '%s\n' "$STAGED_ROLLBACK" ;;
@@ -77,6 +83,8 @@ set_staged_path() {
     object_exec) STAGED_OBJECT_EXEC="$2" ;;
     manifest) STAGED_MANIFEST="$2" ;;
     sudoers) STAGED_SUDOERS="$2" ;;
+    privctl_launcher) STAGED_PRIVCTL_LAUNCHER="$2" ;;
+    privctl_sudoers) STAGED_PRIVCTL_SUDOERS="$2" ;;
     object_service) STAGED_OBJECT_SERVICE="$2" ;;
     object_timer) STAGED_OBJECT_TIMER="$2" ;;
     rollback) STAGED_ROLLBACK="$2" ;;
@@ -95,7 +103,7 @@ usage() {
 
 cleanup() {
   local status=$? staged
-  for staged in "$STAGED_LAUNCHER" "$STAGED_CONTROL" "$STAGED_HELPER" "$STAGED_OBJECT_EXEC" "$STAGED_MANIFEST" "$STAGED_SUDOERS" "$STAGED_OBJECT_SERVICE" "$STAGED_OBJECT_TIMER" "$STAGED_ROLLBACK"; do
+  for staged in "$STAGED_LAUNCHER" "$STAGED_CONTROL" "$STAGED_HELPER" "$STAGED_OBJECT_EXEC" "$STAGED_MANIFEST" "$STAGED_SUDOERS" "$STAGED_PRIVCTL_LAUNCHER" "$STAGED_PRIVCTL_SUDOERS" "$STAGED_OBJECT_SERVICE" "$STAGED_OBJECT_TIMER" "$STAGED_ROLLBACK"; do
     [[ -z "$staged" || (! -e "$staged" && ! -L "$staged") ]] || rm -f -- "$staged"
   done
   if [[ "$status" -ne 0 && "$TRANSACTION_ACTIVE" == true && "$ROLLBACK_IN_PROGRESS" == false ]]; then
@@ -218,7 +226,7 @@ destination_path() {
 }
 
 release_payload() {
-  local tooling_source_sha="$1" launcher_hash="$2" control_hash="$3" helper_hash="$4" object_exec_hash="$5" sudoers_hash="$6" service_hash="$7" timer_hash="$8"
+  local tooling_source_sha="$1" launcher_hash="$2" control_hash="$3" helper_hash="$4" object_exec_hash="$5" sudoers_hash="$6" service_hash="$7" timer_hash="$8" privctl_launcher_hash="$9" privctl_sudoers_hash="${10}"
   printf 'manifest_version=%s\n' "$MANIFEST_VERSION"
   printf 'tooling_source_sha=%s\n' "$tooling_source_sha"
   printf 'launcher_path=%s\n' "$LAUNCHER_PATH"
@@ -235,11 +243,15 @@ release_payload() {
   printf 'object_service_sha256=%s\n' "$service_hash"
   printf 'object_timer_path=%s\n' "$OBJECT_TIMER_PATH"
   printf 'object_timer_sha256=%s\n' "$timer_hash"
+  printf 'privctl_launcher_path=%s\n' "$PRIVCTL_LAUNCHER_PATH"
+  printf 'privctl_launcher_sha256=%s\n' "$privctl_launcher_hash"
+  printf 'privctl_sudoers_path=%s\n' "$PRIVCTL_SUDOERS_PATH"
+  printf 'privctl_sudoers_sha256=%s\n' "$privctl_sudoers_hash"
 }
 
 write_manifest() {
-  local manifest="$1" tooling_source_sha="$2" launcher="$3" control="$4" helper="$5" object_exec="$6" sudoers="$7" service="$8" timer="$9"
-  local launcher_hash control_hash helper_hash object_exec_hash sudoers_hash service_hash timer_hash release_hash
+  local manifest="$1" tooling_source_sha="$2" launcher="$3" control="$4" helper="$5" object_exec="$6" sudoers="$7" service="$8" timer="$9" privctl_launcher="${10}" privctl_sudoers="${11}"
+  local launcher_hash control_hash helper_hash object_exec_hash sudoers_hash service_hash timer_hash privctl_launcher_hash privctl_sudoers_hash release_hash
   launcher_hash="$(sha256_file "$launcher")"
   control_hash="$(sha256_file "$control")"
   helper_hash="$(sha256_file "$helper")"
@@ -247,16 +259,18 @@ write_manifest() {
   sudoers_hash="$(sha256_file "$sudoers")"
   service_hash="$(sha256_file "$service")"
   timer_hash="$(sha256_file "$timer")"
-  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" | sha256_text)"
+  privctl_launcher_hash="$(sha256_file "$privctl_launcher")"
+  privctl_sudoers_hash="$(sha256_file "$privctl_sudoers")"
+  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash" | sha256_text)"
   {
-    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash"
+    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash"
     printf 'release_sha256=%s\n' "$release_hash"
   } > "$manifest"
 }
 
 validate_manifest() {
-  local manifest="$1" tooling_source_sha="$2" launcher="$3" control="$4" helper="$5" object_exec="$6" sudoers="$7" service="$8" timer="$9"
-  local launcher_hash control_hash helper_hash object_exec_hash sudoers_hash service_hash timer_hash release_hash
+  local manifest="$1" tooling_source_sha="$2" launcher="$3" control="$4" helper="$5" object_exec="$6" sudoers="$7" service="$8" timer="$9" privctl_launcher="${10}" privctl_sudoers="${11}"
+  local launcher_hash control_hash helper_hash object_exec_hash sudoers_hash service_hash timer_hash privctl_launcher_hash privctl_sudoers_hash release_hash
   assert_regular_file "$manifest" 'manifest'
   launcher_hash="$(sha256_file "$launcher")"
   control_hash="$(sha256_file "$control")"
@@ -265,9 +279,11 @@ validate_manifest() {
   sudoers_hash="$(sha256_file "$sudoers")"
   service_hash="$(sha256_file "$service")"
   timer_hash="$(sha256_file "$timer")"
-  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" | sha256_text)"
+  privctl_launcher_hash="$(sha256_file "$privctl_launcher")"
+  privctl_sudoers_hash="$(sha256_file "$privctl_sudoers")"
+  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash" | sha256_text)"
   if ! {
-    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash"
+    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash"
     printf 'release_sha256=%s\n' "$release_hash"
   } | cmp -s - "$manifest"; then
     fail 'manifest is missing, stale, malformed, or does not match installed artifacts'
@@ -275,7 +291,7 @@ validate_manifest() {
 }
 
 validate_source() {
-  local source_launcher source_control source_helper source_object_exec source_sudoers source_service source_timer source_head
+  local source_launcher source_control source_helper source_object_exec source_sudoers source_service source_timer source_privctl_launcher source_privctl_sudoers source_head
   [[ -d "$SOURCE_ROOT" && ! -L "$SOURCE_ROOT" ]] || fail 'source root must be a directory, not a symlink'
   source_launcher="$(source_path infra/production/launchers/buildingos-production-backup-preflight)"
   source_control="$(source_path scripts/production-backup-preflight.sh)"
@@ -284,7 +300,9 @@ validate_source() {
   source_sudoers="$(source_path infra/production/sudoers/buildingos-production-backup-preflight)"
   source_service="$(source_path infra/production/systemd/pawtech-buildingos-object-backup.service)"
   source_timer="$(source_path infra/production/systemd/pawtech-buildingos-object-backup.timer)"
-  for source in "$source_launcher" "$source_control" "$source_helper" "$source_object_exec" "$source_sudoers" "$source_service" "$source_timer"; do
+  source_privctl_launcher="$(source_path infra/production/launchers/buildingos-privctl)"
+  source_privctl_sudoers="$(source_path infra/production/sudoers/buildingos-privctl)"
+  for source in "$source_launcher" "$source_control" "$source_helper" "$source_object_exec" "$source_sudoers" "$source_service" "$source_timer" "$source_privctl_launcher" "$source_privctl_sudoers"; do
     assert_source_path_has_no_symlinks "$source"
     assert_safe_source_file "$source" "source artifact $source"
   done
@@ -292,12 +310,14 @@ validate_source() {
   bash -n "$source_control" || fail 'source control has invalid bash syntax'
   bash -n "$source_helper" || fail 'source helper has invalid bash syntax'
   bash -n "$source_object_exec" || fail 'source Object Storage executable has invalid bash syntax'
+  sh -n "$source_privctl_launcher" || fail 'source privctl launcher has invalid sh syntax'
   command -v git >/dev/null 2>&1 || fail 'git is required to validate tooling source SHA'
   source_head="$(git -c safe.directory="$SOURCE_ROOT" --no-optional-locks -C "$SOURCE_ROOT" rev-parse HEAD 2>/dev/null)" || fail 'source root does not resolve a Git HEAD with its exact safe.directory'
   [[ "$source_head" == "$TOOLING_SOURCE_SHA" ]] || fail 'tooling source SHA does not match source Git HEAD'
   [[ -z "$(git -c safe.directory="$SOURCE_ROOT" --no-optional-locks -C "$SOURCE_ROOT" status --porcelain --untracked-files=all 2>/dev/null)" ]] || fail 'source checkout must be clean with no tracked or untracked files'
   if command -v visudo >/dev/null 2>&1; then
     visudo -cf "$source_sudoers" >/dev/null || fail 'source sudoers policy fails visudo validation'
+    visudo -cf "$source_privctl_sudoers" >/dev/null || fail 'source privctl sudoers policy fails visudo validation'
   fi
 }
 
@@ -306,7 +326,7 @@ path_is_present() {
 }
 
 validate_existing_layout() {
-  local launcher control helper object_exec manifest sudoers service timer
+  local launcher control helper object_exec manifest sudoers service timer privctl_launcher privctl_sudoers
   launcher="$(destination_path "$LAUNCHER_PATH")"
   control="$(destination_path "$CONTROL_PATH")"
   helper="$(destination_path "$HELPER_PATH")"
@@ -315,17 +335,21 @@ validate_existing_layout() {
   sudoers="$(destination_path "$SUDOERS_PATH")"
   service="$(destination_path "$OBJECT_SERVICE_PATH")"
   timer="$(destination_path "$OBJECT_TIMER_PATH")"
+  privctl_launcher="$(destination_path "$PRIVCTL_LAUNCHER_PATH")"
+  privctl_sudoers="$(destination_path "$PRIVCTL_SUDOERS_PATH")"
 
   if ! path_is_present "$launcher" && ! path_is_present "$control" && ! path_is_present "$helper" &&
     ! path_is_present "$object_exec" && ! path_is_present "$manifest" && ! path_is_present "$sudoers" &&
-    ! path_is_present "$service" && ! path_is_present "$timer"; then
+    ! path_is_present "$service" && ! path_is_present "$timer" && ! path_is_present "$privctl_launcher" &&
+    ! path_is_present "$privctl_sudoers"; then
     EXISTING_LAYOUT='empty'
     return 0
   fi
 
   if path_is_present "$launcher" && path_is_present "$control" && path_is_present "$helper" &&
     path_is_present "$sudoers" && ! path_is_present "$object_exec" && ! path_is_present "$manifest" &&
-    ! path_is_present "$service" && ! path_is_present "$timer"; then
+    ! path_is_present "$service" && ! path_is_present "$timer" && ! path_is_present "$privctl_launcher" &&
+    ! path_is_present "$privctl_sudoers"; then
     assert_file_policy "$launcher" 755 'legacy launcher'
     assert_file_policy "$control" 755 'legacy control'
     assert_file_policy "$helper" 644 'legacy helper'
@@ -345,7 +369,8 @@ validate_existing_layout() {
 
   if path_is_present "$launcher" && path_is_present "$control" && path_is_present "$helper" &&
     ! path_is_present "$object_exec" && ! path_is_present "$manifest" && ! path_is_present "$sudoers" &&
-    ! path_is_present "$service" && ! path_is_present "$timer"; then
+    ! path_is_present "$service" && ! path_is_present "$timer" && ! path_is_present "$privctl_launcher" &&
+    ! path_is_present "$privctl_sudoers"; then
     assert_file_policy "$launcher" 755 'legacy launcher'
     assert_file_policy "$control" 755 'legacy control'
     assert_file_policy "$helper" 644 'legacy helper'
@@ -360,7 +385,8 @@ validate_existing_layout() {
 
   if path_is_present "$launcher" && path_is_present "$control" && path_is_present "$helper" &&
     path_is_present "$object_exec" && path_is_present "$manifest" && path_is_present "$sudoers" &&
-    path_is_present "$service" && path_is_present "$timer"; then
+    path_is_present "$service" && path_is_present "$timer" && ! path_is_present "$privctl_launcher" &&
+    ! path_is_present "$privctl_sudoers"; then
     assert_file_policy "$launcher" 755 'installed launcher'
     assert_file_policy "$control" 755 'installed control'
     assert_file_policy "$helper" 644 'installed helper'
@@ -376,19 +402,40 @@ validate_existing_layout() {
     return 0
   fi
 
+  if path_is_present "$launcher" && path_is_present "$control" && path_is_present "$helper" &&
+    path_is_present "$object_exec" && path_is_present "$manifest" && path_is_present "$sudoers" &&
+    path_is_present "$service" && path_is_present "$timer" && path_is_present "$privctl_launcher" &&
+    path_is_present "$privctl_sudoers"; then
+    assert_file_policy "$launcher" 755 'installed launcher'
+    assert_file_policy "$control" 755 'installed control'
+    assert_file_policy "$helper" 644 'installed helper'
+    assert_file_policy "$object_exec" 755 'installed Object Storage executable'
+    assert_file_policy "$manifest" 644 'installed manifest'
+    assert_file_policy "$sudoers" 440 'installed sudoers policy'
+    assert_file_policy "$service" 644 'installed Object Storage service'
+    assert_file_policy "$timer" 644 'installed Object Storage timer'
+    assert_file_policy "$privctl_launcher" 755 'installed privctl launcher'
+    assert_file_policy "$privctl_sudoers" 440 'installed privctl sudoers policy'
+    assert_dir_policy "$(destination_path "$RELEASE_DIR")" 'installed control directory'
+    assert_dir_policy "$(destination_path "$RELEASE_DIR/lib")" 'installed control library directory'
+    assert_dir_policy "$(destination_path "$OBJECT_EXEC_DIR")" 'installed Object Storage executable directory'
+    EXISTING_LAYOUT='canonical_with_privctl'
+    return 0
+  fi
+
   fail 'destination contains an unrecognized partial protected release'
 }
 
 validate_destination_readonly() {
   assert_not_symlink_path "$DEST_ROOT"
-  for path in "$LAUNCHER_PATH" "$CONTROL_PATH" "$HELPER_PATH" "$OBJECT_EXEC_PATH" "$MANIFEST_PATH" "$SUDOERS_PATH" "$OBJECT_SERVICE_PATH" "$OBJECT_TIMER_PATH"; do
+  for path in "$LAUNCHER_PATH" "$CONTROL_PATH" "$HELPER_PATH" "$OBJECT_EXEC_PATH" "$MANIFEST_PATH" "$SUDOERS_PATH" "$PRIVCTL_LAUNCHER_PATH" "$PRIVCTL_SUDOERS_PATH" "$OBJECT_SERVICE_PATH" "$OBJECT_TIMER_PATH"; do
     assert_not_symlink_path "$(destination_path "$path")"
   done
   validate_existing_layout
 }
 
 validate_published_release() {
-  local launcher control helper object_exec manifest sudoers service timer
+  local launcher control helper object_exec manifest sudoers service timer privctl_launcher privctl_sudoers
   validate_existing_layout
   launcher="$(destination_path "$LAUNCHER_PATH")"
   control="$(destination_path "$CONTROL_PATH")"
@@ -398,9 +445,12 @@ validate_published_release() {
   sudoers="$(destination_path "$SUDOERS_PATH")"
   service="$(destination_path "$OBJECT_SERVICE_PATH")"
   timer="$(destination_path "$OBJECT_TIMER_PATH")"
-  validate_manifest "$manifest" "$TOOLING_SOURCE_SHA" "$launcher" "$control" "$helper" "$object_exec" "$sudoers" "$service" "$timer"
+  privctl_launcher="$(destination_path "$PRIVCTL_LAUNCHER_PATH")"
+  privctl_sudoers="$(destination_path "$PRIVCTL_SUDOERS_PATH")"
+  validate_manifest "$manifest" "$TOOLING_SOURCE_SHA" "$launcher" "$control" "$helper" "$object_exec" "$sudoers" "$service" "$timer" "$privctl_launcher" "$privctl_sudoers"
   if command -v visudo >/dev/null 2>&1; then
     visudo -cf "$sudoers" >/dev/null || fail 'installed sudoers policy fails visudo validation'
+    visudo -cf "$privctl_sudoers" >/dev/null || fail 'installed privctl sudoers policy fails visudo validation'
   fi
 }
 
@@ -414,8 +464,18 @@ stage_file_in_target_directory() {
   assert_file_policy "$staged" "$mode" "staged $label" || fail "staged $label policy validation failed"
 }
 
+stage_git_file_in_target_directory() {
+  local label="$1" repository_path="$2" destination="$3" mode="$4" staged
+  staged="$(mktemp "${destination%/*}/.${label}.XXXXXX")" || fail "unable to create staging file for $label"
+  set_staged_path "$label" "$staged"
+  assert_same_filesystem "$staged" "${destination%/*}"
+  git -c safe.directory="$SOURCE_ROOT" --no-optional-locks -C "$SOURCE_ROOT" show "$TOOLING_SOURCE_SHA:$repository_path" > "$staged" || fail "unable to stage immutable Git artifact $label"
+  set_file_policy "$staged" "$mode" || fail "unable to set staged $label policy"
+  assert_file_policy "$staged" "$mode" "staged $label" || fail "staged $label policy validation failed"
+}
+
 stage_release() {
-  local source_launcher source_control source_helper source_object_exec source_sudoers source_service source_timer
+  local source_launcher source_control source_helper source_object_exec source_sudoers source_service source_timer source_privctl_launcher source_privctl_sudoers
   source_launcher="$(source_path infra/production/launchers/buildingos-production-backup-preflight)"
   source_control="$(source_path scripts/production-backup-preflight.sh)"
   source_helper="$(source_path scripts/lib/endpoint-identity.sh)"
@@ -423,20 +483,25 @@ stage_release() {
   source_sudoers="$(source_path infra/production/sudoers/buildingos-production-backup-preflight)"
   source_service="$(source_path infra/production/systemd/pawtech-buildingos-object-backup.service)"
   source_timer="$(source_path infra/production/systemd/pawtech-buildingos-object-backup.timer)"
-  stage_file_in_target_directory launcher "$source_launcher" "$(destination_path "$LAUNCHER_PATH")" 755
-  stage_file_in_target_directory control "$source_control" "$(destination_path "$CONTROL_PATH")" 755
+  source_privctl_launcher="$(source_path infra/production/launchers/buildingos-privctl)"
+  source_privctl_sudoers="$(source_path infra/production/sudoers/buildingos-privctl)"
+  stage_git_file_in_target_directory launcher infra/production/launchers/buildingos-production-backup-preflight "$(destination_path "$LAUNCHER_PATH")" 755
+  stage_git_file_in_target_directory control scripts/production-backup-preflight.sh "$(destination_path "$CONTROL_PATH")" 755
   [[ "$TEST_FAIL_DURING_STAGE_RELEASE" == false ]] || fail 'injected stage release failure'
-  stage_file_in_target_directory helper "$source_helper" "$(destination_path "$HELPER_PATH")" 644
-  stage_file_in_target_directory object_exec "$source_object_exec" "$(destination_path "$OBJECT_EXEC_PATH")" 755
-  stage_file_in_target_directory sudoers "$source_sudoers" "$(destination_path "$SUDOERS_PATH")" 440
-  stage_file_in_target_directory object_service "$source_service" "$(destination_path "$OBJECT_SERVICE_PATH")" 644
-  stage_file_in_target_directory object_timer "$source_timer" "$(destination_path "$OBJECT_TIMER_PATH")" 644
+  stage_git_file_in_target_directory helper scripts/lib/endpoint-identity.sh "$(destination_path "$HELPER_PATH")" 644
+  stage_git_file_in_target_directory object_exec scripts/backup-object-storage.sh "$(destination_path "$OBJECT_EXEC_PATH")" 755
+  stage_git_file_in_target_directory sudoers infra/production/sudoers/buildingos-production-backup-preflight "$(destination_path "$SUDOERS_PATH")" 440
+  stage_git_file_in_target_directory privctl_launcher infra/production/launchers/buildingos-privctl "$(destination_path "$PRIVCTL_LAUNCHER_PATH")" 755
+  stage_git_file_in_target_directory privctl_sudoers infra/production/sudoers/buildingos-privctl "$(destination_path "$PRIVCTL_SUDOERS_PATH")" 440
+  stage_git_file_in_target_directory object_service infra/production/systemd/pawtech-buildingos-object-backup.service "$(destination_path "$OBJECT_SERVICE_PATH")" 644
+  stage_git_file_in_target_directory object_timer infra/production/systemd/pawtech-buildingos-object-backup.timer "$(destination_path "$OBJECT_TIMER_PATH")" 644
   stage_file_in_target_directory manifest /dev/null "$(destination_path "$MANIFEST_PATH")" 644
-  write_manifest "$(staged_path manifest)" "$TOOLING_SOURCE_SHA" "$(staged_path launcher)" "$(staged_path control)" "$(staged_path helper)" "$(staged_path object_exec)" "$(staged_path sudoers)" "$(staged_path object_service)" "$(staged_path object_timer)" || fail 'unable to write staged manifest'
+  write_manifest "$(staged_path manifest)" "$TOOLING_SOURCE_SHA" "$(staged_path launcher)" "$(staged_path control)" "$(staged_path helper)" "$(staged_path object_exec)" "$(staged_path sudoers)" "$(staged_path object_service)" "$(staged_path object_timer)" "$(staged_path privctl_launcher)" "$(staged_path privctl_sudoers)" || fail 'unable to write staged manifest'
   assert_file_policy "$(staged_path manifest)" 644 'staged manifest' || fail 'staged manifest policy validation failed'
-  validate_manifest "$(staged_path manifest)" "$TOOLING_SOURCE_SHA" "$(staged_path launcher)" "$(staged_path control)" "$(staged_path helper)" "$(staged_path object_exec)" "$(staged_path sudoers)" "$(staged_path object_service)" "$(staged_path object_timer)" || fail 'staged manifest validation failed'
+  validate_manifest "$(staged_path manifest)" "$TOOLING_SOURCE_SHA" "$(staged_path launcher)" "$(staged_path control)" "$(staged_path helper)" "$(staged_path object_exec)" "$(staged_path sudoers)" "$(staged_path object_service)" "$(staged_path object_timer)" "$(staged_path privctl_launcher)" "$(staged_path privctl_sudoers)" || fail 'staged manifest validation failed'
   if command -v visudo >/dev/null 2>&1; then
     visudo -cf "$(staged_path sudoers)" >/dev/null || fail 'staged sudoers policy fails visudo validation'
+    visudo -cf "$(staged_path privctl_sudoers)" >/dev/null || fail 'staged privctl sudoers policy fails visudo validation'
   fi
 }
 
@@ -457,23 +522,36 @@ snapshot_node() {
   fi
 }
 
-snapshot_labels=(launcher control helper object_exec manifest sudoers object_service object_timer control_dir control_lib_dir object_exec_dir)
+snapshot_labels=(launcher control helper object_exec manifest sudoers object_service object_timer privctl_launcher privctl_sudoers control_dir control_lib_dir object_exec_dir)
+
+snapshot_entry_present() {
+  local label="$1" metadata
+  metadata="$SNAPSHOT/$label.meta"
+  if [[ ! -e "$metadata" && ! -L "$metadata" ]]; then
+    printf '0\n'
+    return
+  fi
+  awk -F= '$1 == "present" { print $2 }' "$metadata"
+}
 
 snapshot_layout_from_entries() {
-  local launcher control helper object_exec manifest sudoers service timer
-  launcher="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/launcher.meta")"
-  control="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/control.meta")"
-  helper="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/helper.meta")"
-  object_exec="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/object_exec.meta")"
-  manifest="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/manifest.meta")"
-  sudoers="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/sudoers.meta")"
-  service="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/object_service.meta")"
-  timer="$(awk -F= '$1 == "present" { print $2 }' "$SNAPSHOT/object_timer.meta")"
-  case "$launcher:$control:$helper:$object_exec:$manifest:$sudoers:$service:$timer" in
-    0:0:0:0:0:0:0:0) printf 'empty\n' ;;
-    1:1:1:0:0:0:0:0) printf 'legacy\n' ;;
-    1:1:1:0:0:1:0:0) printf 'legacy_with_sudoers\n' ;;
-    1:1:1:1:1:1:1:1) printf 'canonical\n' ;;
+  local launcher control helper object_exec manifest sudoers service timer privctl_launcher privctl_sudoers
+  launcher="$(snapshot_entry_present launcher)"
+  control="$(snapshot_entry_present control)"
+  helper="$(snapshot_entry_present helper)"
+  object_exec="$(snapshot_entry_present object_exec)"
+  manifest="$(snapshot_entry_present manifest)"
+  sudoers="$(snapshot_entry_present sudoers)"
+  service="$(snapshot_entry_present object_service)"
+  timer="$(snapshot_entry_present object_timer)"
+  privctl_launcher="$(snapshot_entry_present privctl_launcher)"
+  privctl_sudoers="$(snapshot_entry_present privctl_sudoers)"
+  case "$launcher:$control:$helper:$object_exec:$manifest:$sudoers:$service:$timer:$privctl_launcher:$privctl_sudoers" in
+    0:0:0:0:0:0:0:0:0:0) printf 'empty\n' ;;
+    1:1:1:0:0:0:0:0:0:0) printf 'legacy\n' ;;
+    1:1:1:0:0:1:0:0:0:0) printf 'legacy_with_sudoers\n' ;;
+    1:1:1:1:1:1:1:1:0:0) printf 'canonical\n' ;;
+    1:1:1:1:1:1:1:1:1:1) printf 'canonical_with_privctl\n' ;;
     *) fail 'rollback snapshot contains an unrecognized protected release layout' ;;
   esac
 }
@@ -494,6 +572,8 @@ create_snapshot() {
   snapshot_node sudoers "$(destination_path "$SUDOERS_PATH")"
   snapshot_node object_service "$(destination_path "$OBJECT_SERVICE_PATH")"
   snapshot_node object_timer "$(destination_path "$OBJECT_TIMER_PATH")"
+  snapshot_node privctl_launcher "$(destination_path "$PRIVCTL_LAUNCHER_PATH")"
+  snapshot_node privctl_sudoers "$(destination_path "$PRIVCTL_SUDOERS_PATH")"
   printf 'layout=%s\n' "$EXISTING_LAYOUT" > "$SNAPSHOT/layout"
   snapshot_node control_dir "$(destination_path "$RELEASE_DIR")"
   snapshot_node control_lib_dir "$(destination_path "$RELEASE_DIR/lib")"
@@ -519,8 +599,12 @@ validate_snapshot() {
   local label metadata type present expected_digest actual_digest expected_layout actual_layout
   validate_snapshot_path
   [[ -f "$SNAPSHOT/layout" && ! -L "$SNAPSHOT/layout" ]] || fail 'rollback layout classification is unavailable'
+  expected_layout="$(awk -F= '$1 == "layout" { count++; value=$2 } END { if (count == 1 && value ~ /^(empty|legacy|legacy_with_sudoers|canonical|canonical_with_privctl)$/) print value; else exit 1 }' "$SNAPSHOT/layout")" || fail 'rollback layout classification is malformed'
   for label in "${snapshot_labels[@]}"; do
     metadata="$SNAPSHOT/$label.meta"
+    if [[ ! -e "$metadata" && ! -L "$metadata" ]] && [[ "$label" == privctl_launcher || "$label" == privctl_sudoers ]] && [[ "$expected_layout" != canonical_with_privctl ]]; then
+      continue
+    fi
     [[ -f "$metadata" && ! -L "$metadata" ]] || fail "rollback metadata is unavailable for $label"
     present="$(awk -F= '$1 == "present" { print $2 }' "$metadata")"
     case "$present" in
@@ -540,7 +624,6 @@ validate_snapshot() {
       *) fail "rollback presence marker is invalid for $label" ;;
     esac
   done
-  expected_layout="$(awk -F= '$1 == "layout" { count++; value=$2 } END { if (count == 1 && value ~ /^(empty|legacy|legacy_with_sudoers|canonical)$/) print value; else exit 1 }' "$SNAPSHOT/layout")" || fail 'rollback layout classification is malformed'
   actual_layout="$(snapshot_layout_from_entries)"
   [[ "$expected_layout" == "$actual_layout" ]] || fail 'rollback layout classification does not match artifact states'
 }
@@ -548,7 +631,11 @@ validate_snapshot() {
 restore_file_entry() {
   local label="$1" destination="$2" metadata uid gid mode present type staged
   metadata="$SNAPSHOT/$label.meta"
-  present="$(awk -F= '$1 == "present" { print $2 }' "$metadata")"
+  if [[ ! -e "$metadata" && ! -L "$metadata" ]] && [[ "$label" == privctl_launcher || "$label" == privctl_sudoers ]]; then
+    present=0
+  else
+    present="$(awk -F= '$1 == "present" { print $2 }' "$metadata")"
+  fi
   if [[ "$present" == 0 ]]; then
     [[ ! -L "$destination" ]] || fail "refusing to remove symlink destination during rollback: $destination"
     [[ ! -d "$destination" ]] || fail "rollback destination unexpectedly became a directory: $destination"
@@ -590,7 +677,7 @@ restore_directory_entry() {
 }
 
 restore_snapshot() {
-  local launcher control helper object_exec manifest sudoers service timer
+  local launcher control helper object_exec manifest sudoers service timer privctl_launcher privctl_sudoers
   validate_snapshot
   launcher="$(destination_path "$LAUNCHER_PATH")"
   control="$(destination_path "$CONTROL_PATH")"
@@ -600,7 +687,9 @@ restore_snapshot() {
   sudoers="$(destination_path "$SUDOERS_PATH")"
   service="$(destination_path "$OBJECT_SERVICE_PATH")"
   timer="$(destination_path "$OBJECT_TIMER_PATH")"
-  for path in "$launcher" "$control" "$helper" "$object_exec" "$manifest" "$sudoers" "$service" "$timer"; do
+  privctl_launcher="$(destination_path "$PRIVCTL_LAUNCHER_PATH")"
+  privctl_sudoers="$(destination_path "$PRIVCTL_SUDOERS_PATH")"
+  for path in "$launcher" "$control" "$helper" "$object_exec" "$manifest" "$sudoers" "$service" "$timer" "$privctl_launcher" "$privctl_sudoers"; do
     assert_not_symlink_path "$path"
   done
   restore_file_entry launcher "$launcher"
@@ -611,6 +700,8 @@ restore_snapshot() {
   restore_file_entry sudoers "$sudoers"
   restore_file_entry object_service "$service"
   restore_file_entry object_timer "$timer"
+  restore_file_entry privctl_launcher "$privctl_launcher"
+  restore_file_entry privctl_sudoers "$privctl_sudoers"
   restore_directory_entry control_lib_dir "$(destination_path "$RELEASE_DIR/lib")"
   restore_directory_entry control_dir "$(destination_path "$RELEASE_DIR")"
   restore_directory_entry object_exec_dir "$(destination_path "$OBJECT_EXEC_DIR")"
@@ -618,13 +709,15 @@ restore_snapshot() {
 
 publish_stage() {
   local label destination
-  for label in launcher control helper object_exec sudoers object_service object_timer; do
+  for label in launcher control helper object_exec sudoers privctl_launcher privctl_sudoers object_service object_timer; do
     case "$label" in
       launcher) destination="$(destination_path "$LAUNCHER_PATH")" ;;
       control) destination="$(destination_path "$CONTROL_PATH")" ;;
       helper) destination="$(destination_path "$HELPER_PATH")" ;;
       object_exec) destination="$(destination_path "$OBJECT_EXEC_PATH")" ;;
       sudoers) destination="$(destination_path "$SUDOERS_PATH")" ;;
+      privctl_launcher) destination="$(destination_path "$PRIVCTL_LAUNCHER_PATH")" ;;
+      privctl_sudoers) destination="$(destination_path "$PRIVCTL_SUDOERS_PATH")" ;;
       object_service) destination="$(destination_path "$OBJECT_SERVICE_PATH")" ;;
       object_timer) destination="$(destination_path "$OBJECT_TIMER_PATH")" ;;
     esac
@@ -640,9 +733,16 @@ publish_stage() {
   clear_staged_path manifest
 }
 
+validate_destination_parent_dirs() {
+  local path
+  for path in /usr /usr/local /usr/local/sbin /usr/local/libexec /usr/local/libexec/buildingos-backup /usr/local/libexec/buildingos-backup-preflight /etc /etc/sudoers.d /etc/systemd /etc/systemd/system; do
+    assert_dir_policy "$(destination_path "$path")" "trusted destination directory $path"
+  done
+}
+
 prepare_destination() {
   assert_not_symlink_path "$DEST_ROOT"
-  for path in "$LAUNCHER_PATH" "$CONTROL_PATH" "$HELPER_PATH" "$OBJECT_EXEC_PATH" "$MANIFEST_PATH" "$SUDOERS_PATH" "$OBJECT_SERVICE_PATH" "$OBJECT_TIMER_PATH" "$ROLLBACK_ROOT"; do
+  for path in "$LAUNCHER_PATH" "$CONTROL_PATH" "$HELPER_PATH" "$OBJECT_EXEC_PATH" "$MANIFEST_PATH" "$SUDOERS_PATH" "$PRIVCTL_LAUNCHER_PATH" "$PRIVCTL_SUDOERS_PATH" "$OBJECT_SERVICE_PATH" "$OBJECT_TIMER_PATH" "$ROLLBACK_ROOT"; do
     assert_not_symlink_path "$(destination_path "$path")"
   done
   mkdir -p -- "$DEST_ROOT" || fail 'unable to create destination root'
@@ -652,6 +752,7 @@ prepare_destination() {
     "$(destination_path /usr/local/sbin)" \
     "$(destination_path /etc/sudoers.d)" \
     "$(destination_path /etc/systemd/system)" || fail 'unable to prepare destination directories'
+  validate_destination_parent_dirs
   chown "$EXPECTED_UID:$EXPECTED_GID" "$(destination_path "$RELEASE_DIR")" "$(destination_path "$RELEASE_DIR/lib")" "$(destination_path "$OBJECT_EXEC_DIR")" || fail 'unable to set destination directory ownership'
   chmod 755 "$(destination_path "$RELEASE_DIR")" "$(destination_path "$RELEASE_DIR/lib")" "$(destination_path "$OBJECT_EXEC_DIR")" || fail 'unable to set destination directory modes'
 }

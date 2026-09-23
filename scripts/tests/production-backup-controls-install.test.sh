@@ -24,7 +24,11 @@ assert_contains() { local name="$1" value="$2" file="$3"; grep -Fq -- "$value" "
 make_source() {
   mkdir -p "$SOURCE_ROOT/infra/production/launchers" "$SOURCE_ROOT/infra/production/sudoers" "$SOURCE_ROOT/infra/production/systemd" "$SOURCE_ROOT/scripts/lib"
   cp "$ROOT_DIR/infra/production/launchers/buildingos-production-backup-preflight" "$SOURCE_ROOT/infra/production/launchers/"
+  cp "$ROOT_DIR/infra/production/launchers/buildingos-privctl" "$SOURCE_ROOT/infra/production/launchers/"
   cp "$ROOT_DIR/infra/production/sudoers/buildingos-production-backup-preflight" "$SOURCE_ROOT/infra/production/sudoers/"
+  cp "$ROOT_DIR/infra/production/sudoers/buildingos-privctl" "$SOURCE_ROOT/infra/production/sudoers/"
+  chmod 0755 "$SOURCE_ROOT/infra/production/launchers/buildingos-production-backup-preflight" "$SOURCE_ROOT/infra/production/launchers/buildingos-privctl"
+  chmod 0440 "$SOURCE_ROOT/infra/production/sudoers/buildingos-production-backup-preflight" "$SOURCE_ROOT/infra/production/sudoers/buildingos-privctl"
   cp "$ROOT_DIR/infra/production/systemd/pawtech-buildingos-object-backup.service" "$SOURCE_ROOT/infra/production/systemd/"
   cp "$ROOT_DIR/infra/production/systemd/pawtech-buildingos-object-backup.timer" "$SOURCE_ROOT/infra/production/systemd/"
   cp "$ROOT_DIR/scripts/lib/endpoint-identity.sh" "$SOURCE_ROOT/scripts/lib/"
@@ -36,7 +40,7 @@ set -Eeuo pipefail
 printf 'CONTROL_INVOKED=%s\n' "$1"
 CONTROL
   chmod 0755 "$SOURCE_ROOT/scripts/production-backup-preflight.sh"
-  git -C "$SOURCE_ROOT" init -q
+  git -c core.hooksPath=/dev/null -C "$SOURCE_ROOT" init -q
   git -C "$SOURCE_ROOT" config user.email local@example.invalid
   git -C "$SOURCE_ROOT" config user.name 'Local Test'
   git -C "$SOURCE_ROOT" add .
@@ -63,6 +67,8 @@ hashes() {
     "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest" \
     "$DEST_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh" \
     "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" \
+    "$DEST_ROOT/usr/local/sbin/buildingos-privctl" \
+    "$DEST_ROOT/etc/sudoers.d/buildingos-privctl" \
     "$DEST_ROOT/etc/systemd/system/pawtech-buildingos-object-backup.service" \
     "$DEST_ROOT/etc/systemd/system/pawtech-buildingos-object-backup.timer"; do
     shasum -a 256 "$path" | awk '{print $1}'
@@ -81,6 +87,8 @@ protected_tree_state() {
     "$DEST_ROOT/usr/local/libexec/buildingos-backup" \
     "$DEST_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh" \
     "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" \
+    "$DEST_ROOT/usr/local/sbin/buildingos-privctl" \
+    "$DEST_ROOT/etc/sudoers.d/buildingos-privctl" \
     "$DEST_ROOT/etc/systemd/system/pawtech-buildingos-object-backup.service" \
     "$DEST_ROOT/etc/systemd/system/pawtech-buildingos-object-backup.timer"; do
     if [[ -f "$path" && ! -L "$path" ]]; then
@@ -198,6 +206,13 @@ assert_contains 'legacy snapshot records explicit layout classification' 'layout
 assert_contains 'legacy snapshot binds legacy control metadata' 'metadata=' "$LEGACY_SNAPSHOT/control.meta"
 assert_contains 'legacy snapshot binds legacy control hash' 'sha256=' "$LEGACY_SNAPSHOT/control.meta"
 assert_contains 'installed manifest records tooling identity' "tooling_source_sha=$CANDIDATE_ONE" "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
+assert_contains 'installed manifest records privctl launcher identity' 'privctl_launcher_path=/usr/local/sbin/buildingos-privctl' "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
+assert_contains 'installed manifest records privctl sudoers identity' 'privctl_sudoers_path=/etc/sudoers.d/buildingos-privctl' "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
+assert_equal 'installed privctl launcher has mode 0755' "$(stat -c '%a' "$DEST_ROOT/usr/local/sbin/buildingos-privctl" 2>/dev/null || stat -f '%Lp' "$DEST_ROOT/usr/local/sbin/buildingos-privctl")" '755'
+assert_equal 'installed privctl sudoers has mode 0440' "$(stat -c '%a' "$DEST_ROOT/etc/sudoers.d/buildingos-privctl" 2>/dev/null || stat -f '%Lp' "$DEST_ROOT/etc/sudoers.d/buildingos-privctl")" '440'
+chmod 0775 "$DEST_ROOT/usr/local/sbin"
+assert_failure 'writable privileged launcher parent is rejected' run_install "$CANDIDATE_ONE"
+chmod 0755 "$DEST_ROOT/usr/local/sbin"
 assert_success 'tooling match and older runtime identity reach the protected control' \
   run_launcher "$CANDIDATE_ONE" 1111111111111111111111111111111111111111
 assert_failure 'tooling source SHA mismatch fails closed before runtime preflight' \
@@ -253,6 +268,26 @@ assert_success 'explicit rollback migrates canonical release back to exact legac
   "$INSTALLER" --dest-root "$DEST_ROOT" --test-mode local-unprivileged --apply --rollback "$LEGACY_SNAPSHOT"
 assert_equal 'canonical-to-legacy rollback restores bytes metadata and absent artifacts exactly' "$(protected_tree_state)" "$LEGACY_STATE"
 assert_success 'legacy release can be migrated to canonical again' run_install "$CANDIDATE_ONE"
+PRIVCTL_LAUNCHER="$DEST_ROOT/usr/local/sbin/buildingos-privctl"
+PRIVCTL_SUDOERS="$DEST_ROOT/etc/sudoers.d/buildingos-privctl"
+mv "$PRIVCTL_LAUNCHER" "$PRIVCTL_LAUNCHER.saved"
+assert_failure 'canonical layout with only privctl sudoers is rejected' run_check "$CANDIDATE_ONE"
+mv "$PRIVCTL_LAUNCHER.saved" "$PRIVCTL_LAUNCHER"
+mv "$PRIVCTL_SUDOERS" "$PRIVCTL_SUDOERS.saved"
+assert_failure 'canonical layout with only privctl launcher is rejected' run_check "$CANDIDATE_ONE"
+mv "$PRIVCTL_SUDOERS.saved" "$PRIVCTL_SUDOERS"
+mv "$PRIVCTL_LAUNCHER" "$PRIVCTL_LAUNCHER.saved"
+mv "$PRIVCTL_SUDOERS" "$PRIVCTL_SUDOERS.saved"
+OLD_CANONICAL_STATE="$(protected_tree_state)"
+assert_success 'old canonical layout without privctl assets remains readable' run_check "$CANDIDATE_ONE"
+assert_success 'old canonical layout upgrades to the complete privctl release' run_install "$CANDIDATE_ONE"
+OLD_CANONICAL_SNAPSHOT="$(awk -F= '/^ROLLBACK_SNAPSHOT=/{print $2}' "$TEST_ROOT/output")"
+assert_contains 'old canonical snapshot records its legacy canonical layout' 'layout=canonical' "$OLD_CANONICAL_SNAPSHOT/layout"
+rm "$OLD_CANONICAL_SNAPSHOT/privctl_launcher.meta" "$OLD_CANONICAL_SNAPSHOT/privctl_sudoers.meta"
+assert_success 'pre-privctl canonical snapshot rolls back with both new assets absent' \
+  "$INSTALLER" --dest-root "$DEST_ROOT" --test-mode local-unprivileged --apply --rollback "$OLD_CANONICAL_SNAPSHOT"
+assert_equal 'old canonical rollback restores both new assets as absent' "$(protected_tree_state)" "$OLD_CANONICAL_STATE"
+assert_success 'old canonical layout can upgrade to complete privctl release again' run_install "$CANDIDATE_ONE"
 
 OLD_STATE="$(protected_tree_state)"
 printf '\n# release two\n' >> "$SOURCE_ROOT/scripts/production-backup-preflight.sh"

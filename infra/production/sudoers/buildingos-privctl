@@ -1,0 +1,7 @@
+Defaults!/usr/local/sbin/buildingos-privctl env_reset,secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+yoryi ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-privctl daemon-reload
+yoryi ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-privctl object-backup-start
+yoryi ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-privctl object-backup-timer-enable
+yoryi ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-privctl object-backup-timer-start
+yoryi ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-privctl object-backup-timer-stop
+yoryi ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-privctl object-backup-timer-disable

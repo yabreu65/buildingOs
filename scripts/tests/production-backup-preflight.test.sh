@@ -7,6 +7,8 @@ readonly PREFLIGHT="$ROOT_DIR/scripts/production-backup-preflight.sh"
 readonly WORKFLOW="$ROOT_DIR/.github/workflows/production-backup-preflight.yml"
 readonly PRIVILEGED_LAUNCHER="$ROOT_DIR/infra/production/launchers/buildingos-production-backup-preflight"
 readonly SUDOERS_POLICY="$ROOT_DIR/infra/production/sudoers/buildingos-production-backup-preflight"
+readonly PRIVCTL_LAUNCHER="$ROOT_DIR/infra/production/launchers/buildingos-privctl"
+readonly PRIVCTL_SUDOERS="$ROOT_DIR/infra/production/sudoers/buildingos-privctl"
 readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-backup-preflight.XXXXXX")"
 readonly BIN_DIR="$TEST_ROOT/bin"
 readonly ENV_FILE="$TEST_ROOT/object-backup.env"
@@ -510,6 +512,10 @@ assert_contains 'launcher requires the generated manifest' "MANIFEST='/usr/local
 assert_contains 'launcher verifies installed release hashes through the manifest' 'assert_manifest_matches' "$launcher_text"
 assert_contains 'launcher requires external tooling source SHA' 'EXPECTED_TOOLING_SOURCE_SHA="$1"' "$launcher_text"
 assert_contains 'launcher passes only runtime SHA to the protected control' '"$PREFLIGHT_SCRIPT" "$EXPECTED_RUNTIME_SHA"' "$launcher_text"
+assert_contains 'launcher includes the privctl launcher in its manifest payload' 'privctl_launcher_path=/usr/local/sbin/buildingos-privctl' "$launcher_text"
+assert_contains 'launcher includes the privctl sudoers policy in its manifest payload' 'privctl_sudoers_path=/etc/sudoers.d/buildingos-privctl' "$launcher_text"
+assert_contains 'launcher checks privctl launcher metadata' 'assert_metadata "$PRIVCTL_LAUNCHER" 755' "$launcher_text"
+assert_contains 'launcher checks privctl sudoers metadata' 'assert_metadata "$PRIVCTL_SUDOERS" 440' "$launcher_text"
 assert_absent 'launcher does not create a temporary manifest during validation' 'mktemp' "$launcher_text"
 assert_absent 'launcher does not remove protected manifest validation files' 'rm -f' "$launcher_text"
 assert_contains 'launcher clears BASH_ENV' 'unset BASH_ENV ENV' "$launcher_text"
@@ -535,6 +541,26 @@ assert_contains 'sudoers grants only fixed launcher' 'yoryi ALL=(root) NOPASSWD:
 assert_absent 'sudoers excludes generic shell' '/bin/bash' "$sudoers_text"
 assert_absent 'sudoers excludes systemctl' 'systemctl' "$sudoers_text"
 assert_absent 'sudoers excludes docker' 'docker' "$sudoers_text"
+
+privctl_launcher_text="$(< "$PRIVCTL_LAUNCHER")"
+assert_contains 'privctl validates the same sealed manifest payload' 'privctl_launcher_path=%s' "$privctl_launcher_text"
+assert_contains 'privctl validates privctl launcher metadata' 'assert_file "$PRIVCTL_LAUNCHER" 755' "$privctl_launcher_text"
+assert_contains 'privctl validates privctl sudoers metadata' 'assert_file "$PRIVCTL_SUDOERS" 440' "$privctl_launcher_text"
+assert_contains 'privctl validates timer drop-ins and association' 'validate_timer_ready' "$privctl_launcher_text"
+assert_contains 'privctl validates timer Unit association' '--property=Unit' "$privctl_launcher_text"
+assert_contains 'privctl binds receipt ownership to the service user' "SERVICE_USER='yoryi'" "$privctl_launcher_text"
+assert_contains 'privctl validates trusted executable parent directories' 'assert_directory /usr/local/sbin 755' "$privctl_launcher_text"
+assert_absent 'privctl never enables timers immediately' 'enable --now' "$privctl_launcher_text"
+privctl_sudoers_text="$(< "$PRIVCTL_SUDOERS")"
+for operation in daemon-reload object-backup-start object-backup-timer-enable object-backup-timer-start object-backup-timer-stop object-backup-timer-disable; do
+  assert_contains "privctl sudoers grants fixed $operation only" "yoryi ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-privctl $operation" "$privctl_sudoers_text"
+done
+assert_absent 'privctl sudoers grants no wildcard operation' '*' "$privctl_sudoers_text"
+if [[ "$(grep -Ec '^yoryi ALL=\(root\) NOPASSWD: NOSETENV: /usr/local/sbin/buildingos-privctl (daemon-reload|object-backup-start|object-backup-timer-enable|object-backup-timer-start|object-backup-timer-stop|object-backup-timer-disable)$' "$PRIVCTL_SUDOERS")" == 6 ]] && [[ "$(wc -l < "$PRIVCTL_SUDOERS" | tr -d '[:space:]')" == 7 ]]; then
+  pass 'privctl sudoers contains exactly six fixed command tuples'
+else
+  fail_test 'privctl sudoers contains exactly six fixed command tuples'
+fi
 
 if printf '%s\n' "$preflight_text" | grep -Eq 'systemctl (start|restart|stop|enable|disable|daemon-reload)|pg_dump|rclone (copy|copyto|delete|move)|(^|[[:space:]])(chmod|chown)[[:space:]]'; then
   fail_test 'preflight implementation contains no write-capable operation'
