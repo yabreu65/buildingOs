@@ -486,6 +486,10 @@ timer_has_future_trigger() {
   [[ "$trigger_epoch" =~ ^[0-9]+$ && "$trigger_epoch" -gt "$now_epoch" && $((trigger_epoch - now_epoch)) -le "$TIMER_HORIZON_SECONDS" ]]
 }
 
+timer_has_no_trigger() {
+  [[ -z "$1" || "$1" == n/a || "$1" == '-' ]]
+}
+
 inspect_timer() {
   local label="$1"
   local unit="$2"
@@ -523,6 +527,57 @@ inspect_timer() {
   printf '%s_CALENDAR_MATCH=%s\n' "$label" "$([[ -n "$expected_calendar" ]] && systemd_calendar_matches "$calendar" "$expected_calendar" && printf YES || [[ -z "$expected_calendar" ]] && systemd_daily_calendar_present "$calendar" && printf YES || printf NO)"
   printf '%s_PERSISTENT=%s\n' "$label" "$([[ "$persistent" == yes || "$persistent" == true ]] && printf YES || printf NO)"
   printf '%s_RANDOMIZED_DELAY_MATCH=%s\n' "$label" "$([[ -n "$expected_calendar" ]] && systemd_delay_matches "$randomized" && printf YES || printf NOT_REQUIRED)"
+  printf '%s_CONTRACT=%s\n' "$label" "$contract"
+}
+
+inspect_object_timer() {
+  local label="$1"
+  local unit="$2"
+  local expected_unit="$3"
+  local load_state unit_file_state active_state next_trigger calendar persistent randomized phase=''
+  local exists='NO' contract='NO' before
+  before=$failures
+
+  load_state="$(systemctl_value "$unit" LoadState || true)"
+  unit_file_state="$(systemctl_value "$unit" UnitFileState || true)"
+  active_state="$(unit_active_state "$unit")"
+  next_trigger="$(systemctl_value "$unit" NextElapseUSecRealtime || true)"
+  calendar="$(systemd_timers_calendar "$unit" || true)"
+  persistent="$(systemctl_value "$unit" Persistent || true)"
+  randomized="$(systemctl_value "$unit" RandomizedDelayUSec || true)"
+  [[ "$load_state" == loaded ]] && exists='YES' || fail_check "$unit is not loaded"
+  [[ "$(systemctl_value "$unit" Unit || true)" == "$expected_unit" ]] || fail_check "$unit points to an unexpected service"
+  systemd_calendar_matches "$calendar" "$OBJECT_BACKUP_CALENDAR" || fail_check "$unit calendar is unexpected"
+  [[ "$persistent" == yes || "$persistent" == true ]] || fail_check "$unit is not persistent"
+  systemd_delay_matches "$randomized" || fail_check "$unit randomized delay is not 15 minutes"
+
+  case "$unit_file_state:$active_state" in
+    disabled:inactive)
+      if timer_has_no_trigger "$next_trigger"; then
+        phase='PRE_ACTIVATION'
+      else
+        fail_check "$unit pre-activation phase has an unexpected trigger"
+      fi
+      ;;
+    enabled:active)
+      if timer_has_future_trigger "$next_trigger"; then
+        phase='ACTIVE'
+      else
+        fail_check "$unit active phase has no future trigger"
+      fi
+      ;;
+    *) fail_check "$unit lifecycle state is invalid or ambiguous" ;;
+  esac
+
+  if (( failures == before )); then contract='YES'; fi
+  printf '%s_EXISTS=%s\n' "$label" "$exists"
+  printf '%s_ENABLED=%s\n' "$label" "$([[ "$unit_file_state" == enabled ]] && printf YES || printf NO)"
+  printf '%s_ACTIVE=%s\n' "$label" "$([[ "$active_state" == active ]] && printf YES || printf NO)"
+  printf '%s_FUTURE_TRIGGER=%s\n' "$label" "$(timer_has_future_trigger "$next_trigger" && printf YES || printf NO)"
+  printf '%s_CALENDAR_MATCH=%s\n' "$label" "$(systemd_calendar_matches "$calendar" "$OBJECT_BACKUP_CALENDAR" && printf YES || printf NO)"
+  printf '%s_PERSISTENT=%s\n' "$label" "$([[ "$persistent" == yes || "$persistent" == true ]] && printf YES || printf NO)"
+  printf '%s_RANDOMIZED_DELAY_MATCH=%s\n' "$label" "$(systemd_delay_matches "$randomized" && printf YES || printf NO)"
+  [[ -n "$phase" && "$contract" == YES && "$OBJECT_BACKUP_SERVICE_STATE" == inactive ]] && printf 'OBJECT_BACKUP_TIMER_PHASE=%s\n' "$phase"
   printf '%s_CONTRACT=%s\n' "$label" "$contract"
 }
 
@@ -582,7 +637,7 @@ inspect_topology() {
 
   before=$failures
   inspect_service OBJECT_BACKUP_SERVICE "$OBJECT_BACKUP_SERVICE" "$OBJECT_BACKUP_EXEC" "$OBJECT_BACKUP_ENV_FILE"
-  inspect_timer OBJECT_BACKUP_TIMER "$OBJECT_BACKUP_TIMER" "$OBJECT_BACKUP_SERVICE" "$OBJECT_BACKUP_CALENDAR"
+  inspect_object_timer OBJECT_BACKUP_TIMER "$OBJECT_BACKUP_TIMER" "$OBJECT_BACKUP_SERVICE"
   [[ "$failures" -eq "$before" ]] && printf 'OBJECT_BACKUP_TOPOLOGY=PASS\n' || printf 'OBJECT_BACKUP_TOPOLOGY=FAIL\n'
 }
 

@@ -126,14 +126,19 @@ fi
 
 case "$property:$unit" in
   LoadState:*) printf 'loaded\n' ;;
-  UnitFileState:pawtech-postgres-backup.timer|UnitFileState:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_TIMER_ENABLED:-enabled}" ;;
+  UnitFileState:pawtech-postgres-backup.timer) printf '%s\n' "${MOCK_POSTGRES_TIMER_ENABLED:-enabled}" ;;
+  UnitFileState:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_TIMER_ENABLED:-enabled}" ;;
   ActiveState:pawtech-postgres-backup.service) printf '%s\n' "${MOCK_POSTGRES_SERVICE_STATE:-inactive}" ;;
   ActiveState:pawtech-buildingos-object-backup.service) printf '%s\n' "${MOCK_OBJECT_SERVICE_STATE:-inactive}" ;;
-  ActiveState:pawtech-postgres-backup.timer|ActiveState:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_TIMER_STATE:-active}" ;;
-  Unit:pawtech-postgres-backup.timer) printf 'pawtech-postgres-backup.service\n' ;;
-  Unit:pawtech-buildingos-object-backup.timer) printf 'pawtech-buildingos-object-backup.service\n' ;;
-  NextElapseUSecRealtime:*)
-    if [[ -n "${MOCK_NEXT_TRIGGER:-}" ]]; then printf '%s\n' "$MOCK_NEXT_TRIGGER"; else date -u -v+12H '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date -u -d '+12 hours' '+%Y-%m-%d %H:%M:%S UTC'; fi
+  ActiveState:pawtech-postgres-backup.timer) printf '%s\n' "${MOCK_POSTGRES_TIMER_STATE:-active}" ;;
+  ActiveState:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_TIMER_STATE:-active}" ;;
+  Unit:pawtech-postgres-backup.timer) printf '%s\n' "${MOCK_POSTGRES_TIMER_TARGET:-pawtech-postgres-backup.service}" ;;
+  Unit:pawtech-buildingos-object-backup.timer) printf '%s\n' "${MOCK_OBJECT_TIMER_TARGET:-pawtech-buildingos-object-backup.service}" ;;
+  NextElapseUSecRealtime:pawtech-postgres-backup.timer)
+    if [[ "${MOCK_POSTGRES_NEXT_TRIGGER+x}" == x ]]; then printf '%s\n' "$MOCK_POSTGRES_NEXT_TRIGGER"; else date -u -v+12H '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date -u -d '+12 hours' '+%Y-%m-%d %H:%M:%S UTC'; fi
+    ;;
+  NextElapseUSecRealtime:pawtech-buildingos-object-backup.timer)
+    if [[ "${MOCK_OBJECT_NEXT_TRIGGER+x}" == x ]]; then printf '%s\n' "$MOCK_OBJECT_NEXT_TRIGGER"; else date -u -v+12H '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date -u -d '+12 hours' '+%Y-%m-%d %H:%M:%S UTC'; fi
     ;;
   TimersCalendar:pawtech-postgres-backup.timer)
     case "${MOCK_POSTGRES_TIMER_CALENDAR_MODE:-NORMAL}" in
@@ -272,6 +277,8 @@ assert_contains 'Object timer future trigger is accepted' 'OBJECT_BACKUP_TIMER_F
 assert_contains 'Object timer calendar is accepted' 'OBJECT_BACKUP_TIMER_CALENDAR_MATCH=YES' "$RUN_OUTPUT"
 assert_contains 'Object timer persistence is accepted' 'OBJECT_BACKUP_TIMER_PERSISTENT=YES' "$RUN_OUTPUT"
 assert_contains 'Object timer randomized delay is accepted' 'OBJECT_BACKUP_TIMER_RANDOMIZED_DELAY_MATCH=YES' "$RUN_OUTPUT"
+assert_contains 'Object timer active phase is accepted' 'OBJECT_BACKUP_TIMER_PHASE=ACTIVE' "$RUN_OUTPUT"
+assert_absent 'Object timer active phase emits no pre-activation phase' 'OBJECT_BACKUP_TIMER_PHASE=PRE_ACTIVATION' "$RUN_OUTPUT"
 assert_contains 'Object service contract is accepted' 'OBJECT_BACKUP_SERVICE_CONTRACT=YES' "$RUN_OUTPUT"
 assert_contains 'Object ExecCondition is empty' 'OBJECT_BACKUP_SERVICE_EXEC_CONDITION_EMPTY=YES' "$RUN_OUTPUT"
 assert_contains 'Object ExecStartPre is empty' 'OBJECT_BACKUP_SERVICE_EXEC_START_PRE_EMPTY=YES' "$RUN_OUTPUT"
@@ -280,8 +287,47 @@ assert_contains 'Object environment contract is accepted' 'OBJECT_BACKUP_ENV=YES
 assert_contains 'Object environment root ownership and 0600 mode pass' 'OBJECT_BACKUP_ENV=YES' "$RUN_OUTPUT"
 assert_contains 'backup concurrency is safe' 'BACKUP_CONCURRENCY_SAFE=YES' "$RUN_OUTPUT"
 
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a run_preflight
+assert_success 'Object Storage timer pre-activation phase passes'
+assert_contains 'Object timer pre-activation phase is emitted' 'OBJECT_BACKUP_TIMER_PHASE=PRE_ACTIVATION' "$RUN_OUTPUT"
+assert_absent 'Object timer pre-activation phase emits no active phase' 'OBJECT_BACKUP_TIMER_PHASE=ACTIVE' "$RUN_OUTPUT"
+assert_contains 'Object timer is disabled during pre-activation' 'OBJECT_BACKUP_TIMER_ENABLED=NO' "$RUN_OUTPUT"
+assert_contains 'Object timer is inactive during pre-activation' 'OBJECT_BACKUP_TIMER_ACTIVE=NO' "$RUN_OUTPUT"
+assert_contains 'Object service remains inactive during pre-activation' 'OBJECT_BACKUP_SERVICE_STATE=inactive' "$RUN_OUTPUT"
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER='' run_preflight
+assert_success 'Object Storage pre-activation accepts an empty trigger value'
+unset MOCK_OBJECT_NEXT_TRIGGER
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a MOCK_OBJECT_PERSISTENT=false run_preflight
+assert_failure 'non-persistent pre-activation Object Storage timer fails closed'
+unset MOCK_OBJECT_PERSISTENT
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a MOCK_OBJECT_RANDOMIZED_DELAY=600000000 run_preflight
+assert_failure 'wrong pre-activation Object Storage timer delay fails closed'
+unset MOCK_OBJECT_RANDOMIZED_DELAY
+
+MOCK_OBJECT_TIMER_ENABLED=enabled MOCK_OBJECT_TIMER_STATE=inactive run_preflight
+assert_failure 'enabled inactive Object Storage timer fails closed'
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=active run_preflight
+assert_failure 'disabled active Object Storage timer fails closed'
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER='2099-01-01 00:00:00 UTC' run_preflight
+assert_failure 'disabled inactive Object Storage timer with a trigger fails closed'
+unset MOCK_OBJECT_NEXT_TRIGGER
+MOCK_OBJECT_TIMER_ENABLED=enabled MOCK_OBJECT_TIMER_STATE=active MOCK_OBJECT_NEXT_TRIGGER=n/a run_preflight
+assert_failure 'enabled active Object Storage timer without trigger fails closed'
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a MOCK_OBJECT_SERVICE_STATE=active run_preflight
+assert_failure 'active Object Storage service during pre-activation fails closed'
+assert_absent 'invalid pre-activation service state emits no timer phase' 'OBJECT_BACKUP_TIMER_PHASE=' "$RUN_OUTPUT"
+MOCK_OBJECT_TIMER_STATE=failed run_preflight
+assert_failure 'failed Object Storage timer state fails closed'
+MOCK_OBJECT_TIMER_STATE=unknown run_preflight
+assert_failure 'unknown Object Storage timer state fails closed'
+MOCK_OBJECT_TIMER_TARGET=pawtech-postgres-backup.service run_preflight
+assert_failure 'wrong Object Storage timer target fails closed'
+
 MOCK_OBJECT_CALENDAR='*-*-* 03:15:00' run_preflight
-assert_failure 'wrong Object Storage timer calendar fails closed'
+assert_failure 'wrong Object Storage timer calendar fails closed during active phase'
+assert_absent 'invalid Object Storage timer contract emits no phase' 'OBJECT_BACKUP_TIMER_PHASE=' "$RUN_OUTPUT"
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a MOCK_OBJECT_CALENDAR='*-*-* 03:15:00' run_preflight
+assert_failure 'wrong Object Storage timer calendar fails closed during pre-activation phase'
 unset MOCK_OBJECT_CALENDAR
 MOCK_OBJECT_TIMER_CALENDAR_MODE=MISSING run_preflight
 assert_failure 'missing Object Storage TimersCalendar fails closed'
@@ -316,9 +362,9 @@ unset MOCK_POSTGRES_TIMER_CALENDAR_MODE
 MOCK_POSTGRES_TIMER_CALENDAR_MODE=MALFORMED run_preflight
 assert_failure 'malformed PostgreSQL TimersCalendar fails closed'
 unset MOCK_POSTGRES_TIMER_CALENDAR_MODE
-MOCK_NEXT_TRIGGER='2099-01-01 00:00:00 UTC' run_preflight
+MOCK_OBJECT_NEXT_TRIGGER='2099-01-01 00:00:00 UTC' run_preflight
 assert_failure 'absurd future Object Storage trigger fails closed'
-unset MOCK_NEXT_TRIGGER
+unset MOCK_OBJECT_NEXT_TRIGGER
 
 run_preflight deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 assert_failure 'runtime SHA mismatch fails runtime identity gate'
@@ -456,21 +502,21 @@ assert_failure 'symlink Object environment fails closed'
 rm "$ENV_FILE"
 mv "$TEST_ROOT/object-backup.env.real" "$ENV_FILE"
 
-MOCK_TIMER_ENABLED=disabled run_preflight
-assert_failure 'disabled timer fails closed'
-unset MOCK_TIMER_ENABLED
-MOCK_TIMER_STATE=inactive run_preflight
-assert_failure 'inactive timer fails closed'
-unset MOCK_TIMER_STATE
-MOCK_TIMER_STATE=failed run_preflight
-assert_failure 'failed timer fails closed'
-unset MOCK_TIMER_STATE
-MOCK_TIMER_STATE=unknown run_preflight
-assert_failure 'ambiguous timer fails closed'
-unset MOCK_TIMER_STATE
-MOCK_NEXT_TRIGGER=n/a run_preflight
-assert_failure 'missing future trigger fails closed'
-unset MOCK_NEXT_TRIGGER
+MOCK_POSTGRES_TIMER_ENABLED=disabled run_preflight
+assert_failure 'disabled PostgreSQL timer fails closed'
+unset MOCK_POSTGRES_TIMER_ENABLED
+MOCK_POSTGRES_TIMER_STATE=inactive run_preflight
+assert_failure 'inactive PostgreSQL timer fails closed'
+unset MOCK_POSTGRES_TIMER_STATE
+MOCK_POSTGRES_TIMER_STATE=failed run_preflight
+assert_failure 'failed PostgreSQL timer fails closed'
+unset MOCK_POSTGRES_TIMER_STATE
+MOCK_POSTGRES_TIMER_STATE=unknown run_preflight
+assert_failure 'ambiguous PostgreSQL timer fails closed'
+unset MOCK_POSTGRES_TIMER_STATE
+MOCK_POSTGRES_NEXT_TRIGGER=n/a run_preflight
+assert_failure 'missing PostgreSQL future trigger fails closed'
+unset MOCK_POSTGRES_NEXT_TRIGGER
 MOCK_OBJECT_SERVICE_STATE=failed run_preflight
 assert_failure 'failed Object Storage service fails closed'
 unset MOCK_OBJECT_SERVICE_STATE
