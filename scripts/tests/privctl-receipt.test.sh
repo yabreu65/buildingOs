@@ -15,6 +15,7 @@ ACTIVATION_MARKER="$ACTIVATION_STATE_DIR/object-backup-activation.state"
 OBJECT_SERVICE_UNIT="$FAKE_ROOT/etc/systemd/system/pawtech-buildingos-object-backup.service"
 OBJECT_TIMER_UNIT="$FAKE_ROOT/etc/systemd/system/pawtech-buildingos-object-backup.timer"
 OBJECT_TIMER='pawtech-buildingos-object-backup.timer'
+ACTIVE_TIMER_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=Wed 2025-06-25 02:15:00 UTC }'
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 PASS_COUNT=0
@@ -373,6 +374,42 @@ assert_contains 'serialized TimersCalendar timer start uses the fixed timer' "ar
 
 make_fixture
 write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR="$ACTIVE_TIMER_CALENDAR" assert_success 'active serialized TimersCalendar allows timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_contains 'active serialized TimersCalendar timer enable uses the fixed timer' "argv: <enable> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+write_activation_marker
+MOCK_TIMERS_CALENDAR="$ACTIVE_TIMER_CALENDAR" assert_success 'active serialized TimersCalendar allows timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_contains 'active serialized TimersCalendar timer start uses the fixed timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_activation_marker
+MOCK_TIMERS_CALENDAR="$ACTIVE_TIMER_CALENDAR" assert_success 'active serialized TimersCalendar allows timer stop' "$FAKE_LAUNCHER" object-backup-timer-stop
+assert_contains 'active serialized TimersCalendar timer stop uses the fixed timer' "argv: <stop> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_activation_marker
+MOCK_TIMERS_CALENDAR="$ACTIVE_TIMER_CALENDAR" assert_success 'active serialized TimersCalendar allows timer disable' "$FAKE_LAUNCHER" object-backup-timer-disable
+assert_contains 'active serialized TimersCalendar timer disable uses the fixed timer' "argv: <disable> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=Mon 2025-06-25 02:15:00 UTC }' assert_failure 'serialized next_elapse with mismatched weekday rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'mismatched serialized next_elapse weekday emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=Wed 2025-06-25 02:15:00 ChST }' assert_success 'mixed-case serialized next_elapse timezone allows timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_contains 'mixed-case serialized next_elapse timezone uses the fixed timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=Wed 2025-06-25 02:15:00 UTC extra }' assert_failure 'multi-field serialized next_elapse timezone rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'multi-field serialized next_elapse timezone emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
 MOCK_TIMERS_CALENDAR='prefix *-*-* 02:15:00 suffix' assert_failure 'plain TimersCalendar substring rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
 assert_empty 'plain TimersCalendar substring emits no mutation' "$SYSTEMCTL_LOG"
 
@@ -400,6 +437,46 @@ make_fixture
 write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
 MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=(null) } trailing' assert_failure 'serialized TimersCalendar with extra text rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
 assert_empty 'serialized TimersCalendar with extra text emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=not-a-systemd-timestamp }' assert_failure 'arbitrary serialized next_elapse rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'arbitrary serialized next_elapse emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=Wed 2025-06-25 24:15:00 UTC }' assert_failure 'out-of-range serialized next_elapse time rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'out-of-range serialized next_elapse time emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=Wed 2025-02-29 02:15:00 UTC }' assert_failure 'invalid serialized next_elapse date rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'invalid serialized next_elapse date emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 }' assert_failure 'serialized TimersCalendar without next_elapse rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'serialized TimersCalendar without next_elapse emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse= }' assert_failure 'serialized TimersCalendar with empty next_elapse rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'serialized TimersCalendar with empty next_elapse emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=(null) ; next_elapse=Wed 2025-06-25 02:15:00 UTC }' assert_failure 'duplicate serialized next_elapse rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'duplicate serialized next_elapse emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; OnCalendar=*-*-* 02:15:00 ; next_elapse=(null) }' assert_failure 'duplicate serialized OnCalendar rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'duplicate serialized OnCalendar emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=(null) ; unexpected=value }' assert_failure 'unexpected serialized TimersCalendar field rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'unexpected serialized TimersCalendar field emits no mutation' "$SYSTEMCTL_LOG"
 
 make_fixture
 write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
