@@ -245,11 +245,121 @@ validate_service_contract() {
   [ -z "$service_post" ] || fail
 }
 
+validate_timer_calendar() {
+  timer_calendar="$1"
+  parsed="$(printf '%s\n' "$timer_calendar" | "$AWK" -v expected='*-*-* 02:15:00' '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    function is_digits(value, width) {
+      return length(value) == width && value ~ /^[0-9][0-9]*$/
+    }
+    function is_leap_year(year) {
+      return year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)
+    }
+    function valid_weekday(weekday, year, month, day, offsets, names, adjusted_year, weekday_number) {
+      split("0 3 2 5 0 3 5 1 4 6 2 4", offsets, " ")
+      split("Sun Mon Tue Wed Thu Fri Sat", names, " ")
+      adjusted_year=year
+      if (month < 3) adjusted_year--
+      weekday_number=(adjusted_year + int(adjusted_year / 4) - int(adjusted_year / 100) + int(adjusted_year / 400) + offsets[month] + day) % 7
+      return weekday == names[weekday_number + 1]
+    }
+    function valid_timezone(zone, offset_hour, offset_minute) {
+      if (zone == "UT" || zone == "UTC" || zone == "GMT") return 1
+      if (zone ~ /^[A-Za-z][A-Za-z][A-Za-z][A-Za-z]*$/ && length(zone) <= 5) return 1
+      if (zone ~ /^[+-][0-9][0-9]$/) {
+        offset_hour=substr(zone, 2, 2) + 0
+        return offset_hour <= 23
+      }
+      if (zone ~ /^[+-][0-9][0-9]:[0-9][0-9]$/) {
+        offset_hour=substr(zone, 2, 2) + 0
+        offset_minute=substr(zone, 5, 2) + 0
+        return offset_hour <= 23 && offset_minute <= 59
+      }
+      if (zone ~ /^[+-][0-9][0-9][0-9][0-9]$/) {
+        offset_hour=substr(zone, 2, 2) + 0
+        offset_minute=substr(zone, 4, 2) + 0
+        return offset_hour <= 23 && offset_minute <= 59
+      }
+      return 0
+    }
+    function valid_active_timestamp(value, fields, date_fields, time_fields, year, month, day, hour, minute, second, max_day, zone) {
+      if (value !~ /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [^[:space:]]+$/) return 0
+      if (split(value, fields, " ") != 4) return 0
+      if (split(fields[2], date_fields, "-") != 3 || split(fields[3], time_fields, ":") != 3) return 0
+      year=date_fields[1] + 0
+      month=date_fields[2] + 0
+      day=date_fields[3] + 0
+      hour=time_fields[1] + 0
+      minute=time_fields[2] + 0
+      second=time_fields[3] + 0
+      zone=fields[4]
+      if (!is_digits(date_fields[1], 4) || !is_digits(date_fields[2], 2) || !is_digits(date_fields[3], 2) ||
+          !is_digits(time_fields[1], 2) || !is_digits(time_fields[2], 2) || !is_digits(time_fields[3], 2)) return 0
+      if (year < 1 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return 0
+      max_day=31
+      if (month == 4 || month == 6 || month == 9 || month == 11) max_day=30
+      if (month == 2) max_day=is_leap_year(year) ? 29 : 28
+      if (day < 1 || day > max_day) return 0
+      if (!valid_weekday(fields[1], year, month, day)) return 0
+      return valid_timezone(zone)
+    }
+    NR != 1 {
+      invalid=1
+      next
+    }
+    {
+      value=trim($0)
+      if (value == expected) {
+        valid=1
+        next
+      }
+      if (value !~ /^\{.*\}$/) {
+        invalid=1
+        next
+      }
+      value=substr(value, 2, length(value) - 2)
+      if (value ~ /;[[:space:]]*$/) {
+        invalid=1
+        next
+      }
+      field_count=split(value, fields, ";")
+      for (i=1; i<=field_count; i++) {
+        field=trim(fields[i])
+        if (field == "") {
+          invalid=1
+        } else if (field ~ /^OnCalendar=/) {
+          on_calendar_count++
+          if (field != "OnCalendar=" expected) invalid=1
+        } else if (field ~ /^next_elapse=/) {
+          next_elapse_count++
+          next_elapse=substr(field, 13)
+          if (next_elapse != "(null)" && !valid_active_timestamp(next_elapse)) invalid=1
+        } else {
+          invalid=1
+        }
+      }
+      if (on_calendar_count != 1 || next_elapse_count != 1 || invalid != 0) {
+        invalid=1
+        next
+      }
+      valid=1
+    }
+    END {
+      if (NR == 1 && valid == 1 && invalid == 0) print "PASS"
+    }
+  ')"
+  [ "$parsed" = PASS ] || fail
+}
+
 validate_timer_contract() {
   timer_calendar="$(systemctl_value TimersCalendar "$OBJECT_TIMER")"
   timer_delay="$(systemctl_value RandomizedDelayUSec "$OBJECT_TIMER")"
   timer_persistent="$(systemctl_value Persistent "$OBJECT_TIMER")"
-  [ "$timer_calendar" = '*-*-* 02:15:00' ] || fail
+  validate_timer_calendar "$timer_calendar"
   case "$timer_delay" in
     900000000|15min|'15min 0s') ;;
     *) fail ;;
