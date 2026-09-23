@@ -14,7 +14,9 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 
 PASS_COUNT=0
 FAIL_COUNT=0
+SKIP_COUNT=0
 pass() { PASS_COUNT=$((PASS_COUNT + 1)); printf 'ok %s - %s\n' "$PASS_COUNT" "$1"; }
+skip_test() { SKIP_COUNT=$((SKIP_COUNT + 1)); printf 'skip %s - %s\n' "$SKIP_COUNT" "$1"; }
 fail_test() { FAIL_COUNT=$((FAIL_COUNT + 1)); printf 'not ok %s - %s\n' "$FAIL_COUNT" "$1" >&2; }
 assert_success() { local name="$1"; shift; if "$@" >"$TEST_ROOT/output" 2>&1; then pass "$name"; else fail_test "$name"; command cat "$TEST_ROOT/output" >&2; fi; }
 assert_failure() { local name="$1"; shift; if "$@" >"$TEST_ROOT/output" 2>&1; then fail_test "$name (unexpected success)"; else pass "$name"; fi; }
@@ -250,8 +252,8 @@ if [[ "$(id -u)" -eq 0 ]]; then
   assert_failure 'trusted parent with wrong group is rejected when ownership can be changed' run_check "$CANDIDATE_ONE"
   chown 0:0 "$SUDOERS_PARENT"
 else
-  pass 'wrong trusted parent owner test skipped without chown capability'
-  pass 'wrong trusted parent group test skipped without chown capability'
+  skip_test 'wrong trusted parent owner rejection requires chown capability'
+  skip_test 'wrong trusted parent group rejection requires chown capability'
 fi
 assert_equal 'trusted sudoers parent remains mode 0750 after rejection tests' "$(metadata_for "$SUDOERS_PARENT")" "$(id -u):$(id -g):750"
 
@@ -371,7 +373,7 @@ assert_contains 'Object Storage timer remains bound to its independent service' 
 assert_contains 'preflight preserves the PostgreSQL timer check' 'inspect_timer POSTGRES_BACKUP_TIMER' "$ROOT_DIR/scripts/production-backup-preflight.sh"
 
 if (( FAIL_COUNT > 0 )); then
-  printf 'FAILED: %s failed, %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2
+  printf 'FAILED: %s failed, %s passed, %s skipped\n' "$FAIL_COUNT" "$PASS_COUNT" "$SKIP_COUNT" >&2
   exit 1
 fi
-printf 'PASSED: %s assertions\n' "$PASS_COUNT"
+printf 'PASSED: %s assertions, %s skipped\n' "$PASS_COUNT" "$SKIP_COUNT"
