@@ -14,6 +14,7 @@ readonly BIN_DIR="$TEST_ROOT/bin"
 readonly ENV_FILE="$TEST_ROOT/object-backup.env"
 readonly APP_DIR="$TEST_ROOT/app"
 readonly RCLONE_CONFIG_FILE="$TEST_ROOT/object-backup-rclone.conf"
+readonly RECEIPT_FILE="$TEST_ROOT/object-backup-receipt.json"
 readonly GIT_LOG="$TEST_ROOT/git.log"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
@@ -55,6 +56,16 @@ case "$path" in
     owner="${MOCK_CONFIG_OWNER:-yoryi}"
     group="${MOCK_CONFIG_GROUP:-yoryi}"
     mode="${MOCK_CONFIG_MODE:-600}"
+    ;;
+  *object-backup-receipt.json)
+    owner="${MOCK_RECEIPT_OWNER:-yoryi}"
+    group="${MOCK_RECEIPT_GROUP:-yoryi}"
+    mode="${MOCK_RECEIPT_MODE:-600}"
+    ;;
+  *buildingos-backup-preflight.*)
+    owner="${MOCK_RECEIPT_DIR_OWNER:-yoryi}"
+    group="${MOCK_RECEIPT_DIR_GROUP:-yoryi}"
+    mode="${MOCK_RECEIPT_DIR_MODE:-700}"
     ;;
   *) exit 1 ;;
 esac
@@ -238,7 +249,7 @@ write_env() {
     printf '# protected fixture\n'
     printf 'OBJECT_BACKUP_SOURCE=%s\n' "$source"
     printf 'OBJECT_BACKUP_DESTINATION=%s\n' "$destination"
-    printf 'OBJECT_BACKUP_RECEIPT=/var/lib/buildingos-object-backup/object-backup-receipt.json\n'
+    printf 'OBJECT_BACKUP_RECEIPT=%s\n' "$RECEIPT_FILE"
     printf 'RCLONE_CONFIG=%s\n' "$RCLONE_CONFIG_FILE"
   } > "$ENV_FILE"
 }
@@ -246,17 +257,70 @@ write_env() {
 printf '[prod]\ntype = s3\n' > "$RCLONE_CONFIG_FILE"
 chmod 0600 "$RCLONE_CONFIG_FILE"
 
+write_receipt() {
+  local source="${1-prod:buildingos-production}"
+  local destination="${2-backup:buildingos-production-backup}"
+  local copy_status="${3-PASS}"
+  local verification_status="${4-PASS}"
+  local status="${5-PASS}"
+  printf '{"receipt_version":1,"started_at_utc":"2026-09-06T02:15:00Z","completed_at_utc":"2026-09-06T02:16:00Z","source":"%s","destination":"%s","copy_status":"%s","verification_status":"%s","status":"%s","recovery_point_valid":"NOT_EVALUATED"}\n' \
+    "$source" "$destination" "$copy_status" "$verification_status" "$status" > "$RECEIPT_FILE"
+  chmod 0600 "$RECEIPT_FILE"
+}
+
 run_preflight() {
   local runtime_sha="${1-2ac603be8018ffc3df67fb4e84149aea4f780cea}"
   set +e
-  RUN_OUTPUT="$(PATH="$BIN_DIR" MOCK_GIT_LOG="$GIT_LOG" BUILDINGOS_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY PREFLIGHT_APP_DIR="$APP_DIR" PREFLIGHT_ENV_FILE="$ENV_FILE" PREFLIGHT_RCLONE_CONFIG_FILE="$RCLONE_CONFIG_FILE" /bin/bash "$PREFLIGHT" 2>&1 "$runtime_sha")"
+  RUN_OUTPUT="$(PATH="$BIN_DIR" MOCK_GIT_LOG="$GIT_LOG" BUILDINGOS_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY PREFLIGHT_APP_DIR="$APP_DIR" PREFLIGHT_ENV_FILE="$ENV_FILE" PREFLIGHT_RCLONE_CONFIG_FILE="$RCLONE_CONFIG_FILE" PREFLIGHT_RECEIPT_FILE="$RECEIPT_FILE" /bin/bash "$PREFLIGHT" 2>&1 "$runtime_sha")"
   RUN_RC=$?
   set -e
 }
 
 write_env
+write_receipt
+receipt_before="$(shasum -a 256 "$RECEIPT_FILE")"
 run_preflight
+receipt_after="$(shasum -a 256 "$RECEIPT_FILE")"
 assert_success 'current topology passes with active timers and inactive services'
+assert_contains 'Object Storage active phase accepts a secure PASS receipt' 'OBJECT_BACKUP_RECEIPT=PASS' "$RUN_OUTPUT"
+[[ "$receipt_before" == "$receipt_after" ]] && pass 'preflight does not rewrite the active receipt' || fail_test 'preflight does not rewrite the active receipt'
+printf '{ "extra_text":"accepted", "status":"PASS", "nullable":null, "destination":"backup:buildingos-production-backup", "attempt":3, "copy_status":"PASS", "verified":true, "source":"prod:buildingos-production", "verification_status":"PASS" }\n' > "$RECEIPT_FILE"
+run_preflight
+assert_success 'active Object Storage timer accepts reordered required fields and optional scalar fields'
+printf '{"source":"prod:buildingos-production","destination":"backup:buildingos-production-backup","copy_status":"PASS","verification_status":"PASS"}\n' > "$RECEIPT_FILE"
+run_preflight
+assert_failure 'active Object Storage timer rejects a receipt missing a required field'
+printf '{"source":true,"destination":"backup:buildingos-production-backup","copy_status":"PASS","verification_status":"PASS","status":"PASS"}\n' > "$RECEIPT_FILE"
+run_preflight
+assert_failure 'active Object Storage timer rejects a non-string required field'
+printf '{"receipt_version":1,"started_at_utc":"2026-09-06T02:15:00Z","completed_at_utc":"2026-09-06T02:16:00Z","source":"prod:buildingos-production","destination":"backup:buildingos-production-backup","copy_status":"PASS","verification_status":"PASS","status":"PASS","recovery_point_valid":"NOT_EVALUATED",}\n' > "$RECEIPT_FILE"
+run_preflight
+assert_failure 'active Object Storage timer rejects malformed JSON with matching fields'
+printf '{"receipt_version":1,"started_at_utc":"2026-09-06T02:15:00Z","completed_at_utc":"2026-09-06T02:16:00Z","source":"prod:buildingos-production","destination":"backup:buildingos-production-backup","copy_status":"PASS","verification_status":"PASS","status":"PASS","recovery_point_valid":"NOT_EVALUATED"}\n\n' > "$RECEIPT_FILE"
+run_preflight
+assert_failure 'active Object Storage timer rejects receipt trailing extra lines'
+printf '{"receipt_version":1,"started_at_utc":"2026-09-06T02:15:00Z","completed_at_utc":"2026-09-06T02:16:00Z","source":"prod:buildingos-production","source":"untrusted:buildingos-production","destination":"backup:buildingos-production-backup","copy_status":"PASS","verification_status":"PASS","status":"PASS","recovery_point_valid":"NOT_EVALUATED"}\n' > "$RECEIPT_FILE"
+run_preflight
+assert_failure 'active Object Storage timer rejects duplicate receipt keys'
+printf '{"receipt_version":1,"started_at_utc":"2026-09-06T02:15:00Z","completed_at_utc":"2026-09-06T02:16:00Z","source":"prod:buildingos-production","sour\u0063e":"untrusted:buildingos-production","destination":"backup:buildingos-production-backup","copy_status":"PASS","verification_status":"PASS","status":"PASS","recovery_point_valid":"NOT_EVALUATED"}\n' > "$RECEIPT_FILE"
+run_preflight
+assert_failure 'active Object Storage timer rejects an escaped receipt key alias'
+printf '{"receipt_version":1,"started_at_utc":"2026-09-06T02:15:00Z","completed_at_utc":"2026-09-06T02:16:00Z","source":"prod:buildingos-production","destination":"backup:buildingos-production-backup","copy_status":"PASS","verification_status":"PASS","status" "PASS","recovery_point_valid":"NOT_EVALUATED"}\n' > "$RECEIPT_FILE"
+run_preflight
+assert_failure 'active Object Storage timer rejects malformed receipt syntax'
+write_receipt
+MOCK_RECEIPT_DIR_OWNER=root run_preflight
+assert_failure 'active Object Storage timer rejects an incorrectly owned receipt directory'
+MOCK_RECEIPT_DIR_GROUP=root run_preflight
+assert_failure 'active Object Storage timer rejects an incorrectly grouped receipt directory'
+MOCK_RECEIPT_DIR_MODE=770 run_preflight
+assert_failure 'active Object Storage timer rejects a group-writable receipt directory'
+MOCK_RECEIPT_DIR_MODE=707 run_preflight
+assert_failure 'active Object Storage timer rejects an other-writable receipt directory'
+unset MOCK_RECEIPT_DIR_OWNER MOCK_RECEIPT_DIR_GROUP MOCK_RECEIPT_DIR_MODE
+write_receipt
+run_preflight
+assert_success 'current topology remains valid after receipt rejection checks'
 assert_contains 'PostgreSQL timer enabled is accepted' 'POSTGRES_BACKUP_TIMER_ENABLED=YES' "$RUN_OUTPUT"
 assert_contains 'PostgreSQL timer active is accepted' 'POSTGRES_BACKUP_TIMER_ACTIVE=YES' "$RUN_OUTPUT"
 assert_contains 'PostgreSQL timer future trigger is accepted' 'POSTGRES_BACKUP_TIMER_FUTURE_TRIGGER=YES' "$RUN_OUTPUT"
@@ -287,15 +351,33 @@ assert_contains 'Object environment contract is accepted' 'OBJECT_BACKUP_ENV=YES
 assert_contains 'Object environment root ownership and 0600 mode pass' 'OBJECT_BACKUP_ENV=YES' "$RUN_OUTPUT"
 assert_contains 'backup concurrency is safe' 'BACKUP_CONCURRENCY_SAFE=YES' "$RUN_OUTPUT"
 
+mv "$RECEIPT_FILE" "$RECEIPT_FILE.saved"
 MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a run_preflight
-assert_success 'Object Storage timer pre-activation phase passes'
+assert_success 'Object Storage timer pre-activation phase passes without a receipt path'
 assert_contains 'Object timer pre-activation phase is emitted' 'OBJECT_BACKUP_TIMER_PHASE=PRE_ACTIVATION' "$RUN_OUTPUT"
+assert_contains 'Object timer pre-activation requires an absent receipt path' 'OBJECT_BACKUP_RECEIPT=ABSENT' "$RUN_OUTPUT"
 assert_absent 'Object timer pre-activation phase emits no active phase' 'OBJECT_BACKUP_TIMER_PHASE=ACTIVE' "$RUN_OUTPUT"
 assert_contains 'Object timer is disabled during pre-activation' 'OBJECT_BACKUP_TIMER_ENABLED=NO' "$RUN_OUTPUT"
 assert_contains 'Object timer is inactive during pre-activation' 'OBJECT_BACKUP_TIMER_ACTIVE=NO' "$RUN_OUTPUT"
 assert_contains 'Object service remains inactive during pre-activation' 'OBJECT_BACKUP_SERVICE_STATE=inactive' "$RUN_OUTPUT"
 MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER='' run_preflight
-assert_success 'Object Storage pre-activation accepts an empty trigger value'
+assert_success 'Object Storage pre-activation accepts an empty trigger value without a receipt path'
+write_receipt
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a run_preflight
+assert_failure 'pre-activation with a prior valid receipt fails closed'
+assert_absent 'pre-activation receipt failure emits no timer phase' 'OBJECT_BACKUP_TIMER_PHASE=' "$RUN_OUTPUT"
+printf '{\n' > "$RECEIPT_FILE"
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a run_preflight
+assert_failure 'pre-activation with a malformed receipt fails closed'
+write_receipt
+MOCK_RECEIPT_MODE=644 MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a run_preflight
+assert_failure 'pre-activation with an insecure receipt fails closed'
+unset MOCK_RECEIPT_MODE
+mv "$RECEIPT_FILE" "$RECEIPT_FILE.real"
+ln -s "$RECEIPT_FILE.real" "$RECEIPT_FILE"
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a run_preflight
+assert_failure 'pre-activation with a symlink receipt fails closed'
+mv "$RECEIPT_FILE.real" "$RECEIPT_FILE"
 unset MOCK_OBJECT_NEXT_TRIGGER
 MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a MOCK_OBJECT_PERSISTENT=false run_preflight
 assert_failure 'non-persistent pre-activation Object Storage timer fails closed'
@@ -303,6 +385,40 @@ unset MOCK_OBJECT_PERSISTENT
 MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a MOCK_OBJECT_RANDOMIZED_DELAY=600000000 run_preflight
 assert_failure 'wrong pre-activation Object Storage timer delay fails closed'
 unset MOCK_OBJECT_RANDOMIZED_DELAY
+
+mv "$RECEIPT_FILE" "$RECEIPT_FILE.missing"
+run_preflight
+assert_failure 'active Object Storage timer with a missing receipt fails closed'
+assert_absent 'missing active receipt emits no timer phase' 'OBJECT_BACKUP_TIMER_PHASE=' "$RUN_OUTPUT"
+mv "$RECEIPT_FILE.missing" "$RECEIPT_FILE"
+printf '{\n' > "$RECEIPT_FILE"
+run_preflight
+assert_failure 'active Object Storage timer with a malformed receipt fails closed'
+write_receipt 'untrusted:buildingos-production' 'backup:buildingos-production-backup'
+run_preflight
+assert_failure 'active Object Storage timer with a non-authoritative receipt source fails closed'
+write_receipt 'prod:buildingos-production' 'untrusted:buildingos-production-backup'
+run_preflight
+assert_failure 'active Object Storage timer with an unexpected receipt destination fails closed'
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup' FAIL
+run_preflight
+assert_failure 'active Object Storage timer with a non-PASS copy receipt fails closed'
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup' PASS FAIL
+run_preflight
+assert_failure 'active Object Storage timer with a non-PASS verification receipt fails closed'
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup' PASS PASS FAIL
+run_preflight
+assert_failure 'active Object Storage timer with a non-PASS overall receipt fails closed'
+assert_absent 'non-PASS active receipt emits no timer phase' 'OBJECT_BACKUP_TIMER_PHASE=' "$RUN_OUTPUT"
+MOCK_RECEIPT_OWNER=root MOCK_RECEIPT_GROUP=root MOCK_RECEIPT_MODE=600 run_preflight
+assert_failure 'active Object Storage timer with an insecure receipt fails closed'
+unset MOCK_RECEIPT_OWNER MOCK_RECEIPT_GROUP MOCK_RECEIPT_MODE
+mv "$RECEIPT_FILE" "$RECEIPT_FILE.real"
+ln -s "$RECEIPT_FILE.real" "$RECEIPT_FILE"
+run_preflight
+assert_failure 'active Object Storage timer with a symlink receipt fails closed'
+mv "$RECEIPT_FILE.real" "$RECEIPT_FILE"
+write_receipt
 
 MOCK_OBJECT_TIMER_ENABLED=enabled MOCK_OBJECT_TIMER_STATE=inactive run_preflight
 assert_failure 'enabled inactive Object Storage timer fails closed'
@@ -472,7 +588,7 @@ MOCK_TIMEOUT_MODE=MISSING run_preflight
 assert_failure 'missing timeout fails closed'
 unset MOCK_TIMEOUT_MODE
 
-sed -i.bak 's|OBJECT_BACKUP_RECEIPT=/var/lib/buildingos-object-backup/object-backup-receipt.json|OBJECT_BACKUP_RECEIPT=/tmp/wrong-receipt.json|' "$ENV_FILE"
+sed -i.bak "s|OBJECT_BACKUP_RECEIPT=$RECEIPT_FILE|OBJECT_BACKUP_RECEIPT=/tmp/wrong-receipt.json|" "$ENV_FILE"
 run_preflight
 assert_failure 'wrong Object Storage receipt path fails closed'
 mv "$ENV_FILE.bak" "$ENV_FILE"

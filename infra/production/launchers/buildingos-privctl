@@ -16,6 +16,7 @@ readonly PREFLIGHT_CONTROL='/usr/local/libexec/buildingos-backup-preflight/produ
 readonly ENDPOINT_HELPER='/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh'
 readonly OBJECT_BACKUP_EXEC='/usr/local/libexec/buildingos-backup/backup-object-storage.sh'
 readonly SUDOERS_POLICY='/etc/sudoers.d/buildingos-production-backup-preflight'
+readonly SUDOERS_DIRECTORY='/etc/sudoers.d'
 readonly OBJECT_SERVICE_UNIT='/etc/systemd/system/pawtech-buildingos-object-backup.service'
 readonly OBJECT_TIMER_UNIT='/etc/systemd/system/pawtech-buildingos-object-backup.timer'
 readonly PRIVCTL_LAUNCHER='/usr/local/sbin/buildingos-privctl'
@@ -57,6 +58,15 @@ assert_directory() {
   [ -d "$path" ] || fail
   [ ! -L "$path" ] || fail
   [ "$(metadata "$path")" = "0:0:$mode" ] || fail
+}
+
+assert_trusted_sudoers_directory() {
+  [ -d "$SUDOERS_DIRECTORY" ] || fail
+  [ ! -L "$SUDOERS_DIRECTORY" ] || fail
+  case "$(metadata "$SUDOERS_DIRECTORY")" in
+    0:0:750|0:0:755) ;;
+    *) fail ;;
+  esac
 }
 
 release_payload() {
@@ -256,6 +266,8 @@ validate_timer_ready() {
 }
 
 validate_receipt() {
+  [ -d "$RECEIPT_DIR" ] || fail
+  [ ! -L "$RECEIPT_DIR" ] || fail
   receipt_uid="$($ID -u "$SERVICE_USER")" || fail
   receipt_gid="$($ID -g "$SERVICE_USER")" || fail
   receipt_dir_metadata="$(metadata "$RECEIPT_DIR")" || fail
@@ -315,7 +327,7 @@ assert_directory /usr/local/sbin 755
 assert_directory /usr/local/libexec 755
 assert_directory /usr/local/libexec/buildingos-backup 755
 assert_directory /etc 755
-assert_directory /etc/sudoers.d 755
+assert_trusted_sudoers_directory
 assert_directory /etc/systemd 755
 assert_directory /etc/systemd/system 755
 assert_directory "$CONTROL_DIR" 755

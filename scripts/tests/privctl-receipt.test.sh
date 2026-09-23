@@ -77,6 +77,7 @@ else
 fi
 case "$path" in
   */var/lib/buildingos-object-backup|*/var/lib/buildingos-object-backup/object-backup-receipt.json) printf '1001:1001:%s\n' "$mode" ;;
+  */etc/sudoers.d) printf '%s:%s:%s\n' "${MOCK_SUDOERS_DIR_UID:-0}" "${MOCK_SUDOERS_DIR_GID:-0}" "${MOCK_SUDOERS_DIR_MODE:-$mode}" ;;
   *) printf '0:0:%s\n' "$mode" ;;
 esac
 EOF
@@ -241,6 +242,13 @@ assert_failure 'missing receipt rejects timer enable' "$FAKE_LAUNCHER" object-ba
 assert_empty 'missing receipt timer enable emits no mutation' "$SYSTEMCTL_LOG"
 
 make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+mv "$FAKE_ROOT/var/lib/buildingos-object-backup" "$FAKE_ROOT/var/lib/buildingos-object-backup.real"
+ln -s "$FAKE_ROOT/var/lib/buildingos-object-backup.real" "$FAKE_ROOT/var/lib/buildingos-object-backup"
+assert_failure 'symlink receipt parent rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'symlink receipt parent rejection emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
 write_receipt 'unexpected:buildingos-production' 'backup:buildingos-production-backup'
 assert_failure 'unexpected source remote rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
 assert_empty 'unexpected source timer enable emits no mutation' "$SYSTEMCTL_LOG"
@@ -268,6 +276,49 @@ make_fixture
 write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
 assert_success 'valid receipt allows timer start' "$FAKE_LAUNCHER" object-backup-timer-start
 assert_contains 'valid receipt timer start uses the fixed timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+chmod 0750 "$FAKE_ROOT/etc/sudoers.d"
+assert_success 'root-owned 0750 sudoers parent allows timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_contains '0750 sudoers parent reaches the fixed timer enable operation' "argv: <enable> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+chmod 0755 "$FAKE_ROOT/etc/sudoers.d"
+assert_success 'root-owned 0755 sudoers parent allows timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_contains '0755 sudoers parent reaches the fixed timer start operation' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+for unsafe_mode in 0775 0777; do
+  make_fixture
+  write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+  chmod "$unsafe_mode" "$FAKE_ROOT/etc/sudoers.d"
+  assert_failure "unsafe sudoers parent mode $unsafe_mode rejects timer enable" "$FAKE_LAUNCHER" object-backup-timer-enable
+  assert_empty "unsafe sudoers parent mode $unsafe_mode emits no systemctl mutation" "$SYSTEMCTL_LOG"
+done
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_SUDOERS_DIR_UID=1001 assert_failure 'wrong sudoers parent owner rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'wrong sudoers parent owner emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_SUDOERS_DIR_GID=1001 assert_failure 'wrong sudoers parent group rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'wrong sudoers parent group emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+mv "$FAKE_ROOT/etc/sudoers.d" "$FAKE_ROOT/etc/sudoers.d.real"
+ln -s "$FAKE_ROOT/etc/sudoers.d.real" "$FAKE_ROOT/etc/sudoers.d"
+assert_failure 'symlink sudoers parent rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'symlink sudoers parent emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+chmod 0750 "$FAKE_ROOT/usr/local/libexec/buildingos-backup"
+assert_failure 'release payload directory below 0755 rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'non-0755 release payload directory emits no systemctl mutation' "$SYSTEMCTL_LOG"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s failed, %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2

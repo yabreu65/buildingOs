@@ -24,6 +24,8 @@ OBJECT_BACKUP_SERVICE_STATE='UNKNOWN'
 EXPECTED_APP_DIR="$DEFAULT_APP_DIR"
 OBJECT_BACKUP_ENV_FILE="$DEFAULT_OBJECT_BACKUP_ENV_FILE"
 OBJECT_BACKUP_RCLONE_CONFIG="$DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG"
+OBJECT_BACKUP_RECEIPT_FILE="$OBJECT_BACKUP_RECEIPT"
+OBJECT_BACKUP_TIMER_PHASE=''
 
 if ! declare -F endpoint_identity >/dev/null 2>&1; then
   helper_dir="${BASH_SOURCE[0]%/*}"
@@ -59,6 +61,112 @@ file_owner() {
 
 file_group() {
   stat -L -c '%G' -- "$1" 2>/dev/null || stat -L -f '%Sg' "$1"
+}
+
+receipt_has_one_line() {
+  local file="$1"
+  local line count=0
+  receipt_line=''
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    count=$((count + 1))
+    [[ "$count" -eq 1 ]] || return 1
+    receipt_line="$line"
+  done < "$file"
+  [[ "$count" -eq 1 && -n "$receipt_line" ]]
+}
+
+receipt_json_is_valid() {
+  printf '%s\n' "$1" | awk '
+    function skip_whitespace() {
+      while (pos <= length(text) && substr(text, pos, 1) ~ /[ \t\r\n]/) pos++
+    }
+    function string_end(start, p, character, hex_index) {
+      if (substr(text, start, 1) != "\"") return 0
+      p=start + 1
+      while (p <= length(text)) {
+        character=substr(text, p, 1)
+        if (character == "\"") return p + 1
+        if (character == "\\") {
+          p++
+          character=substr(text, p, 1)
+          if (character ~ /^["\\\/bfnrt]$/) {
+            p++
+          } else if (character == "u") {
+            for (hex_index=1; hex_index<=4; hex_index++) {
+              if (substr(text, p + hex_index, 1) !~ /^[0-9A-Fa-f]$/) return 0
+            }
+            p += 5
+          } else {
+            return 0
+          }
+        } else if (character ~ /[[:cntrl:]]/) {
+          return 0
+        } else {
+          p++
+        }
+      }
+      return 0
+    }
+    function scalar_end(start, remainder) {
+      if (substr(text, start, 1) == "\"") return string_end(start)
+      if (substr(text, start, 4) == "true" || substr(text, start, 4) == "null") return start + 4
+      if (substr(text, start, 5) == "false") return start + 5
+      remainder=substr(text, start)
+      if (match(remainder, /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?/)) return start + RLENGTH
+      return 0
+    }
+    {
+      text=$0
+      pos=1
+      skip_whitespace()
+      if (substr(text, pos, 1) != "{") invalid=1
+      pos++
+      skip_whitespace()
+      if (substr(text, pos, 1) == "}") invalid=1
+
+      while (!invalid) {
+        key_start=pos
+        pos=string_end(pos)
+        if (!pos) { invalid=1; break }
+        key=substr(text, key_start, pos - key_start)
+        if (key ~ /\\/) { invalid=1; break }
+        if (key in seen) { invalid=1; break }
+        seen[key]=1
+
+        skip_whitespace()
+        if (substr(text, pos, 1) != ":") { invalid=1; break }
+        pos++
+        skip_whitespace()
+        value_start=pos
+        pos=scalar_end(pos)
+        if (!pos) { invalid=1; break }
+        value=substr(text, value_start, pos - value_start)
+
+        if (key == "\"source\"") { source++; if (value == "\"prod:buildingos-production\"") source_ok++ }
+        if (key == "\"destination\"") { destination++; if (value == "\"backup:buildingos-production-backup\"") destination_ok++ }
+        if (key == "\"copy_status\"") { copy_status++; if (value == "\"PASS\"") copy_status_ok++ }
+        if (key == "\"verification_status\"") { verification_status++; if (value == "\"PASS\"") verification_status_ok++ }
+        if (key == "\"status\"") { status++; if (value == "\"PASS\"") status_ok++ }
+
+        skip_whitespace()
+        separator=substr(text, pos, 1)
+        if (separator == ",") {
+          pos++
+          skip_whitespace()
+        } else if (separator == "}") {
+          pos++
+          skip_whitespace()
+          if (pos <= length(text)) invalid=1
+          break
+        } else {
+          invalid=1
+        }
+      }
+    }
+    END {
+      exit !(NR == 1 && !invalid && source == 1 && source_ok == 1 && destination == 1 && destination_ok == 1 && copy_status == 1 && copy_status_ok == 1 && verification_status == 1 && verification_status_ok == 1 && status == 1 && status_ok == 1)
+    }
+  '
 }
 
 env_value() {
@@ -577,7 +685,9 @@ inspect_object_timer() {
   printf '%s_CALENDAR_MATCH=%s\n' "$label" "$(systemd_calendar_matches "$calendar" "$OBJECT_BACKUP_CALENDAR" && printf YES || printf NO)"
   printf '%s_PERSISTENT=%s\n' "$label" "$([[ "$persistent" == yes || "$persistent" == true ]] && printf YES || printf NO)"
   printf '%s_RANDOMIZED_DELAY_MATCH=%s\n' "$label" "$(systemd_delay_matches "$randomized" && printf YES || printf NO)"
-  [[ -n "$phase" && "$contract" == YES && "$OBJECT_BACKUP_SERVICE_STATE" == inactive ]] && printf 'OBJECT_BACKUP_TIMER_PHASE=%s\n' "$phase"
+  if [[ -n "$phase" && "$contract" == YES && "$OBJECT_BACKUP_SERVICE_STATE" == inactive ]]; then
+    OBJECT_BACKUP_TIMER_PHASE="$phase"
+  fi
   printf '%s_CONTRACT=%s\n' "$label" "$contract"
 }
 
@@ -606,7 +716,7 @@ inspect_object_environment() {
     else
       fail_check 'Object Storage source or destination is not a safe remote bucket root'
     fi
-    [[ "$receipt" == "$OBJECT_BACKUP_RECEIPT" ]] || fail_check 'Object Storage receipt path is unexpected'
+    [[ "$receipt" == "$OBJECT_BACKUP_RECEIPT_FILE" ]] || fail_check 'Object Storage receipt path is unexpected'
     [[ "$rclone" == "$OBJECT_BACKUP_RCLONE_CONFIG" ]] || fail_check 'Object Storage rclone config path is unexpected'
     if file_is_regular_non_symlink "$rclone" && [[ -r "$rclone" ]]; then
       local config_owner config_group
@@ -625,6 +735,49 @@ inspect_object_environment() {
     if (( failures == before )); then env_ok='YES'; fi
   fi
   printf 'OBJECT_BACKUP_ENV=%s\n' "$env_ok"
+}
+
+inspect_object_receipt() {
+  local phase="$1"
+  local receipt_ok='NO' receipt_dir receipt_dir_owner receipt_dir_group receipt_dir_mode receipt_owner receipt_group receipt_mode before
+  before=$failures
+
+  if [[ "$phase" == PRE_ACTIVATION ]]; then
+    if [[ -e "$OBJECT_BACKUP_RECEIPT_FILE" || -L "$OBJECT_BACKUP_RECEIPT_FILE" ]]; then
+      fail_check 'Object Storage pre-activation must not have a receipt path'
+    else
+      receipt_ok='ABSENT'
+    fi
+  elif [[ "$phase" == ACTIVE ]]; then
+    receipt_dir="${OBJECT_BACKUP_RECEIPT_FILE%/*}"
+    if [[ ! -d "$receipt_dir" || -L "$receipt_dir" ]]; then
+      fail_check 'Object Storage receipt parent is not a real directory'
+    else
+      receipt_dir_owner="$(file_owner "$receipt_dir")"
+      receipt_dir_group="$(file_group "$receipt_dir")"
+      receipt_dir_mode="0$(file_mode "$receipt_dir")"
+      [[ "$receipt_dir_owner" == yoryi ]] || fail_check 'Object Storage receipt parent owner is not yoryi'
+      [[ "$receipt_dir_group" == yoryi ]] || fail_check 'Object Storage receipt parent group is not yoryi'
+      (( (8#${receipt_dir_mode#0} & 0022) == 0 )) || fail_check 'Object Storage receipt parent is writable by group or world'
+    fi
+    if ! file_is_regular_non_symlink "$OBJECT_BACKUP_RECEIPT_FILE" || [[ ! -r "$OBJECT_BACKUP_RECEIPT_FILE" ]]; then
+      fail_check 'Object Storage receipt is not a readable regular non-symlink file'
+    else
+      receipt_owner="$(file_owner "$OBJECT_BACKUP_RECEIPT_FILE")"
+      receipt_group="$(file_group "$OBJECT_BACKUP_RECEIPT_FILE")"
+      receipt_mode="0$(file_mode "$OBJECT_BACKUP_RECEIPT_FILE")"
+      [[ "$receipt_owner" == yoryi ]] || fail_check 'Object Storage receipt owner is not yoryi'
+      [[ "$receipt_group" == yoryi ]] || fail_check 'Object Storage receipt group is not yoryi'
+      [[ "$receipt_mode" == 0600 ]] || fail_check 'Object Storage receipt mode is not 0600'
+      receipt_has_one_line "$OBJECT_BACKUP_RECEIPT_FILE" || fail_check 'Object Storage receipt must contain exactly one line'
+      receipt_json_is_valid "$receipt_line" || fail_check 'Object Storage receipt is malformed or does not satisfy the required backup status'
+      [[ "$failures" -eq "$before" ]] && receipt_ok='PASS'
+    fi
+  else
+    fail_check 'Object Storage timer phase is unavailable for receipt validation'
+  fi
+
+  printf 'OBJECT_BACKUP_RECEIPT=%s\n' "$receipt_ok"
 }
 
 inspect_topology() {
@@ -666,6 +819,7 @@ main() {
     EXPECTED_APP_DIR="${PREFLIGHT_APP_DIR:?}"
     OBJECT_BACKUP_ENV_FILE="${PREFLIGHT_ENV_FILE:?}"
     OBJECT_BACKUP_RCLONE_CONFIG="${PREFLIGHT_RCLONE_CONFIG_FILE:?}"
+    OBJECT_BACKUP_RECEIPT_FILE="${PREFLIGHT_RECEIPT_FILE:?}"
   fi
 
   for command_name in "${required_commands[@]}"; do
@@ -683,10 +837,12 @@ main() {
     inspect_runtime
     inspect_topology
     inspect_object_environment
+    inspect_object_receipt "$OBJECT_BACKUP_TIMER_PHASE"
     inspect_concurrency
   fi
   printf 'PRODUCTION_WRITES=0\nBACKUP_STARTED=NO\n'
   if (( failures == 0 )); then
+    printf 'OBJECT_BACKUP_TIMER_PHASE=%s\n' "$OBJECT_BACKUP_TIMER_PHASE"
     printf 'PREFLIGHT_STATUS=PASS\n'
     return 0
   fi
