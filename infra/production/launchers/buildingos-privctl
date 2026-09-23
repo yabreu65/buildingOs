@@ -1,0 +1,334 @@
+#!/bin/sh
+set -eu
+
+readonly SAFE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+readonly ENV_COMMAND='/usr/bin/env'
+readonly SYSTEMCTL='/usr/bin/systemctl'
+readonly LOGGER='/usr/bin/logger'
+readonly STAT='/usr/bin/stat'
+readonly ID='/usr/bin/id'
+readonly AWK='/usr/bin/awk'
+readonly SHA256SUM='/usr/bin/sha256sum'
+readonly MANIFEST='/usr/local/libexec/buildingos-backup-preflight/manifest'
+readonly CONTROL_DIR='/usr/local/libexec/buildingos-backup-preflight'
+readonly INSTALLED_LAUNCHER='/usr/local/sbin/buildingos-production-backup-preflight'
+readonly PREFLIGHT_CONTROL='/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh'
+readonly ENDPOINT_HELPER='/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh'
+readonly OBJECT_BACKUP_EXEC='/usr/local/libexec/buildingos-backup/backup-object-storage.sh'
+readonly SUDOERS_POLICY='/etc/sudoers.d/buildingos-production-backup-preflight'
+readonly OBJECT_SERVICE_UNIT='/etc/systemd/system/pawtech-buildingos-object-backup.service'
+readonly OBJECT_TIMER_UNIT='/etc/systemd/system/pawtech-buildingos-object-backup.timer'
+readonly PRIVCTL_LAUNCHER='/usr/local/sbin/buildingos-privctl'
+readonly PRIVCTL_SUDOERS='/etc/sudoers.d/buildingos-privctl'
+readonly OBJECT_SERVICE='pawtech-buildingos-object-backup.service'
+readonly OBJECT_TIMER='pawtech-buildingos-object-backup.timer'
+readonly SERVICE_USER='yoryi'
+readonly RECEIPT_DIR='/var/lib/buildingos-object-backup'
+readonly RECEIPT='/var/lib/buildingos-object-backup/object-backup-receipt.json'
+
+operation=${1-unknown}
+
+fail() {
+  audit DENIED || :
+  printf '%s\n' 'ERROR: privileged control request denied' >&2
+  exit 1
+}
+
+hash_file() {
+  digest="$($SHA256SUM -- "$1")" || fail
+  printf '%s\n' "${digest%% *}"
+}
+
+metadata() {
+  "$STAT" -c '%u:%g:%a' -- "$1" 2>/dev/null || "$STAT" -f '%u:%g:%Lp' "$1"
+}
+
+assert_file() {
+  path="$1"
+  mode="$2"
+  [ -f "$path" ] || fail
+  [ ! -L "$path" ] || fail
+  [ "$(metadata "$path")" = "0:0:$mode" ] || fail
+}
+
+assert_directory() {
+  path="$1"
+  mode="$2"
+  [ -d "$path" ] || fail
+  [ ! -L "$path" ] || fail
+  [ "$(metadata "$path")" = "0:0:$mode" ] || fail
+}
+
+release_payload() {
+  tooling_source_sha="$1"
+  launcher_hash="$2"
+  control_hash="$3"
+  helper_hash="$4"
+  object_exec_hash="$5"
+  sudoers_hash="$6"
+  service_hash="$7"
+  timer_hash="$8"
+  privctl_launcher_hash="$9"
+  privctl_sudoers_hash="${10}"
+  printf 'manifest_version=1\n'
+  printf 'tooling_source_sha=%s\n' "$tooling_source_sha"
+  printf 'launcher_path=%s\nlauncher_sha256=%s\n' "$INSTALLED_LAUNCHER" "$launcher_hash"
+  printf 'control_path=%s\ncontrol_sha256=%s\n' "$PREFLIGHT_CONTROL" "$control_hash"
+  printf 'helper_path=%s\nhelper_sha256=%s\n' "$ENDPOINT_HELPER" "$helper_hash"
+  printf 'object_exec_path=%s\nobject_exec_sha256=%s\n' "$OBJECT_BACKUP_EXEC" "$object_exec_hash"
+  printf 'sudoers_path=%s\nsudoers_sha256=%s\n' "$SUDOERS_POLICY" "$sudoers_hash"
+  printf 'object_service_path=%s\nobject_service_sha256=%s\n' "$OBJECT_SERVICE_UNIT" "$service_hash"
+  printf 'object_timer_path=%s\nobject_timer_sha256=%s\n' "$OBJECT_TIMER_UNIT" "$timer_hash"
+  printf 'privctl_launcher_path=%s\nprivctl_launcher_sha256=%s\n' "$PRIVCTL_LAUNCHER" "$privctl_launcher_hash"
+  printf 'privctl_sudoers_path=%s\nprivctl_sudoers_sha256=%s\n' "$PRIVCTL_SUDOERS" "$privctl_sudoers_hash"
+}
+
+validate_release() {
+  tooling_source_sha=''
+  launcher_hash="$(hash_file "$INSTALLED_LAUNCHER")"
+  control_hash="$(hash_file "$PREFLIGHT_CONTROL")"
+  helper_hash="$(hash_file "$ENDPOINT_HELPER")"
+  object_exec_hash="$(hash_file "$OBJECT_BACKUP_EXEC")"
+  sudoers_hash="$(hash_file "$SUDOERS_POLICY")"
+  service_hash="$(hash_file "$OBJECT_SERVICE_UNIT")"
+  timer_hash="$(hash_file "$OBJECT_TIMER_UNIT")"
+  privctl_launcher_hash="$(hash_file "$PRIVCTL_LAUNCHER")"
+  privctl_sudoers_hash="$(hash_file "$PRIVCTL_SUDOERS")"
+  tooling_source_sha="$(awk -F= '$1 == "tooling_source_sha" { count++; value=$2 } END { if (count == 1) print value; else exit 1 }' "$MANIFEST")" || fail
+  [ "${#tooling_source_sha}" -eq 40 ] || fail
+  case "$tooling_source_sha" in *[!0-9a-f]*) fail ;; esac
+  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash" | "$SHA256SUM")" || fail
+  release_hash=${release_hash%% *}
+  {
+    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash"
+    printf 'release_sha256=%s\n' "$release_hash"
+  } | "$ENV_COMMAND" -i PATH="$SAFE_PATH" /usr/bin/cmp -s - "$MANIFEST" || fail
+}
+
+safe_caller() {
+  caller=${SUDO_USER-unavailable}
+  case "$caller" in
+    ''|*[!A-Za-z0-9._-]*) caller=unavailable ;;
+  esac
+  printf '%.64s' "$caller"
+}
+
+audit() {
+  result="$1"
+  "$ENV_COMMAND" -i PATH="$SAFE_PATH" HOME=/root USER=root LOGNAME=root LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    "$LOGGER" -t buildingos-privctl -- "operation=$operation" "result=$result" "caller=$(safe_caller)"
+}
+
+validate_service_ready() {
+  state="$($SYSTEMCTL show --property=ActiveState --value "$OBJECT_SERVICE")" || fail
+  load_state="$($SYSTEMCTL show --property=LoadState --value "$OBJECT_SERVICE")" || fail
+  fragment="$($SYSTEMCTL show --property=FragmentPath --value "$OBJECT_SERVICE")" || fail
+  dropins="$($SYSTEMCTL show --property=DropInPaths --value "$OBJECT_SERVICE")" || fail
+  [ "$state" = inactive ] || fail
+  [ "$load_state" = loaded ] || fail
+  [ "$fragment" = "$OBJECT_SERVICE_UNIT" ] || fail
+  [ -z "$dropins" ] || fail
+}
+
+systemctl_value() {
+  "$SYSTEMCTL" show --property="$1" --value "$2" || fail
+}
+
+validate_exec_start() {
+  actual="$1"
+  expected="$2"
+  case "$actual" in
+    \{*\}) ;;
+    *) fail ;;
+  esac
+  actual="${actual#\{}"
+  actual="${actual%\}}"
+  parsed="$(printf '%s\n' "$actual" | "$AWK" -F ';' -v expected="$expected" '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    {
+      path_count=0
+      argv_count=0
+      ignore_count=0
+      invalid=0
+      path=""
+      argv=""
+      for (i=1; i<=NF; i++) {
+        field=trim($i)
+        if (field == "") continue
+        if (field ~ /^path=/) {
+          path_count++
+          path=substr(field, 6)
+        } else if (field ~ /^argv\[\]=/) {
+          argv_count++
+          argv=substr(field, 8)
+        } else if (field ~ /^ignore_errors=/) {
+          ignore_count++
+          if (field != "ignore_errors=no") invalid=1
+        } else if (field ~ /^(start_time|stop_time|pid|code|status)=/) {
+          continue
+        } else {
+          invalid=1
+        }
+      }
+    }
+    END {
+      if (path_count == 1 && argv_count == 1 && ignore_count == 1 && invalid == 0 && path == expected && argv == expected) print "PASS"
+    }
+  ')"
+  [ "$parsed" = PASS ] || fail
+}
+
+validate_service_contract() {
+  service_user="$(systemctl_value User "$OBJECT_SERVICE")"
+  service_group="$(systemctl_value Group "$OBJECT_SERVICE")"
+  service_type="$(systemctl_value Type "$OBJECT_SERVICE")"
+  service_env="$(systemctl_value EnvironmentFiles "$OBJECT_SERVICE")"
+  service_workdir="$(systemctl_value WorkingDirectory "$OBJECT_SERVICE")"
+  service_exec="$(systemctl_value ExecStart "$OBJECT_SERVICE")"
+  service_timeout="$(systemctl_value TimeoutStartUSec "$OBJECT_SERVICE")"
+  service_condition="$(systemctl_value ExecCondition "$OBJECT_SERVICE")"
+  service_pre="$(systemctl_value ExecStartPre "$OBJECT_SERVICE")"
+  service_post="$(systemctl_value ExecStartPost "$OBJECT_SERVICE")"
+  [ "$service_user" = yoryi ] || fail
+  [ "$service_group" = yoryi ] || fail
+  [ "$service_type" = oneshot ] || fail
+  case "$service_env" in
+    /etc/buildingos/object-backup.env|-/etc/buildingos/object-backup.env|'/etc/buildingos/object-backup.env (ignore_errors=no)'|'-/etc/buildingos/object-backup.env (ignore_errors=no)') ;;
+    *) fail ;;
+  esac
+  [ "$service_workdir" = /var/lib/buildingos-object-backup ] || fail
+  validate_exec_start "$service_exec" "$OBJECT_BACKUP_EXEC"
+  case "$service_timeout" in
+    21600000000|6h|'6h 0min'|'6h 0min 0s') ;;
+    *) fail ;;
+  esac
+  [ -z "$service_condition" ] || fail
+  [ -z "$service_pre" ] || fail
+  [ -z "$service_post" ] || fail
+}
+
+validate_timer_contract() {
+  timer_calendar="$(systemctl_value TimersCalendar "$OBJECT_TIMER")"
+  timer_delay="$(systemctl_value RandomizedDelayUSec "$OBJECT_TIMER")"
+  timer_persistent="$(systemctl_value Persistent "$OBJECT_TIMER")"
+  [ "$timer_calendar" = '*-*-* 02:15:00' ] || fail
+  case "$timer_delay" in
+    900000000|15min|'15min 0s') ;;
+    *) fail ;;
+  esac
+  case "$timer_persistent" in
+    yes|true) ;;
+    *) fail ;;
+  esac
+}
+
+validate_timer_ready() {
+  timer_load_state="$($SYSTEMCTL show --property=LoadState --value "$OBJECT_TIMER")" || fail
+  timer_fragment="$($SYSTEMCTL show --property=FragmentPath --value "$OBJECT_TIMER")" || fail
+  timer_dropins="$($SYSTEMCTL show --property=DropInPaths --value "$OBJECT_TIMER")" || fail
+  timer_unit="$($SYSTEMCTL show --property=Unit --value "$OBJECT_TIMER")" || fail
+  [ "$timer_load_state" = loaded ] || fail
+  [ "$timer_fragment" = "$OBJECT_TIMER_UNIT" ] || fail
+  [ -z "$timer_dropins" ] || fail
+  [ "$timer_unit" = "$OBJECT_SERVICE" ] || fail
+  validate_service_ready
+  validate_service_contract
+  validate_timer_contract
+}
+
+validate_receipt() {
+  receipt_uid="$($ID -u "$SERVICE_USER")" || fail
+  receipt_gid="$($ID -g "$SERVICE_USER")" || fail
+  receipt_dir_metadata="$(metadata "$RECEIPT_DIR")" || fail
+  receipt_dir_mode="${receipt_dir_metadata##*:}"
+  receipt_dir_owner_group="${receipt_dir_metadata%:*}"
+  [ "$receipt_dir_owner_group" = "$receipt_uid:$receipt_gid" ] || fail
+  [ $((0$receipt_dir_mode & 18)) -eq 0 ] || fail
+  receipt_metadata="$(metadata "$RECEIPT")" || fail
+  [ "$receipt_metadata" = "$receipt_uid:$receipt_gid:600" ] || fail
+  [ -f "$RECEIPT" ] || fail
+  [ ! -L "$RECEIPT" ] || fail
+  receipt_line=''
+  receipt_count=0
+  while IFS= read -r line; do
+    receipt_count=$((receipt_count + 1))
+    [ "$receipt_count" -eq 1 ] || fail
+    receipt_line="$line"
+  done < "$RECEIPT"
+  [ "$receipt_count" -eq 1 ] || fail
+  case "$receipt_line" in
+    *'"source":"source-remote:buildingos-production"'* ) ;;
+    *) fail ;;
+  esac
+  case "$receipt_line" in
+    *'"destination":"backup-remote:buildingos-production-backup"'* ) ;;
+    *) fail ;;
+  esac
+  case "$receipt_line" in
+    *'"copy_status":"PASS"'* ) ;;
+    *) fail ;;
+  esac
+  case "$receipt_line" in
+    *'"verification_status":"PASS"'* ) ;;
+    *) fail ;;
+  esac
+  case "$receipt_line" in
+    *'"status":"PASS"'* ) ;;
+    *) fail ;;
+  esac
+}
+
+[ "$#" -eq 1 ] || fail
+case "$operation" in
+  daemon-reload) set -- daemon-reload ;;
+  object-backup-start) set -- start "$OBJECT_SERVICE" ;;
+  object-backup-timer-enable) set -- enable "$OBJECT_TIMER" ;;
+  object-backup-timer-start) set -- start "$OBJECT_TIMER" ;;
+  object-backup-timer-stop) set -- stop "$OBJECT_TIMER" ;;
+  object-backup-timer-disable) set -- disable "$OBJECT_TIMER" ;;
+  *) fail ;;
+esac
+
+assert_directory / 755
+assert_directory /usr 755
+assert_directory /usr/local 755
+assert_directory /usr/local/sbin 755
+assert_directory /usr/local/libexec 755
+assert_directory /usr/local/libexec/buildingos-backup 755
+assert_directory /etc 755
+assert_directory /etc/sudoers.d 755
+assert_directory /etc/systemd 755
+assert_directory /etc/systemd/system 755
+assert_directory "$CONTROL_DIR" 755
+assert_file "$MANIFEST" 644
+assert_file "$INSTALLED_LAUNCHER" 755
+assert_file "$PREFLIGHT_CONTROL" 755
+assert_file "$ENDPOINT_HELPER" 644
+assert_file "$OBJECT_BACKUP_EXEC" 755
+assert_file "$SUDOERS_POLICY" 440
+assert_file "$OBJECT_SERVICE_UNIT" 644
+assert_file "$OBJECT_TIMER_UNIT" 644
+assert_file "$PRIVCTL_LAUNCHER" 755
+assert_file "$PRIVCTL_SUDOERS" 440
+validate_release
+case "$operation" in
+  object-backup-start)
+    validate_service_ready
+    validate_service_contract
+    ;;
+  object-backup-timer-enable|object-backup-timer-start|object-backup-timer-stop|object-backup-timer-disable) validate_timer_ready ;;
+esac
+if [ "$operation" = object-backup-timer-start ]; then
+  validate_receipt
+fi
+
+if "$ENV_COMMAND" -i PATH="$SAFE_PATH" HOME=/root USER=root LOGNAME=root LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+  "$SYSTEMCTL" "$@" < /dev/null; then
+  audit PASS || fail
+  exit 0
+fi
+fail

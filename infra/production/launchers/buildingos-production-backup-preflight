@@ -9,6 +9,8 @@ OBJECT_BACKUP_EXEC='/usr/local/libexec/buildingos-backup/backup-object-storage.s
 MANIFEST='/usr/local/libexec/buildingos-backup-preflight/manifest'
 INSTALLED_LAUNCHER='/usr/local/sbin/buildingos-production-backup-preflight'
 SUDOERS_POLICY='/etc/sudoers.d/buildingos-production-backup-preflight'
+PRIVCTL_LAUNCHER='/usr/local/sbin/buildingos-privctl'
+PRIVCTL_SUDOERS='/etc/sudoers.d/buildingos-privctl'
 OBJECT_SERVICE_UNIT='/etc/systemd/system/pawtech-buildingos-object-backup.service'
 OBJECT_TIMER_UNIT='/etc/systemd/system/pawtech-buildingos-object-backup.timer'
 STAT_COMMAND='/usr/bin/stat'
@@ -58,6 +60,8 @@ release_payload() {
   sudoers_hash="$6"
   service_hash="$7"
   timer_hash="$8"
+  privctl_launcher_hash="$9"
+  privctl_sudoers_hash="${10}"
   printf 'manifest_version=1\n'
   printf 'tooling_source_sha=%s\n' "$tooling_source_sha"
   printf 'launcher_path=/usr/local/sbin/buildingos-production-backup-preflight\n'
@@ -74,6 +78,10 @@ release_payload() {
   printf 'object_service_sha256=%s\n' "$service_hash"
   printf 'object_timer_path=/etc/systemd/system/pawtech-buildingos-object-backup.timer\n'
   printf 'object_timer_sha256=%s\n' "$timer_hash"
+  printf 'privctl_launcher_path=/usr/local/sbin/buildingos-privctl\n'
+  printf 'privctl_launcher_sha256=%s\n' "$privctl_launcher_hash"
+  printf 'privctl_sudoers_path=/etc/sudoers.d/buildingos-privctl\n'
+  printf 'privctl_sudoers_sha256=%s\n' "$privctl_sudoers_hash"
 }
 
 manifest_tooling_source_sha() {
@@ -90,9 +98,11 @@ assert_manifest_matches() {
   sudoers_hash="$(hash_file "$SUDOERS_POLICY")"
   service_hash="$(hash_file "$OBJECT_SERVICE_UNIT")"
   timer_hash="$(hash_file "$OBJECT_TIMER_UNIT")"
-  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" | hash_text)"
+  privctl_launcher_hash="$(hash_file "$PRIVCTL_LAUNCHER")"
+  privctl_sudoers_hash="$(hash_file "$PRIVCTL_SUDOERS")"
+  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash" | hash_text)"
   if ! {
-    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash"
+    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash"
     printf 'release_sha256=%s\n' "$release_hash"
   } | cmp -s - "$MANIFEST"; then
     fail 'installed manifest is stale, malformed, or does not match protected artifacts'
@@ -115,6 +125,8 @@ if [ "${BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE:-}" = LOCAL_ISOLATED_ONLY ]; then
   MANIFEST="$CONTROL_DIR/manifest"
   INSTALLED_LAUNCHER="$test_root/usr/local/sbin/buildingos-production-backup-preflight"
   SUDOERS_POLICY="$test_root/etc/sudoers.d/buildingos-production-backup-preflight"
+  PRIVCTL_LAUNCHER="$test_root/usr/local/sbin/buildingos-privctl"
+  PRIVCTL_SUDOERS="$test_root/etc/sudoers.d/buildingos-privctl"
   OBJECT_SERVICE_UNIT="$test_root/etc/systemd/system/pawtech-buildingos-object-backup.service"
   OBJECT_TIMER_UNIT="$test_root/etc/systemd/system/pawtech-buildingos-object-backup.timer"
   EXPECTED_UID="$(id -u)"
@@ -140,6 +152,8 @@ done
 [ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ] || fail 'trusted manifest is unavailable'
 [ -f "$INSTALLED_LAUNCHER" ] && [ ! -L "$INSTALLED_LAUNCHER" ] || fail 'trusted launcher is unavailable'
 [ -f "$SUDOERS_POLICY" ] && [ ! -L "$SUDOERS_POLICY" ] || fail 'trusted sudoers policy is unavailable'
+[ -f "$PRIVCTL_LAUNCHER" ] && [ ! -L "$PRIVCTL_LAUNCHER" ] || fail 'trusted privctl launcher is unavailable'
+[ -f "$PRIVCTL_SUDOERS" ] && [ ! -L "$PRIVCTL_SUDOERS" ] || fail 'trusted privctl sudoers policy is unavailable'
 [ -f "$OBJECT_SERVICE_UNIT" ] && [ ! -L "$OBJECT_SERVICE_UNIT" ] || fail 'trusted Object Storage service unit is unavailable'
 [ -f "$OBJECT_TIMER_UNIT" ] && [ ! -L "$OBJECT_TIMER_UNIT" ] || fail 'trusted Object Storage timer unit is unavailable'
 assert_metadata "$CONTROL_DIR" 755
@@ -150,6 +164,8 @@ assert_metadata "$OBJECT_BACKUP_EXEC" 755
 assert_metadata "$MANIFEST" 644
 assert_metadata "$INSTALLED_LAUNCHER" 755
 assert_metadata "$SUDOERS_POLICY" 440
+assert_metadata "$PRIVCTL_LAUNCHER" 755
+assert_metadata "$PRIVCTL_SUDOERS" 440
 assert_metadata "$OBJECT_SERVICE_UNIT" 644
 assert_metadata "$OBJECT_TIMER_UNIT" 644
 assert_manifest_matches
