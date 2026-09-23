@@ -132,7 +132,7 @@ if [ "\${1-}" = show ]; then
     --property=ExecStart) printf '{ path=%s ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=0 ; status=0 }\\n' '$FAKE_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh' '$FAKE_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh' ;;
     --property=TimeoutStartUSec) printf '21600000000\\n' ;;
     --property=ExecCondition|--property=ExecStartPre|--property=ExecStartPost) : ;;
-    --property=TimersCalendar) printf '*-*-* 02:15:00\\n' ;;
+    --property=TimersCalendar) printf '%s\\n' "\${MOCK_TIMERS_CALENDAR:-*-*-* 02:15:00}" ;;
     --property=RandomizedDelayUSec) printf '900000000\\n' ;;
     --property=Persistent) printf 'yes\\n' ;;
     *) exit 1 ;;
@@ -363,8 +363,43 @@ assert_empty 'unexpected destination timer start emits no mutation' "$SYSTEMCTL_
 
 make_fixture
 write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
-assert_success 'valid receipt allows timer start' "$FAKE_LAUNCHER" object-backup-timer-start
-assert_contains 'valid receipt timer start uses the fixed timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+assert_success 'plain TimersCalendar allows valid receipt timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_contains 'plain TimersCalendar timer start uses the fixed timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=(null) }' assert_success 'serialized TimersCalendar allows valid receipt timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_contains 'serialized TimersCalendar timer start uses the fixed timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='prefix *-*-* 02:15:00 suffix' assert_failure 'plain TimersCalendar substring rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'plain TimersCalendar substring emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 03:15:00 ; next_elapse=(null) }' assert_failure 'wrong serialized TimersCalendar rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'wrong serialized TimersCalendar emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=(null)' assert_failure 'malformed serialized TimersCalendar rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'malformed serialized TimersCalendar emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ next_elapse=(null) }' assert_failure 'serialized TimersCalendar without OnCalendar rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'serialized TimersCalendar without OnCalendar emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; OnCalendar=*-*-* 03:15:00 ; next_elapse=(null) }' assert_failure 'multiple conflicting serialized OnCalendar values reject timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'multiple serialized OnCalendar values emit no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_TIMERS_CALENDAR='{ OnCalendar=*-*-* 02:15:00 ; next_elapse=(null) } trailing' assert_failure 'serialized TimersCalendar with extra text rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'serialized TimersCalendar with extra text emits no mutation' "$SYSTEMCTL_LOG"
 
 make_fixture
 write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'

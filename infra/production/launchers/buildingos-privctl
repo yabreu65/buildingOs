@@ -245,11 +245,48 @@ validate_service_contract() {
   [ -z "$service_post" ] || fail
 }
 
+validate_timer_calendar() {
+  timer_calendar="$1"
+  parsed="$(printf '%s\n' "$timer_calendar" | "$AWK" -v expected='*-*-* 02:15:00' '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    NR != 1 {
+      invalid=1
+      next
+    }
+    {
+      value=trim($0)
+      if (value == expected) {
+        valid=1
+        next
+      }
+      if (value !~ /^\{.*\}$/) {
+        invalid=1
+        next
+      }
+      value=substr(value, 2, length(value) - 2)
+      field_count=split(value, fields, ";")
+      if (field_count != 2 || trim(fields[1]) != "OnCalendar=" expected || trim(fields[2]) != "next_elapse=(null)") {
+        invalid=1
+        next
+      }
+      valid=1
+    }
+    END {
+      if (NR == 1 && valid == 1 && invalid == 0) print "PASS"
+    }
+  ')"
+  [ "$parsed" = PASS ] || fail
+}
+
 validate_timer_contract() {
   timer_calendar="$(systemctl_value TimersCalendar "$OBJECT_TIMER")"
   timer_delay="$(systemctl_value RandomizedDelayUSec "$OBJECT_TIMER")"
   timer_persistent="$(systemctl_value Persistent "$OBJECT_TIMER")"
-  [ "$timer_calendar" = '*-*-* 02:15:00' ] || fail
+  validate_timer_calendar "$timer_calendar"
   case "$timer_delay" in
     900000000|15min|'15min 0s') ;;
     *) fail ;;
