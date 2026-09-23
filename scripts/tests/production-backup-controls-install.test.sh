@@ -24,6 +24,18 @@ assert_equal() { local name="$1" actual="$2" expected="$3"; [[ "$actual" == "$ex
 assert_contains() { local name="$1" value="$2" file="$3"; grep -Fq -- "$value" "$file" && pass "$name" || fail_test "$name"; }
 metadata_for() { stat -c '%u:%g:%a' -- "$1" 2>/dev/null || stat -f '%u:%g:%Lp' -- "$1"; }
 
+has_chown_capability() {
+  local probe="$TEST_ROOT/chown-capability-probe" probe_uid=1 probe_gid=1
+  [[ "$(id -u)" -ne 1 ]] || probe_uid=0
+  [[ "$(id -g)" -ne 1 ]] || probe_gid=0
+  mkdir -- "$probe"
+  if chown "$probe_uid:$probe_gid" "$probe" 2>/dev/null; then
+    chown "$(id -u):$(id -g)" "$probe" 2>/dev/null || return 1
+    return 0
+  fi
+  return 1
+}
+
 make_source() {
   mkdir -p "$SOURCE_ROOT/infra/production/launchers" "$SOURCE_ROOT/infra/production/sudoers" "$SOURCE_ROOT/infra/production/systemd" "$SOURCE_ROOT/scripts/lib"
   cp "$ROOT_DIR/infra/production/launchers/buildingos-production-backup-preflight" "$SOURCE_ROOT/infra/production/launchers/"
@@ -244,13 +256,19 @@ assert_failure 'symlinked trusted sudoers parent is rejected' run_check "$CANDID
 rm "$SUDOERS_PARENT"
 mv "$SUDOERS_PARENT.real" "$SUDOERS_PARENT"
 
-if [[ "$(id -u)" -eq 0 ]]; then
-  chown 1:0 "$SUDOERS_PARENT"
+TEST_UID="$(id -u)"
+TEST_GID="$(id -g)"
+WRONG_UID=1
+WRONG_GID=1
+[[ "$TEST_UID" -eq 1 ]] && WRONG_UID=0
+[[ "$TEST_GID" -eq 1 ]] && WRONG_GID=0
+if has_chown_capability; then
+  chown "$WRONG_UID:$TEST_GID" "$SUDOERS_PARENT"
   assert_failure 'trusted parent with wrong owner is rejected when ownership can be changed' run_check "$CANDIDATE_ONE"
-  chown 0:0 "$SUDOERS_PARENT"
-  chown 0:1 "$SUDOERS_PARENT"
+  chown "$TEST_UID:$TEST_GID" "$SUDOERS_PARENT"
+  chown "$TEST_UID:$WRONG_GID" "$SUDOERS_PARENT"
   assert_failure 'trusted parent with wrong group is rejected when ownership can be changed' run_check "$CANDIDATE_ONE"
-  chown 0:0 "$SUDOERS_PARENT"
+  chown "$TEST_UID:$TEST_GID" "$SUDOERS_PARENT"
 else
   skip_test 'wrong trusted parent owner rejection requires chown capability'
   skip_test 'wrong trusted parent group rejection requires chown capability'
