@@ -15,6 +15,8 @@ readonly ENV_FILE="$TEST_ROOT/object-backup.env"
 readonly APP_DIR="$TEST_ROOT/app"
 readonly RCLONE_CONFIG_FILE="$TEST_ROOT/object-backup-rclone.conf"
 readonly RECEIPT_FILE="$TEST_ROOT/object-backup-receipt.json"
+readonly ACTIVATION_STATE_DIR="$TEST_ROOT/buildingos-backup-preflight-state"
+readonly ACTIVATION_MARKER_FILE="$ACTIVATION_STATE_DIR/object-backup-activation.state"
 readonly GIT_LOG="$TEST_ROOT/git.log"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
@@ -36,9 +38,10 @@ assert_absent() {
 assert_success() { local name="$1"; [[ "$RUN_RC" -eq 0 ]] && pass "$name" || fail_test "$name"; }
 assert_failure() { local name="$1"; [[ "$RUN_RC" -ne 0 ]] && pass "$name" || fail_test "$name"; }
 
-mkdir -p "$BIN_DIR" "$APP_DIR/.git"
+mkdir -p "$BIN_DIR" "$APP_DIR/.git" "$ACTIVATION_STATE_DIR"
+chmod 0755 "$ACTIVATION_STATE_DIR"
 printf '%s\n' '**/.env' > "$APP_DIR/.dockerignore"
-for command_name in awk bash date; do
+for command_name in awk bash cmp date; do
   ln -s "$(command -v "$command_name")" "$BIN_DIR/$command_name"
 done
 
@@ -57,7 +60,17 @@ case "$path" in
     group="${MOCK_CONFIG_GROUP:-yoryi}"
     mode="${MOCK_CONFIG_MODE:-600}"
     ;;
-  *object-backup-receipt.json)
+  *object-backup-activation.state)
+      owner="${MOCK_MARKER_OWNER:-root}"
+      group="${MOCK_MARKER_GROUP:-root}"
+      mode="${MOCK_MARKER_MODE:-444}"
+      ;;
+    *buildingos-backup-preflight-state)
+      owner="${MOCK_MARKER_DIR_OWNER:-root}"
+      group="${MOCK_MARKER_DIR_GROUP:-root}"
+      mode="${MOCK_MARKER_DIR_MODE:-755}"
+      ;;
+    *object-backup-receipt.json)
     owner="${MOCK_RECEIPT_OWNER:-yoryi}"
     group="${MOCK_RECEIPT_GROUP:-yoryi}"
     mode="${MOCK_RECEIPT_MODE:-600}"
@@ -257,6 +270,12 @@ write_env() {
 printf '[prod]\ntype = s3\n' > "$RCLONE_CONFIG_FILE"
 chmod 0600 "$RCLONE_CONFIG_FILE"
 
+write_activation_marker() {
+  rm -f "$ACTIVATION_MARKER_FILE"
+  printf 'buildingos-object-backup-activation-v1\n' > "$ACTIVATION_MARKER_FILE"
+  chmod 0444 "$ACTIVATION_MARKER_FILE"
+}
+
 write_receipt() {
   local source="${1-prod:buildingos-production}"
   local destination="${2-backup:buildingos-production-backup}"
@@ -271,18 +290,20 @@ write_receipt() {
 run_preflight() {
   local runtime_sha="${1-2ac603be8018ffc3df67fb4e84149aea4f780cea}"
   set +e
-  RUN_OUTPUT="$(PATH="$BIN_DIR" MOCK_GIT_LOG="$GIT_LOG" BUILDINGOS_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY PREFLIGHT_APP_DIR="$APP_DIR" PREFLIGHT_ENV_FILE="$ENV_FILE" PREFLIGHT_RCLONE_CONFIG_FILE="$RCLONE_CONFIG_FILE" PREFLIGHT_RECEIPT_FILE="$RECEIPT_FILE" /bin/bash "$PREFLIGHT" 2>&1 "$runtime_sha")"
+  RUN_OUTPUT="$(PATH="$BIN_DIR" MOCK_GIT_LOG="$GIT_LOG" BUILDINGOS_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY PREFLIGHT_APP_DIR="$APP_DIR" PREFLIGHT_ENV_FILE="$ENV_FILE" PREFLIGHT_RCLONE_CONFIG_FILE="$RCLONE_CONFIG_FILE" PREFLIGHT_RECEIPT_FILE="$RECEIPT_FILE" PREFLIGHT_ACTIVATION_MARKER_FILE="$ACTIVATION_MARKER_FILE" /bin/bash "$PREFLIGHT" 2>&1 "$runtime_sha")"
   RUN_RC=$?
   set -e
 }
 
 write_env
 write_receipt
+write_activation_marker
 receipt_before="$(shasum -a 256 "$RECEIPT_FILE")"
 run_preflight
 receipt_after="$(shasum -a 256 "$RECEIPT_FILE")"
 assert_success 'current topology passes with active timers and inactive services'
 assert_contains 'Object Storage active phase accepts a secure PASS receipt' 'OBJECT_BACKUP_RECEIPT=PASS' "$RUN_OUTPUT"
+assert_contains 'Object Storage active phase requires a durable activation marker' 'OBJECT_BACKUP_ACTIVATION_MARKER=PRESENT' "$RUN_OUTPUT"
 [[ "$receipt_before" == "$receipt_after" ]] && pass 'preflight does not rewrite the active receipt' || fail_test 'preflight does not rewrite the active receipt'
 printf '{ "extra_text":"accepted", "status":"PASS", "nullable":null, "destination":"backup:buildingos-production-backup", "attempt":3, "copy_status":"PASS", "verified":true, "source":"prod:buildingos-production", "verification_status":"PASS" }\n' > "$RECEIPT_FILE"
 run_preflight
@@ -352,9 +373,11 @@ assert_contains 'Object environment root ownership and 0600 mode pass' 'OBJECT_B
 assert_contains 'backup concurrency is safe' 'BACKUP_CONCURRENCY_SAFE=YES' "$RUN_OUTPUT"
 
 mv "$RECEIPT_FILE" "$RECEIPT_FILE.saved"
+rm -f "$ACTIVATION_MARKER_FILE"
 MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a run_preflight
 assert_success 'Object Storage timer pre-activation phase passes without a receipt path'
 assert_contains 'Object timer pre-activation phase is emitted' 'OBJECT_BACKUP_TIMER_PHASE=PRE_ACTIVATION' "$RUN_OUTPUT"
+assert_contains 'Object timer pristine pre-activation has an absent activation marker' 'OBJECT_BACKUP_ACTIVATION_MARKER=ABSENT' "$RUN_OUTPUT"
 assert_contains 'Object timer pre-activation requires an absent receipt path' 'OBJECT_BACKUP_RECEIPT=ABSENT' "$RUN_OUTPUT"
 assert_absent 'Object timer pre-activation phase emits no active phase' 'OBJECT_BACKUP_TIMER_PHASE=ACTIVE' "$RUN_OUTPUT"
 assert_contains 'Object timer is disabled during pre-activation' 'OBJECT_BACKUP_TIMER_ENABLED=NO' "$RUN_OUTPUT"
@@ -386,9 +409,35 @@ MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_
 assert_failure 'wrong pre-activation Object Storage timer delay fails closed'
 unset MOCK_OBJECT_RANDOMIZED_DELAY
 
+run_preflight
+assert_failure 'active Object Storage timer without an activation marker fails closed'
+assert_contains 'active timer reports an absent activation marker' 'OBJECT_BACKUP_ACTIVATION_MARKER=ABSENT' "$RUN_OUTPUT"
+write_activation_marker
+rm -f "$ACTIVATION_MARKER_FILE"
+printf 'malformed\n' > "$ACTIVATION_MARKER_FILE"
+chmod 0444 "$ACTIVATION_MARKER_FILE"
+run_preflight
+assert_failure 'malformed activation marker fails closed'
+write_activation_marker
+mv "$ACTIVATION_MARKER_FILE" "$ACTIVATION_MARKER_FILE.real"
+ln -s "$ACTIVATION_MARKER_FILE.real" "$ACTIVATION_MARKER_FILE"
+run_preflight
+assert_failure 'symlink activation marker fails closed'
+mv "$ACTIVATION_MARKER_FILE.real" "$ACTIVATION_MARKER_FILE"
+MOCK_MARKER_MODE=644 run_preflight
+assert_failure 'unsafe activation marker metadata fails closed'
+unset MOCK_MARKER_MODE
+MOCK_MARKER_DIR_MODE=777 run_preflight
+assert_failure 'unsafe activation marker parent fails closed'
+unset MOCK_MARKER_DIR_MODE
+MOCK_OBJECT_TIMER_ENABLED=disabled MOCK_OBJECT_TIMER_STATE=inactive MOCK_OBJECT_NEXT_TRIGGER=n/a run_preflight
+assert_failure 'disabled timer after activation marker fails closed'
+unset MOCK_OBJECT_NEXT_TRIGGER
+
 mv "$RECEIPT_FILE" "$RECEIPT_FILE.missing"
 run_preflight
-assert_failure 'active Object Storage timer with a missing receipt fails closed'
+assert_failure 'deleted receipt after activation fails closed'
+assert_contains 'deleted receipt after activation retains the durable marker' 'OBJECT_BACKUP_ACTIVATION_MARKER=PRESENT' "$RUN_OUTPUT"
 assert_absent 'missing active receipt emits no timer phase' 'OBJECT_BACKUP_TIMER_PHASE=' "$RUN_OUTPUT"
 mv "$RECEIPT_FILE.missing" "$RECEIPT_FILE"
 printf '{\n' > "$RECEIPT_FILE"

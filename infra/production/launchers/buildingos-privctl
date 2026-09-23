@@ -9,6 +9,11 @@ readonly STAT='/usr/bin/stat'
 readonly ID='/usr/bin/id'
 readonly AWK='/usr/bin/awk'
 readonly SHA256SUM='/usr/bin/sha256sum'
+readonly MKTEMP='/usr/bin/mktemp'
+readonly CHMOD='/usr/bin/chmod'
+readonly MV='/usr/bin/mv'
+readonly RM='/usr/bin/rm'
+readonly CMP='/usr/bin/cmp'
 readonly MANIFEST='/usr/local/libexec/buildingos-backup-preflight/manifest'
 readonly CONTROL_DIR='/usr/local/libexec/buildingos-backup-preflight'
 readonly INSTALLED_LAUNCHER='/usr/local/sbin/buildingos-production-backup-preflight'
@@ -26,8 +31,12 @@ readonly OBJECT_TIMER='pawtech-buildingos-object-backup.timer'
 readonly SERVICE_USER='yoryi'
 readonly RECEIPT_DIR='/var/lib/buildingos-object-backup'
 readonly RECEIPT='/var/lib/buildingos-object-backup/object-backup-receipt.json'
+readonly ACTIVATION_STATE_DIR='/var/lib/buildingos-backup-preflight'
+readonly ACTIVATION_MARKER='/var/lib/buildingos-backup-preflight/object-backup-activation.state'
+readonly ACTIVATION_MARKER_CONTENT='buildingos-object-backup-activation-v1'
 
 operation=${1-unknown}
+activation_marker_state='UNKNOWN'
 
 fail() {
   audit DENIED || :
@@ -265,6 +274,46 @@ validate_timer_ready() {
   validate_timer_contract
 }
 
+validate_activation_marker() {
+  assert_directory "$ACTIVATION_STATE_DIR" 755
+  if [ ! -e "$ACTIVATION_MARKER" ] && [ ! -L "$ACTIVATION_MARKER" ]; then
+    activation_marker_state='ABSENT'
+    return 0
+  fi
+  assert_file "$ACTIVATION_MARKER" 444
+  printf '%s\n' "$ACTIVATION_MARKER_CONTENT" | "$CMP" -s - "$ACTIVATION_MARKER" || fail
+  activation_marker_state='PRESENT'
+}
+
+publish_activation_marker() {
+  marker_tmp=''
+  marker_published=false
+  marker_tmp="$($MKTEMP "$ACTIVATION_STATE_DIR/.object-backup-activation.XXXXXX")" || return 1
+  if printf '%s\n' "$ACTIVATION_MARKER_CONTENT" > "$marker_tmp" &&
+    "$CHMOD" 444 "$marker_tmp" &&
+    "$MV" -f "$marker_tmp" "$ACTIVATION_MARKER"; then
+    marker_published=true
+  fi
+  if [ "$marker_published" = false ]; then
+    "$RM" -f "$marker_tmp" || :
+    return 1
+  fi
+  if ! [ -f "$ACTIVATION_MARKER" ] || [ -L "$ACTIVATION_MARKER" ] ||
+    ! [ "$(metadata "$ACTIVATION_MARKER")" = '0:0:444' ] ||
+    ! printf '%s\n' "$ACTIVATION_MARKER_CONTENT" | "$CMP" -s - "$ACTIVATION_MARKER"; then
+    "$RM" -f "$ACTIVATION_MARKER" || :
+    return 1
+  fi
+  return 0
+}
+
+rollback_timer_activation() {
+  "$ENV_COMMAND" -i PATH="$SAFE_PATH" HOME=/root USER=root LOGNAME=root LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    "$SYSTEMCTL" stop "$OBJECT_TIMER" < /dev/null || :
+  "$ENV_COMMAND" -i PATH="$SAFE_PATH" HOME=/root USER=root LOGNAME=root LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    "$SYSTEMCTL" disable "$OBJECT_TIMER" < /dev/null || :
+}
+
 validate_receipt() {
   [ -d "$RECEIPT_DIR" ] || fail
   [ ! -L "$RECEIPT_DIR" ] || fail
@@ -348,11 +397,22 @@ case "$operation" in
   object-backup-timer-stop|object-backup-timer-disable) validate_timer_ready ;;
 esac
 case "$operation" in
-  object-backup-timer-enable|object-backup-timer-start) validate_receipt ;;
+  object-backup-timer-enable|object-backup-timer-start)
+    validate_activation_marker
+    validate_receipt
+    ;;
 esac
 
 if "$ENV_COMMAND" -i PATH="$SAFE_PATH" HOME=/root USER=root LOGNAME=root LANG=C.UTF-8 LC_ALL=C.UTF-8 \
   "$SYSTEMCTL" "$@" < /dev/null; then
+  case "$operation" in
+    object-backup-timer-enable|object-backup-timer-start)
+      if [ "$activation_marker_state" = ABSENT ] && ! publish_activation_marker; then
+        rollback_timer_activation
+        fail
+      fi
+      ;;
+  esac
   audit PASS || fail
   exit 0
 fi

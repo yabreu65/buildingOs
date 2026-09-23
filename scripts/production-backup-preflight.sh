@@ -12,6 +12,8 @@ readonly OBJECT_BACKUP_WORKING_DIRECTORY='/var/lib/buildingos-object-backup'
 readonly DEFAULT_OBJECT_BACKUP_ENV_FILE='/etc/buildingos/object-backup.env'
 readonly DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG='/etc/buildingos/object-backup-rclone.conf'
 readonly OBJECT_BACKUP_RECEIPT='/var/lib/buildingos-object-backup/object-backup-receipt.json'
+readonly OBJECT_BACKUP_ACTIVATION_MARKER='/var/lib/buildingos-backup-preflight/object-backup-activation.state'
+readonly OBJECT_BACKUP_ACTIVATION_MARKER_CONTENT='buildingos-object-backup-activation-v1'
 readonly EXPECTED_TIMEOUT_USEC=21600000000
 readonly TIMER_HORIZON_SECONDS=129600
 readonly OBJECT_BACKUP_CALENDAR='*-*-* 02:15:00'
@@ -25,6 +27,8 @@ EXPECTED_APP_DIR="$DEFAULT_APP_DIR"
 OBJECT_BACKUP_ENV_FILE="$DEFAULT_OBJECT_BACKUP_ENV_FILE"
 OBJECT_BACKUP_RCLONE_CONFIG="$DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG"
 OBJECT_BACKUP_RECEIPT_FILE="$OBJECT_BACKUP_RECEIPT"
+OBJECT_BACKUP_ACTIVATION_MARKER_FILE="$OBJECT_BACKUP_ACTIVATION_MARKER"
+OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='UNKNOWN'
 OBJECT_BACKUP_TIMER_PHASE=''
 
 if ! declare -F endpoint_identity >/dev/null 2>&1; then
@@ -638,6 +642,54 @@ inspect_timer() {
   printf '%s_CONTRACT=%s\n' "$label" "$contract"
 }
 
+inspect_activation_marker() {
+  local marker_dir marker_owner marker_group marker_mode
+  local marker_ok=false parent_ok=false
+
+  marker_dir="${OBJECT_BACKUP_ACTIVATION_MARKER_FILE%/*}"
+  if [[ ! -d "$marker_dir" || -L "$marker_dir" ]]; then
+    fail_check 'Object Storage activation marker parent is not a real directory'
+  else
+    marker_owner="$(file_owner "$marker_dir" 2>/dev/null || true)"
+    marker_group="$(file_group "$marker_dir" 2>/dev/null || true)"
+    marker_mode="0$(file_mode "$marker_dir" 2>/dev/null || true)"
+    [[ "$marker_owner" == root ]] || fail_check 'Object Storage activation marker parent owner is not root'
+    [[ "$marker_group" == root ]] || fail_check 'Object Storage activation marker parent group is not root'
+    [[ "$marker_mode" == 0755 ]] || fail_check 'Object Storage activation marker parent mode is not 0755'
+    [[ "$marker_owner" == root && "$marker_group" == root && "$marker_mode" == 0755 ]] && parent_ok=true
+  fi
+
+  if [[ ! -e "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" && ! -L "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" ]]; then
+    [[ "$parent_ok" == true ]] && OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='ABSENT' || OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='INVALID'
+    printf 'OBJECT_BACKUP_ACTIVATION_MARKER=%s\n' "$OBJECT_BACKUP_ACTIVATION_MARKER_STATUS"
+    return
+  fi
+
+  if ! file_is_regular_non_symlink "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" || [[ ! -r "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" ]]; then
+    fail_check 'Object Storage activation marker is not a readable regular non-symlink file'
+  else
+    marker_owner="$(file_owner "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" 2>/dev/null || true)"
+    marker_group="$(file_group "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" 2>/dev/null || true)"
+    marker_mode="0$(file_mode "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" 2>/dev/null || true)"
+    [[ "$marker_owner" == root ]] || fail_check 'Object Storage activation marker owner is not root'
+    [[ "$marker_group" == root ]] || fail_check 'Object Storage activation marker group is not root'
+    [[ "$marker_mode" == 0444 ]] || fail_check 'Object Storage activation marker mode is not 0444'
+    if [[ "$marker_owner" == root && "$marker_group" == root && "$marker_mode" == 0444 ]] &&
+      printf '%s\n' "$OBJECT_BACKUP_ACTIVATION_MARKER_CONTENT" | cmp -s - "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE"; then
+      marker_ok=true
+    else
+      fail_check 'Object Storage activation marker content is malformed'
+    fi
+  fi
+
+  if [[ "$parent_ok" == true && "$marker_ok" == true ]]; then
+    OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='PRESENT'
+  else
+    OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='INVALID'
+  fi
+  printf 'OBJECT_BACKUP_ACTIVATION_MARKER=%s\n' "$OBJECT_BACKUP_ACTIVATION_MARKER_STATUS"
+}
+
 inspect_object_timer() {
   local label="$1"
   local unit="$2"
@@ -661,17 +713,21 @@ inspect_object_timer() {
 
   case "$unit_file_state:$active_state" in
     disabled:inactive)
-      if timer_has_no_trigger "$next_trigger"; then
-        phase='PRE_ACTIVATION'
-      else
+      if ! timer_has_no_trigger "$next_trigger"; then
         fail_check "$unit pre-activation phase has an unexpected trigger"
+      elif [[ "$OBJECT_BACKUP_ACTIVATION_MARKER_STATUS" != ABSENT ]]; then
+        fail_check "$unit pre-activation phase requires an absent activation marker"
+      else
+        phase='PRE_ACTIVATION'
       fi
       ;;
     enabled:active)
-      if timer_has_future_trigger "$next_trigger"; then
-        phase='ACTIVE'
-      else
+      if ! timer_has_future_trigger "$next_trigger"; then
         fail_check "$unit active phase has no future trigger"
+      elif [[ "$OBJECT_BACKUP_ACTIVATION_MARKER_STATUS" != PRESENT ]]; then
+        fail_check "$unit active phase requires a valid activation marker"
+      else
+        phase='ACTIVE'
       fi
       ;;
     *) fail_check "$unit lifecycle state is invalid or ambiguous" ;;
@@ -790,6 +846,7 @@ inspect_topology() {
 
   before=$failures
   inspect_service OBJECT_BACKUP_SERVICE "$OBJECT_BACKUP_SERVICE" "$OBJECT_BACKUP_EXEC" "$OBJECT_BACKUP_ENV_FILE"
+  inspect_activation_marker
   inspect_object_timer OBJECT_BACKUP_TIMER "$OBJECT_BACKUP_TIMER" "$OBJECT_BACKUP_SERVICE"
   [[ "$failures" -eq "$before" ]] && printf 'OBJECT_BACKUP_TOPOLOGY=PASS\n' || printf 'OBJECT_BACKUP_TOPOLOGY=FAIL\n'
 }
@@ -805,7 +862,7 @@ inspect_concurrency() {
 
 main() {
   local command_name missing_dependency=false
-  local required_commands=(awk bash date docker git stat systemctl)
+  local required_commands=(awk bash cmp date docker git stat systemctl)
   local runtime_app_dir
 
   [[ $# -eq 1 ]] || { printf 'Usage: %s <expected_runtime_sha>\n' "${0##*/}" >&2; return 64; }
@@ -815,11 +872,13 @@ main() {
   OBJECT_BACKUP_ENV_FILE="$DEFAULT_OBJECT_BACKUP_ENV_FILE"
   OBJECT_BACKUP_RCLONE_CONFIG="$DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG"
   EXPECTED_APP_DIR="$DEFAULT_APP_DIR"
+  OBJECT_BACKUP_ACTIVATION_MARKER_FILE="$OBJECT_BACKUP_ACTIVATION_MARKER"
   if [[ "${BUILDINGOS_PREFLIGHT_TEST_MODE:-}" == LOCAL_ISOLATED_ONLY ]]; then
     EXPECTED_APP_DIR="${PREFLIGHT_APP_DIR:?}"
     OBJECT_BACKUP_ENV_FILE="${PREFLIGHT_ENV_FILE:?}"
     OBJECT_BACKUP_RCLONE_CONFIG="${PREFLIGHT_RCLONE_CONFIG_FILE:?}"
     OBJECT_BACKUP_RECEIPT_FILE="${PREFLIGHT_RECEIPT_FILE:?}"
+    OBJECT_BACKUP_ACTIVATION_MARKER_FILE="${PREFLIGHT_ACTIVATION_MARKER_FILE:?}"
   fi
 
   for command_name in "${required_commands[@]}"; do
