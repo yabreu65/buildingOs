@@ -261,7 +261,7 @@ validate_receipt() {
   done < "$RECEIPT"
   [ "$receipt_count" -eq 1 ] || fail
   case "$receipt_line" in
-    *'"source":"source-remote:buildingos-production"'* ) ;;
+    *'"source":"prod:buildingos-production"'* ) ;;
     *) fail ;;
   esac
   case "$receipt_line" in
