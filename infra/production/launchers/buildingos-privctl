@@ -119,15 +119,30 @@ audit() {
     "$LOGGER" -t buildingos-privctl -- "operation=$operation" "result=$result" "caller=$(safe_caller)"
 }
 
-validate_service_ready() {
-  state="$($SYSTEMCTL show --property=ActiveState --value "$OBJECT_SERVICE")" || fail
+validate_service_identity() {
   load_state="$($SYSTEMCTL show --property=LoadState --value "$OBJECT_SERVICE")" || fail
   fragment="$($SYSTEMCTL show --property=FragmentPath --value "$OBJECT_SERVICE")" || fail
   dropins="$($SYSTEMCTL show --property=DropInPaths --value "$OBJECT_SERVICE")" || fail
-  [ "$state" = inactive ] || fail
   [ "$load_state" = loaded ] || fail
   [ "$fragment" = "$OBJECT_SERVICE_UNIT" ] || fail
   [ -z "$dropins" ] || fail
+}
+
+validate_service_start_ready() {
+  state="$($SYSTEMCTL show --property=ActiveState --value "$OBJECT_SERVICE")" || fail
+  case "$state" in
+    inactive|failed) ;;
+    *) fail ;;
+  esac
+  validate_service_identity
+  validate_service_contract
+}
+
+validate_service_activation_ready() {
+  state="$($SYSTEMCTL show --property=ActiveState --value "$OBJECT_SERVICE")" || fail
+  [ "$state" = inactive ] || fail
+  validate_service_identity
+  validate_service_contract
 }
 
 systemctl_value() {
@@ -235,7 +250,7 @@ validate_timer_ready() {
   [ "$timer_fragment" = "$OBJECT_TIMER_UNIT" ] || fail
   [ -z "$timer_dropins" ] || fail
   [ "$timer_unit" = "$OBJECT_SERVICE" ] || fail
-  validate_service_ready
+  validate_service_identity
   validate_service_contract
   validate_timer_contract
 }
@@ -316,15 +331,13 @@ assert_file "$PRIVCTL_LAUNCHER" 755
 assert_file "$PRIVCTL_SUDOERS" 440
 validate_release
 case "$operation" in
-  object-backup-start)
-    validate_service_ready
-    validate_service_contract
-    ;;
-  object-backup-timer-enable|object-backup-timer-start|object-backup-timer-stop|object-backup-timer-disable) validate_timer_ready ;;
+  object-backup-start) validate_service_start_ready ;;
+  object-backup-timer-enable|object-backup-timer-start) validate_timer_ready; validate_service_activation_ready ;;
+  object-backup-timer-stop|object-backup-timer-disable) validate_timer_ready ;;
 esac
-if [ "$operation" = object-backup-timer-start ]; then
-  validate_receipt
-fi
+case "$operation" in
+  object-backup-timer-enable|object-backup-timer-start) validate_receipt ;;
+esac
 
 if "$ENV_COMMAND" -i PATH="$SAFE_PATH" HOME=/root USER=root LOGNAME=root LANG=C.UTF-8 LC_ALL=C.UTF-8 \
   "$SYSTEMCTL" "$@" < /dev/null; then

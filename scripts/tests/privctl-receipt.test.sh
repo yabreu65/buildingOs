@@ -6,6 +6,7 @@ TEST_ROOT="$(mktemp -d "/tmp/buildingos-privctl-receipt.XXXXXX")"
 FAKE_ROOT="$TEST_ROOT/root"
 SYSTEMCTL_LOG="$TEST_ROOT/systemctl.log"
 LOGGER_LOG="$TEST_ROOT/logger.log"
+SERVICE_STATE_FILE="$TEST_ROOT/service-state"
 FAKE_LAUNCHER="$FAKE_ROOT/usr/local/sbin/buildingos-privctl"
 MANIFEST="$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
 RECEIPT="$FAKE_ROOT/var/lib/buildingos-object-backup/object-backup-receipt.json"
@@ -90,7 +91,7 @@ EOF
 if [ "\${1-}" = show ]; then
   property="\${2-}"
   case "\$property" in
-    --property=ActiveState) printf 'inactive\\n' ;;
+    --property=ActiveState) cat '$SERVICE_STATE_FILE' ;;
     --property=LoadState) printf 'loaded\\n' ;;
     --property=FragmentPath)
       case "\${4-}" in
@@ -135,6 +136,7 @@ make_fixture() {
   make_tools
   : > "$SYSTEMCTL_LOG"
   : > "$LOGGER_LOG"
+  printf 'inactive\n' > "$SERVICE_STATE_FILE"
   chmod 0755 "$FAKE_ROOT/usr/local" "$FAKE_ROOT/usr/local/sbin" "$FAKE_ROOT/usr/local/libexec" \
     "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight" "$FAKE_ROOT/usr/local/libexec/buildingos-backup" \
     "$FAKE_ROOT/etc" "$FAKE_ROOT/etc/buildingos" "$FAKE_ROOT/etc/sudoers.d" \
@@ -198,19 +200,74 @@ write_receipt() {
   chmod 0600 "$RECEIPT"
 }
 
+set_service_state() {
+  printf '%s\n' "$1" > "$SERVICE_STATE_FILE"
+}
+
+make_fixture
+set_service_state failed
+assert_success 'failed service allows manual object-backup-start' "$FAKE_LAUNCHER" object-backup-start
+assert_contains 'failed service manual retry starts only the fixed service' "argv: <start> <pawtech-buildingos-object-backup.service>" "$SYSTEMCTL_LOG"
+
+make_fixture
+set_service_state active
+assert_failure 'active service rejects manual object-backup-start' "$FAKE_LAUNCHER" object-backup-start
+assert_empty 'active service rejection emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+set_service_state failed
+assert_success 'failed service allows timer stop containment' "$FAKE_LAUNCHER" object-backup-timer-stop
+assert_contains 'failed service timer stop uses the fixed timer' "argv: <stop> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+set_service_state failed
+assert_success 'failed service allows timer disable containment' "$FAKE_LAUNCHER" object-backup-timer-disable
+assert_contains 'failed service timer disable uses the fixed timer' "argv: <disable> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+set_service_state failed
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+assert_failure 'failed service rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'failed service timer enable rejection emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+set_service_state failed
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+assert_failure 'failed service rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'failed service timer start rejection emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+assert_failure 'missing receipt rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'missing receipt timer enable emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'unexpected:buildingos-production' 'backup:buildingos-production-backup'
+assert_failure 'unexpected source remote rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'unexpected source timer enable emits no mutation' "$SYSTEMCTL_LOG"
+
 make_fixture
 write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
-assert_success 'production receipt remotes are accepted for timer start' "$FAKE_LAUNCHER" object-backup-timer-start
-assert_contains 'accepted receipt starts only the fixed object timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+assert_success 'valid receipt allows timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_contains 'valid receipt timer enable uses the fixed timer' "argv: <enable> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
 
-: > "$SYSTEMCTL_LOG"
+make_fixture
+assert_failure 'missing receipt rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'missing receipt timer start emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
 write_receipt 'unexpected:buildingos-production' 'backup:buildingos-production-backup'
-assert_failure 'unexpected source remote is rejected' "$FAKE_LAUNCHER" object-backup-timer-start
-assert_empty 'rejected source receipt does not start the timer' "$SYSTEMCTL_LOG"
+assert_failure 'unexpected source remote rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'unexpected source timer start emits no mutation' "$SYSTEMCTL_LOG"
 
+make_fixture
 write_receipt 'prod:buildingos-production' 'unexpected:buildingos-production-backup'
-assert_failure 'unexpected destination remote is rejected' "$FAKE_LAUNCHER" object-backup-timer-start
-assert_empty 'rejected destination receipt does not start the timer' "$SYSTEMCTL_LOG"
+assert_failure 'unexpected destination remote rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_empty 'unexpected destination timer start emits no mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+assert_success 'valid receipt allows timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_contains 'valid receipt timer start uses the fixed timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s failed, %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2
