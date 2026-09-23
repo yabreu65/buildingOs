@@ -10,6 +10,8 @@ SERVICE_STATE_FILE="$TEST_ROOT/service-state"
 FAKE_LAUNCHER="$FAKE_ROOT/usr/local/sbin/buildingos-privctl"
 MANIFEST="$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
 RECEIPT="$FAKE_ROOT/var/lib/buildingos-object-backup/object-backup-receipt.json"
+ACTIVATION_STATE_DIR="$FAKE_ROOT/var/lib/buildingos-backup-preflight"
+ACTIVATION_MARKER="$ACTIVATION_STATE_DIR/object-backup-activation.state"
 OBJECT_SERVICE_UNIT="$FAKE_ROOT/etc/systemd/system/pawtech-buildingos-object-backup.service"
 OBJECT_TIMER_UNIT="$FAKE_ROOT/etc/systemd/system/pawtech-buildingos-object-backup.timer"
 OBJECT_TIMER='pawtech-buildingos-object-backup.timer'
@@ -77,8 +79,29 @@ else
 fi
 case "$path" in
   */var/lib/buildingos-object-backup|*/var/lib/buildingos-object-backup/object-backup-receipt.json) printf '1001:1001:%s\n' "$mode" ;;
+  */var/lib/buildingos-backup-preflight/object-backup-activation.state) printf '%s:%s:%s\n' "${MOCK_MARKER_UID:-0}" "${MOCK_MARKER_GID:-0}" "${MOCK_MARKER_MODE:-$mode}" ;;
+  */etc/sudoers.d) printf '%s:%s:%s\n' "${MOCK_SUDOERS_DIR_UID:-0}" "${MOCK_SUDOERS_DIR_GID:-0}" "${MOCK_SUDOERS_DIR_MODE:-$mode}" ;;
   *) printf '0:0:%s\n' "$mode" ;;
 esac
+EOF
+  cat > "$FAKE_ROOT/usr/bin/mktemp" <<'EOF'
+#!/bin/sh
+[ "${MOCK_MARKER_PUBLICATION_FAIL:-}" = mktemp ] && exit 1
+exec /usr/bin/mktemp "$@"
+EOF
+  cat > "$FAKE_ROOT/usr/bin/chmod" <<'EOF'
+#!/bin/sh
+[ "${MOCK_MARKER_PUBLICATION_FAIL:-}" = chmod ] && exit 1
+exec /bin/chmod "$@"
+EOF
+  cat > "$FAKE_ROOT/usr/bin/mv" <<'EOF'
+#!/bin/sh
+[ "${MOCK_MARKER_PUBLICATION_FAIL:-}" = mv ] && exit 1
+exec /bin/mv "$@"
+EOF
+  cat > "$FAKE_ROOT/usr/bin/rm" <<'EOF'
+#!/bin/sh
+exec /bin/rm "$@"
 EOF
   cat > "$FAKE_ROOT/usr/bin/logger" <<EOF
 #!/bin/sh
@@ -116,7 +139,12 @@ if [ "\${1-}" = show ]; then
   esac
   exit 0
 fi
-printf 'argv:' >> '$SYSTEMCTL_LOG'
+if [ -r '$TEST_ROOT/systemctl-fail-operation' ]; then
+      IFS= read -r failed_operation < '$TEST_ROOT/systemctl-fail-operation'
+      [ "\$failed_operation" = "\${1-}" ] && exit 1
+    fi
+    printf 'argv:' >> '$SYSTEMCTL_LOG'
+  [ "\${MOCK_SYSTEMCTL_FAIL_OPERATION:-}" = "\${1-}" ] && exit 1
 printf ' <%s>' "\$@" >> '$SYSTEMCTL_LOG'
 printf '\\n' >> '$SYSTEMCTL_LOG'
 EOF
@@ -132,15 +160,17 @@ make_fixture() {
     "$FAKE_ROOT/etc/buildingos" \
     "$FAKE_ROOT/etc/sudoers.d" \
     "$FAKE_ROOT/etc/systemd/system" \
-    "$FAKE_ROOT/var/lib/buildingos-object-backup"
+    "$FAKE_ROOT/var/lib/buildingos-object-backup" \
+    "$ACTIVATION_STATE_DIR"
   make_tools
   : > "$SYSTEMCTL_LOG"
   : > "$LOGGER_LOG"
+  rm -f "$TEST_ROOT/systemctl-fail-operation"
   printf 'inactive\n' > "$SERVICE_STATE_FILE"
   chmod 0755 "$FAKE_ROOT/usr/local" "$FAKE_ROOT/usr/local/sbin" "$FAKE_ROOT/usr/local/libexec" \
     "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight" "$FAKE_ROOT/usr/local/libexec/buildingos-backup" \
     "$FAKE_ROOT/etc" "$FAKE_ROOT/etc/buildingos" "$FAKE_ROOT/etc/sudoers.d" \
-    "$FAKE_ROOT/etc/systemd" "$FAKE_ROOT/etc/systemd/system" "$FAKE_ROOT/var" "$FAKE_ROOT/var/lib"
+    "$FAKE_ROOT/etc/systemd" "$FAKE_ROOT/etc/systemd/system" "$FAKE_ROOT/var" "$FAKE_ROOT/var/lib" "$ACTIVATION_STATE_DIR"
   chmod 0700 "$FAKE_ROOT/var/lib/buildingos-object-backup"
 
   sed \
@@ -200,6 +230,11 @@ write_receipt() {
   chmod 0600 "$RECEIPT"
 }
 
+write_activation_marker() {
+  printf 'buildingos-object-backup-activation-v1\n' > "$ACTIVATION_MARKER"
+  chmod 0444 "$ACTIVATION_MARKER"
+}
+
 set_service_state() {
   printf '%s\n' "$1" > "$SERVICE_STATE_FILE"
 }
@@ -241,14 +276,76 @@ assert_failure 'missing receipt rejects timer enable' "$FAKE_LAUNCHER" object-ba
 assert_empty 'missing receipt timer enable emits no mutation' "$SYSTEMCTL_LOG"
 
 make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+mv "$FAKE_ROOT/var/lib/buildingos-object-backup" "$FAKE_ROOT/var/lib/buildingos-object-backup.real"
+ln -s "$FAKE_ROOT/var/lib/buildingos-object-backup.real" "$FAKE_ROOT/var/lib/buildingos-object-backup"
+assert_failure 'symlink receipt parent rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'symlink receipt parent rejection emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
 write_receipt 'unexpected:buildingos-production' 'backup:buildingos-production-backup'
 assert_failure 'unexpected source remote rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
 assert_empty 'unexpected source timer enable emits no mutation' "$SYSTEMCTL_LOG"
 
 make_fixture
 write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
-assert_success 'valid receipt allows timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_success 'first timer activation creates the durable marker after enable succeeds' "$FAKE_LAUNCHER" object-backup-timer-enable
+[[ -f "$ACTIVATION_MARKER" ]] && pass 'first timer activation publishes a marker file' || fail_test 'first timer activation publishes a marker file'
+printf 'buildingos-object-backup-activation-v1\n' | cmp -s - "$ACTIVATION_MARKER" && pass 'first timer activation marker content is deterministic' || fail_test 'first timer activation marker content is deterministic'
 assert_contains 'valid receipt timer enable uses the fixed timer' "argv: <enable> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+write_activation_marker
+assert_success 'active marker and receipt allow timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_contains 'active marker timer start uses the fixed timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_activation_marker
+assert_success 'timer stop preserves an existing activation marker' "$FAKE_LAUNCHER" object-backup-timer-stop
+[[ -f "$ACTIVATION_MARKER" ]] && pass 'timer stop did not remove the activation marker' || fail_test 'timer stop did not remove the activation marker'
+assert_success 'timer disable preserves an existing activation marker' "$FAKE_LAUNCHER" object-backup-timer-disable
+[[ -f "$ACTIVATION_MARKER" ]] && pass 'timer disable did not remove the activation marker' || fail_test 'timer disable did not remove the activation marker'
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+printf 'enable\n' > "$TEST_ROOT/systemctl-fail-operation"
+assert_failure 'failed timer activation leaves no activation marker' "$FAKE_LAUNCHER" object-backup-timer-enable
+[[ ! -e "$ACTIVATION_MARKER" ]] && pass 'failed timer activation did not publish a marker' || fail_test 'failed timer activation did not publish a marker'
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+printf 'start\n' > "$TEST_ROOT/systemctl-fail-operation"
+assert_failure 'failed timer start leaves no activation marker' "$FAKE_LAUNCHER" object-backup-timer-start
+[[ ! -e "$ACTIVATION_MARKER" ]] && pass 'failed timer start did not publish a marker' || fail_test 'failed timer start did not publish a marker'
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_MARKER_PUBLICATION_FAIL=mktemp assert_failure 'marker publication failure fails closed after activation' "$FAKE_LAUNCHER" object-backup-timer-enable
+[[ ! -e "$ACTIVATION_MARKER" ]] && pass 'marker publication failure leaves no marker' || fail_test 'marker publication failure leaves no marker'
+assert_contains 'marker publication failure stops the timer' "<stop> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+assert_contains 'marker publication failure disables the timer' "<disable> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+printf 'malformed\n' > "$ACTIVATION_MARKER"
+chmod 0444 "$ACTIVATION_MARKER"
+assert_failure 'malformed activation marker rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'malformed activation marker emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+write_activation_marker
+mv "$ACTIVATION_MARKER" "$ACTIVATION_MARKER.real"
+ln -s "$ACTIVATION_MARKER.real" "$ACTIVATION_MARKER"
+assert_failure 'symlink activation marker rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'symlink activation marker emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+write_activation_marker
+MOCK_MARKER_MODE=644 assert_failure 'unsafe activation marker metadata rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'unsafe activation marker metadata emits no systemctl mutation' "$SYSTEMCTL_LOG"
 
 make_fixture
 assert_failure 'missing receipt rejects timer start' "$FAKE_LAUNCHER" object-backup-timer-start
@@ -268,6 +365,49 @@ make_fixture
 write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
 assert_success 'valid receipt allows timer start' "$FAKE_LAUNCHER" object-backup-timer-start
 assert_contains 'valid receipt timer start uses the fixed timer' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+chmod 0750 "$FAKE_ROOT/etc/sudoers.d"
+assert_success 'root-owned 0750 sudoers parent allows timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_contains '0750 sudoers parent reaches the fixed timer enable operation' "argv: <enable> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+chmod 0755 "$FAKE_ROOT/etc/sudoers.d"
+assert_success 'root-owned 0755 sudoers parent allows timer start' "$FAKE_LAUNCHER" object-backup-timer-start
+assert_contains '0755 sudoers parent reaches the fixed timer start operation' "argv: <start> <$OBJECT_TIMER>" "$SYSTEMCTL_LOG"
+
+for unsafe_mode in 0775 0777; do
+  make_fixture
+  write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+  chmod "$unsafe_mode" "$FAKE_ROOT/etc/sudoers.d"
+  assert_failure "unsafe sudoers parent mode $unsafe_mode rejects timer enable" "$FAKE_LAUNCHER" object-backup-timer-enable
+  assert_empty "unsafe sudoers parent mode $unsafe_mode emits no systemctl mutation" "$SYSTEMCTL_LOG"
+done
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_SUDOERS_DIR_UID=1001 assert_failure 'wrong sudoers parent owner rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'wrong sudoers parent owner emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+MOCK_SUDOERS_DIR_GID=1001 assert_failure 'wrong sudoers parent group rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'wrong sudoers parent group emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+mv "$FAKE_ROOT/etc/sudoers.d" "$FAKE_ROOT/etc/sudoers.d.real"
+ln -s "$FAKE_ROOT/etc/sudoers.d.real" "$FAKE_ROOT/etc/sudoers.d"
+assert_failure 'symlink sudoers parent rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'symlink sudoers parent emits no systemctl mutation' "$SYSTEMCTL_LOG"
+
+make_fixture
+write_receipt 'prod:buildingos-production' 'backup:buildingos-production-backup'
+chmod 0750 "$FAKE_ROOT/usr/local/libexec/buildingos-backup"
+assert_failure 'release payload directory below 0755 rejects timer enable' "$FAKE_LAUNCHER" object-backup-timer-enable
+assert_empty 'non-0755 release payload directory emits no systemctl mutation' "$SYSTEMCTL_LOG"
 
 if (( FAIL_COUNT > 0 )); then
   printf 'FAILED: %s failed, %s passed\n' "$FAIL_COUNT" "$PASS_COUNT" >&2

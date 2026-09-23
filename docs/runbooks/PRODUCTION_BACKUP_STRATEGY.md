@@ -52,6 +52,17 @@ backup with these minimum properties:
 - Credentials scoped to the required read/write operations only.
 - A separately approved schedule and recovery test.
 
+For the object-storage timer, preflight accepts only these phases:
+
+- **PRE_ACTIVATION:** the loaded timer is disabled and inactive with no trigger;
+  the object-backup service remains inactive while target, calendar,
+  persistence, and randomized-delay settings are validated.
+- **ACTIVE:** the loaded timer is enabled and active with a valid future trigger,
+  with the same timer contract validations.
+
+The first manual object backup and its independent verification must complete
+before enabling the scheduled object-storage backup.
+
 That implementation is intentionally deferred. This PR does not add a backup
 script or change storage configuration.
 

@@ -12,6 +12,8 @@ readonly OBJECT_BACKUP_WORKING_DIRECTORY='/var/lib/buildingos-object-backup'
 readonly DEFAULT_OBJECT_BACKUP_ENV_FILE='/etc/buildingos/object-backup.env'
 readonly DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG='/etc/buildingos/object-backup-rclone.conf'
 readonly OBJECT_BACKUP_RECEIPT='/var/lib/buildingos-object-backup/object-backup-receipt.json'
+readonly OBJECT_BACKUP_ACTIVATION_MARKER='/var/lib/buildingos-backup-preflight/object-backup-activation.state'
+readonly OBJECT_BACKUP_ACTIVATION_MARKER_CONTENT='buildingos-object-backup-activation-v1'
 readonly EXPECTED_TIMEOUT_USEC=21600000000
 readonly TIMER_HORIZON_SECONDS=129600
 readonly OBJECT_BACKUP_CALENDAR='*-*-* 02:15:00'
@@ -24,6 +26,10 @@ OBJECT_BACKUP_SERVICE_STATE='UNKNOWN'
 EXPECTED_APP_DIR="$DEFAULT_APP_DIR"
 OBJECT_BACKUP_ENV_FILE="$DEFAULT_OBJECT_BACKUP_ENV_FILE"
 OBJECT_BACKUP_RCLONE_CONFIG="$DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG"
+OBJECT_BACKUP_RECEIPT_FILE="$OBJECT_BACKUP_RECEIPT"
+OBJECT_BACKUP_ACTIVATION_MARKER_FILE="$OBJECT_BACKUP_ACTIVATION_MARKER"
+OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='UNKNOWN'
+OBJECT_BACKUP_TIMER_PHASE=''
 
 if ! declare -F endpoint_identity >/dev/null 2>&1; then
   helper_dir="${BASH_SOURCE[0]%/*}"
@@ -59,6 +65,112 @@ file_owner() {
 
 file_group() {
   stat -L -c '%G' -- "$1" 2>/dev/null || stat -L -f '%Sg' "$1"
+}
+
+receipt_has_one_line() {
+  local file="$1"
+  local line count=0
+  receipt_line=''
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    count=$((count + 1))
+    [[ "$count" -eq 1 ]] || return 1
+    receipt_line="$line"
+  done < "$file"
+  [[ "$count" -eq 1 && -n "$receipt_line" ]]
+}
+
+receipt_json_is_valid() {
+  printf '%s\n' "$1" | awk '
+    function skip_whitespace() {
+      while (pos <= length(text) && substr(text, pos, 1) ~ /[ \t\r\n]/) pos++
+    }
+    function string_end(start, p, character, hex_index) {
+      if (substr(text, start, 1) != "\"") return 0
+      p=start + 1
+      while (p <= length(text)) {
+        character=substr(text, p, 1)
+        if (character == "\"") return p + 1
+        if (character == "\\") {
+          p++
+          character=substr(text, p, 1)
+          if (character ~ /^["\\\/bfnrt]$/) {
+            p++
+          } else if (character == "u") {
+            for (hex_index=1; hex_index<=4; hex_index++) {
+              if (substr(text, p + hex_index, 1) !~ /^[0-9A-Fa-f]$/) return 0
+            }
+            p += 5
+          } else {
+            return 0
+          }
+        } else if (character ~ /[[:cntrl:]]/) {
+          return 0
+        } else {
+          p++
+        }
+      }
+      return 0
+    }
+    function scalar_end(start, remainder) {
+      if (substr(text, start, 1) == "\"") return string_end(start)
+      if (substr(text, start, 4) == "true" || substr(text, start, 4) == "null") return start + 4
+      if (substr(text, start, 5) == "false") return start + 5
+      remainder=substr(text, start)
+      if (match(remainder, /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?/)) return start + RLENGTH
+      return 0
+    }
+    {
+      text=$0
+      pos=1
+      skip_whitespace()
+      if (substr(text, pos, 1) != "{") invalid=1
+      pos++
+      skip_whitespace()
+      if (substr(text, pos, 1) == "}") invalid=1
+
+      while (!invalid) {
+        key_start=pos
+        pos=string_end(pos)
+        if (!pos) { invalid=1; break }
+        key=substr(text, key_start, pos - key_start)
+        if (key ~ /\\/) { invalid=1; break }
+        if (key in seen) { invalid=1; break }
+        seen[key]=1
+
+        skip_whitespace()
+        if (substr(text, pos, 1) != ":") { invalid=1; break }
+        pos++
+        skip_whitespace()
+        value_start=pos
+        pos=scalar_end(pos)
+        if (!pos) { invalid=1; break }
+        value=substr(text, value_start, pos - value_start)
+
+        if (key == "\"source\"") { source++; if (value == "\"prod:buildingos-production\"") source_ok++ }
+        if (key == "\"destination\"") { destination++; if (value == "\"backup:buildingos-production-backup\"") destination_ok++ }
+        if (key == "\"copy_status\"") { copy_status++; if (value == "\"PASS\"") copy_status_ok++ }
+        if (key == "\"verification_status\"") { verification_status++; if (value == "\"PASS\"") verification_status_ok++ }
+        if (key == "\"status\"") { status++; if (value == "\"PASS\"") status_ok++ }
+
+        skip_whitespace()
+        separator=substr(text, pos, 1)
+        if (separator == ",") {
+          pos++
+          skip_whitespace()
+        } else if (separator == "}") {
+          pos++
+          skip_whitespace()
+          if (pos <= length(text)) invalid=1
+          break
+        } else {
+          invalid=1
+        }
+      }
+    }
+    END {
+      exit !(NR == 1 && !invalid && source == 1 && source_ok == 1 && destination == 1 && destination_ok == 1 && copy_status == 1 && copy_status_ok == 1 && verification_status == 1 && verification_status_ok == 1 && status == 1 && status_ok == 1)
+    }
+  '
 }
 
 env_value() {
@@ -486,6 +598,10 @@ timer_has_future_trigger() {
   [[ "$trigger_epoch" =~ ^[0-9]+$ && "$trigger_epoch" -gt "$now_epoch" && $((trigger_epoch - now_epoch)) -le "$TIMER_HORIZON_SECONDS" ]]
 }
 
+timer_has_no_trigger() {
+  [[ -z "$1" || "$1" == n/a || "$1" == '-' ]]
+}
+
 inspect_timer() {
   local label="$1"
   local unit="$2"
@@ -526,6 +642,111 @@ inspect_timer() {
   printf '%s_CONTRACT=%s\n' "$label" "$contract"
 }
 
+inspect_activation_marker() {
+  local marker_dir marker_owner marker_group marker_mode
+  local marker_ok=false parent_ok=false
+
+  marker_dir="${OBJECT_BACKUP_ACTIVATION_MARKER_FILE%/*}"
+  if [[ ! -d "$marker_dir" || -L "$marker_dir" ]]; then
+    fail_check 'Object Storage activation marker parent is not a real directory'
+  else
+    marker_owner="$(file_owner "$marker_dir" 2>/dev/null || true)"
+    marker_group="$(file_group "$marker_dir" 2>/dev/null || true)"
+    marker_mode="0$(file_mode "$marker_dir" 2>/dev/null || true)"
+    [[ "$marker_owner" == root ]] || fail_check 'Object Storage activation marker parent owner is not root'
+    [[ "$marker_group" == root ]] || fail_check 'Object Storage activation marker parent group is not root'
+    [[ "$marker_mode" == 0755 ]] || fail_check 'Object Storage activation marker parent mode is not 0755'
+    [[ "$marker_owner" == root && "$marker_group" == root && "$marker_mode" == 0755 ]] && parent_ok=true
+  fi
+
+  if [[ ! -e "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" && ! -L "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" ]]; then
+    [[ "$parent_ok" == true ]] && OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='ABSENT' || OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='INVALID'
+    printf 'OBJECT_BACKUP_ACTIVATION_MARKER=%s\n' "$OBJECT_BACKUP_ACTIVATION_MARKER_STATUS"
+    return
+  fi
+
+  if ! file_is_regular_non_symlink "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" || [[ ! -r "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" ]]; then
+    fail_check 'Object Storage activation marker is not a readable regular non-symlink file'
+  else
+    marker_owner="$(file_owner "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" 2>/dev/null || true)"
+    marker_group="$(file_group "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" 2>/dev/null || true)"
+    marker_mode="0$(file_mode "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE" 2>/dev/null || true)"
+    [[ "$marker_owner" == root ]] || fail_check 'Object Storage activation marker owner is not root'
+    [[ "$marker_group" == root ]] || fail_check 'Object Storage activation marker group is not root'
+    [[ "$marker_mode" == 0444 ]] || fail_check 'Object Storage activation marker mode is not 0444'
+    if [[ "$marker_owner" == root && "$marker_group" == root && "$marker_mode" == 0444 ]] &&
+      printf '%s\n' "$OBJECT_BACKUP_ACTIVATION_MARKER_CONTENT" | cmp -s - "$OBJECT_BACKUP_ACTIVATION_MARKER_FILE"; then
+      marker_ok=true
+    else
+      fail_check 'Object Storage activation marker content is malformed'
+    fi
+  fi
+
+  if [[ "$parent_ok" == true && "$marker_ok" == true ]]; then
+    OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='PRESENT'
+  else
+    OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='INVALID'
+  fi
+  printf 'OBJECT_BACKUP_ACTIVATION_MARKER=%s\n' "$OBJECT_BACKUP_ACTIVATION_MARKER_STATUS"
+}
+
+inspect_object_timer() {
+  local label="$1"
+  local unit="$2"
+  local expected_unit="$3"
+  local load_state unit_file_state active_state next_trigger calendar persistent randomized phase=''
+  local exists='NO' contract='NO' before
+  before=$failures
+
+  load_state="$(systemctl_value "$unit" LoadState || true)"
+  unit_file_state="$(systemctl_value "$unit" UnitFileState || true)"
+  active_state="$(unit_active_state "$unit")"
+  next_trigger="$(systemctl_value "$unit" NextElapseUSecRealtime || true)"
+  calendar="$(systemd_timers_calendar "$unit" || true)"
+  persistent="$(systemctl_value "$unit" Persistent || true)"
+  randomized="$(systemctl_value "$unit" RandomizedDelayUSec || true)"
+  [[ "$load_state" == loaded ]] && exists='YES' || fail_check "$unit is not loaded"
+  [[ "$(systemctl_value "$unit" Unit || true)" == "$expected_unit" ]] || fail_check "$unit points to an unexpected service"
+  systemd_calendar_matches "$calendar" "$OBJECT_BACKUP_CALENDAR" || fail_check "$unit calendar is unexpected"
+  [[ "$persistent" == yes || "$persistent" == true ]] || fail_check "$unit is not persistent"
+  systemd_delay_matches "$randomized" || fail_check "$unit randomized delay is not 15 minutes"
+
+  case "$unit_file_state:$active_state" in
+    disabled:inactive)
+      if ! timer_has_no_trigger "$next_trigger"; then
+        fail_check "$unit pre-activation phase has an unexpected trigger"
+      elif [[ "$OBJECT_BACKUP_ACTIVATION_MARKER_STATUS" != ABSENT ]]; then
+        fail_check "$unit pre-activation phase requires an absent activation marker"
+      else
+        phase='PRE_ACTIVATION'
+      fi
+      ;;
+    enabled:active)
+      if ! timer_has_future_trigger "$next_trigger"; then
+        fail_check "$unit active phase has no future trigger"
+      elif [[ "$OBJECT_BACKUP_ACTIVATION_MARKER_STATUS" != PRESENT ]]; then
+        fail_check "$unit active phase requires a valid activation marker"
+      else
+        phase='ACTIVE'
+      fi
+      ;;
+    *) fail_check "$unit lifecycle state is invalid or ambiguous" ;;
+  esac
+
+  if (( failures == before )); then contract='YES'; fi
+  printf '%s_EXISTS=%s\n' "$label" "$exists"
+  printf '%s_ENABLED=%s\n' "$label" "$([[ "$unit_file_state" == enabled ]] && printf YES || printf NO)"
+  printf '%s_ACTIVE=%s\n' "$label" "$([[ "$active_state" == active ]] && printf YES || printf NO)"
+  printf '%s_FUTURE_TRIGGER=%s\n' "$label" "$(timer_has_future_trigger "$next_trigger" && printf YES || printf NO)"
+  printf '%s_CALENDAR_MATCH=%s\n' "$label" "$(systemd_calendar_matches "$calendar" "$OBJECT_BACKUP_CALENDAR" && printf YES || printf NO)"
+  printf '%s_PERSISTENT=%s\n' "$label" "$([[ "$persistent" == yes || "$persistent" == true ]] && printf YES || printf NO)"
+  printf '%s_RANDOMIZED_DELAY_MATCH=%s\n' "$label" "$(systemd_delay_matches "$randomized" && printf YES || printf NO)"
+  if [[ -n "$phase" && "$contract" == YES && "$OBJECT_BACKUP_SERVICE_STATE" == inactive ]]; then
+    OBJECT_BACKUP_TIMER_PHASE="$phase"
+  fi
+  printf '%s_CONTRACT=%s\n' "$label" "$contract"
+}
+
 inspect_object_environment() {
   local source destination receipt rclone source_bucket destination_bucket
   local env_ok='NO' env_owner env_group env_mode config_mode before=$failures
@@ -551,7 +772,7 @@ inspect_object_environment() {
     else
       fail_check 'Object Storage source or destination is not a safe remote bucket root'
     fi
-    [[ "$receipt" == "$OBJECT_BACKUP_RECEIPT" ]] || fail_check 'Object Storage receipt path is unexpected'
+    [[ "$receipt" == "$OBJECT_BACKUP_RECEIPT_FILE" ]] || fail_check 'Object Storage receipt path is unexpected'
     [[ "$rclone" == "$OBJECT_BACKUP_RCLONE_CONFIG" ]] || fail_check 'Object Storage rclone config path is unexpected'
     if file_is_regular_non_symlink "$rclone" && [[ -r "$rclone" ]]; then
       local config_owner config_group
@@ -572,6 +793,49 @@ inspect_object_environment() {
   printf 'OBJECT_BACKUP_ENV=%s\n' "$env_ok"
 }
 
+inspect_object_receipt() {
+  local phase="$1"
+  local receipt_ok='NO' receipt_dir receipt_dir_owner receipt_dir_group receipt_dir_mode receipt_owner receipt_group receipt_mode before
+  before=$failures
+
+  if [[ "$phase" == PRE_ACTIVATION ]]; then
+    if [[ -e "$OBJECT_BACKUP_RECEIPT_FILE" || -L "$OBJECT_BACKUP_RECEIPT_FILE" ]]; then
+      fail_check 'Object Storage pre-activation must not have a receipt path'
+    else
+      receipt_ok='ABSENT'
+    fi
+  elif [[ "$phase" == ACTIVE ]]; then
+    receipt_dir="${OBJECT_BACKUP_RECEIPT_FILE%/*}"
+    if [[ ! -d "$receipt_dir" || -L "$receipt_dir" ]]; then
+      fail_check 'Object Storage receipt parent is not a real directory'
+    else
+      receipt_dir_owner="$(file_owner "$receipt_dir")"
+      receipt_dir_group="$(file_group "$receipt_dir")"
+      receipt_dir_mode="0$(file_mode "$receipt_dir")"
+      [[ "$receipt_dir_owner" == yoryi ]] || fail_check 'Object Storage receipt parent owner is not yoryi'
+      [[ "$receipt_dir_group" == yoryi ]] || fail_check 'Object Storage receipt parent group is not yoryi'
+      (( (8#${receipt_dir_mode#0} & 0022) == 0 )) || fail_check 'Object Storage receipt parent is writable by group or world'
+    fi
+    if ! file_is_regular_non_symlink "$OBJECT_BACKUP_RECEIPT_FILE" || [[ ! -r "$OBJECT_BACKUP_RECEIPT_FILE" ]]; then
+      fail_check 'Object Storage receipt is not a readable regular non-symlink file'
+    else
+      receipt_owner="$(file_owner "$OBJECT_BACKUP_RECEIPT_FILE")"
+      receipt_group="$(file_group "$OBJECT_BACKUP_RECEIPT_FILE")"
+      receipt_mode="0$(file_mode "$OBJECT_BACKUP_RECEIPT_FILE")"
+      [[ "$receipt_owner" == yoryi ]] || fail_check 'Object Storage receipt owner is not yoryi'
+      [[ "$receipt_group" == yoryi ]] || fail_check 'Object Storage receipt group is not yoryi'
+      [[ "$receipt_mode" == 0600 ]] || fail_check 'Object Storage receipt mode is not 0600'
+      receipt_has_one_line "$OBJECT_BACKUP_RECEIPT_FILE" || fail_check 'Object Storage receipt must contain exactly one line'
+      receipt_json_is_valid "$receipt_line" || fail_check 'Object Storage receipt is malformed or does not satisfy the required backup status'
+      [[ "$failures" -eq "$before" ]] && receipt_ok='PASS'
+    fi
+  else
+    fail_check 'Object Storage timer phase is unavailable for receipt validation'
+  fi
+
+  printf 'OBJECT_BACKUP_RECEIPT=%s\n' "$receipt_ok"
+}
+
 inspect_topology() {
   local before
   before=$failures
@@ -582,7 +846,8 @@ inspect_topology() {
 
   before=$failures
   inspect_service OBJECT_BACKUP_SERVICE "$OBJECT_BACKUP_SERVICE" "$OBJECT_BACKUP_EXEC" "$OBJECT_BACKUP_ENV_FILE"
-  inspect_timer OBJECT_BACKUP_TIMER "$OBJECT_BACKUP_TIMER" "$OBJECT_BACKUP_SERVICE" "$OBJECT_BACKUP_CALENDAR"
+  inspect_activation_marker
+  inspect_object_timer OBJECT_BACKUP_TIMER "$OBJECT_BACKUP_TIMER" "$OBJECT_BACKUP_SERVICE"
   [[ "$failures" -eq "$before" ]] && printf 'OBJECT_BACKUP_TOPOLOGY=PASS\n' || printf 'OBJECT_BACKUP_TOPOLOGY=FAIL\n'
 }
 
@@ -597,7 +862,7 @@ inspect_concurrency() {
 
 main() {
   local command_name missing_dependency=false
-  local required_commands=(awk bash date docker git stat systemctl)
+  local required_commands=(awk bash cmp date docker git stat systemctl)
   local runtime_app_dir
 
   [[ $# -eq 1 ]] || { printf 'Usage: %s <expected_runtime_sha>\n' "${0##*/}" >&2; return 64; }
@@ -607,10 +872,13 @@ main() {
   OBJECT_BACKUP_ENV_FILE="$DEFAULT_OBJECT_BACKUP_ENV_FILE"
   OBJECT_BACKUP_RCLONE_CONFIG="$DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG"
   EXPECTED_APP_DIR="$DEFAULT_APP_DIR"
+  OBJECT_BACKUP_ACTIVATION_MARKER_FILE="$OBJECT_BACKUP_ACTIVATION_MARKER"
   if [[ "${BUILDINGOS_PREFLIGHT_TEST_MODE:-}" == LOCAL_ISOLATED_ONLY ]]; then
     EXPECTED_APP_DIR="${PREFLIGHT_APP_DIR:?}"
     OBJECT_BACKUP_ENV_FILE="${PREFLIGHT_ENV_FILE:?}"
     OBJECT_BACKUP_RCLONE_CONFIG="${PREFLIGHT_RCLONE_CONFIG_FILE:?}"
+    OBJECT_BACKUP_RECEIPT_FILE="${PREFLIGHT_RECEIPT_FILE:?}"
+    OBJECT_BACKUP_ACTIVATION_MARKER_FILE="${PREFLIGHT_ACTIVATION_MARKER_FILE:?}"
   fi
 
   for command_name in "${required_commands[@]}"; do
@@ -628,10 +896,12 @@ main() {
     inspect_runtime
     inspect_topology
     inspect_object_environment
+    inspect_object_receipt "$OBJECT_BACKUP_TIMER_PHASE"
     inspect_concurrency
   fi
   printf 'PRODUCTION_WRITES=0\nBACKUP_STARTED=NO\n'
   if (( failures == 0 )); then
+    printf 'OBJECT_BACKUP_TIMER_PHASE=%s\n' "$OBJECT_BACKUP_TIMER_PHASE"
     printf 'PREFLIGHT_STATUS=PASS\n'
     return 0
   fi
