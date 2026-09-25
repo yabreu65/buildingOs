@@ -28,7 +28,7 @@ s3_fence_helper_source() { local p="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 s3_fence_sdk_invoke() {
   local image="$1" env="$2" network="$3" action="$4" request="$5" output="$6" helper bin b64
   s3_fence_image "$image" && s3_fence_private_readable_file "$env" && s3_fence_network "$network" || { s3_fence_error 'SDK integration arguments are invalid'; return 1; }
-  [[ "$action" =~ ^(preflight|policy-get|policy-set|policy-remove|presigned-put|put|get|head|list|verify-owned|remove-owned)$ ]] || return 1
+  [[ "$action" =~ ^(preflight|policy-get|policy-set|policy-remove|presigned-put|put|get|head|list|verify-owned|remove-owned|verify-absent)$ ]] || return 1
   jq -ce . >/dev/null <<<"$request" 2>/dev/null || return 1
   helper="$(s3_fence_helper_source)" || { s3_fence_error 'trusted S3 helper is unavailable'; return 1; }
   s3_fence_private_file "$output" && s3_fence_private_file "$output.stderr" || return 1
@@ -114,26 +114,49 @@ s3_fence_restore_policy() {
 
 s3_fence_presigned_put() { local image="$1" env="$2" network="$3" key="$4" e="$5" request url config="$5/presigned.curl.conf" body="$5/probe-body" output="$5/presigned.response" status bin; s3_fence_probe_key "$key" || return 1; request="$(jq -cn --arg key "$key" '{action:"presigned-put",key:$key,expirySeconds:86400}')"; s3_fence_request "$image" "$env" "$network" presigned-put "$request" "$e/presigned.json" || return 1; url="$(jq -r '.url // empty' "$e/presigned.json")"; [[ "$url" =~ ^https://[^[:space:]\"]+$ ]] || return 1; s3_fence_private_file "$body" && printf 'BuildingOS recovery-point fence probe: %s\n' "$key" > "$body" && s3_fence_private_file "$config" && printf 'url = "%s"\n' "$url" > "$config" && s3_fence_private_file "$output" && s3_fence_private_file "$output.stderr" || return 1; bin="${S3_FENCE_CURL_BIN:-curl}"; status="$("$bin" --config "$config" --silent --show-error --request PUT --data-binary "@$body" --output "$output" --write-out '%{http_code}' 2> "$output.stderr")" || return 1; S3_FENCE_HTTP="$status"; }
 s3_fence_replay_presigned_put() { local e="$1" config="$1/presigned.curl.conf" body="$1/probe-body" output="$1/presigned.replay.response" status bin; s3_fence_private_readable_file "$config" && s3_fence_private_readable_file "$body" && s3_fence_private_file "$output" && s3_fence_private_file "$output.stderr" || return 1; bin="${S3_FENCE_CURL_BIN:-curl}"; status="$("$bin" --config "$config" --silent --show-error --request PUT --data-binary "@$body" --output "$output" --write-out '%{http_code}' 2> "$output.stderr")" || return 1; S3_FENCE_HTTP="$status"; }
-s3_fence_probe() { local request; request="$(jq -cn --arg action "$4" --arg key "$5" --argjson versionId "${7:-null}" '{action:$action,key:$key,versionId:$versionId}')" || return 1; s3_fence_sdk_invoke "$1" "$2" "$3" "$4" "$request" "$6"; }
-s3_fence_owned() { s3_fence_probe "$1" "$2" "$3" verify-owned "$4" "$6" "${5:-null}" && s3_fence_ok "$6"; }
-s3_fence_cleanup_owned() { s3_fence_owned "$1" "$2" "$3" "$4" "$5" "$6" && s3_fence_probe "$1" "$2" "$3" remove-owned "$4" "$7" "$5" && s3_fence_ok "$7"; }
+s3_fence_probe() {
+  local request version="${7-}" version_is_null="${8:-false}" expected_bucket="${9-}" include_bucket=false
+  [[ "$version_is_null" == true || "$version_is_null" == false ]] || return 1
+  [[ "$version_is_null" == true || -n "$version" ]] || { s3_fence_error 'versionId must be null or a non-empty string'; return 1; }
+  if [[ -n "$expected_bucket" ]]; then s3_fence_bucket "$expected_bucket" || return 1; include_bucket=true; fi
+  request="$(jq -cn --arg action "$4" --arg key "$5" --arg versionId "$version" --arg bucket "$expected_bucket" --argjson versionIsNull "$version_is_null" --argjson includeBucket "$include_bucket" '{action:$action,key:$key,versionId:(if $versionIsNull then null else $versionId end)} + (if $includeBucket then {bucket:$bucket} else {} end)')" || return 1
+  s3_fence_sdk_invoke "$1" "$2" "$3" "$4" "$request" "$6"
+}
+s3_fence_verify_absent() {
+  local image="$1" env="$2" network="$3" bucket="$4" key="$5" version="$6" output="$7" request
+  s3_fence_bucket "$bucket" && s3_fence_probe_key "$key" && [[ -n "$version" ]] || return 1
+  request="$(jq -cn --arg bucket "$bucket" --arg key "$key" --arg versionId "$version" '{action:"verify-absent",bucket:$bucket,key:$key,versionId:$versionId}')" || return 1
+  s3_fence_sdk_invoke "$image" "$env" "$network" verify-absent "$request" "$output" \
+    && jq -e --arg bucket "$bucket" --arg key "$key" --arg versionId "$version" '.ok == true and .state == "absent" and .bucket == $bucket and .key == $key and .versionId == $versionId' "$output" >/dev/null 2>&1
+}
+s3_fence_owned() { s3_fence_probe "$1" "$2" "$3" verify-owned "$4" "$6" "$5" false "${7-}" && s3_fence_ok "$6"; }
+s3_fence_cleanup_owned() {
+  local image="$1" env="$2" network="$3" bucket="$4" key="$5" version="$6" owned_output="$7" remove_output="$8" absent_output="$9"
+  s3_fence_bucket "$bucket" && s3_fence_probe_key "$key" && [[ -n "$version" ]] || return 1
+  s3_fence_owned "$image" "$env" "$network" "$key" "$version" "$owned_output" "$bucket" \
+    && s3_fence_probe "$image" "$env" "$network" remove-owned "$key" "$remove_output" "$version" false "$bucket" \
+    && s3_fence_ok "$remove_output" \
+    && s3_fence_verify_absent "$image" "$env" "$network" "$bucket" "$key" "$version" "$absent_output"
+}
 
 # capture callback runs only while the temporary deny is server-observed. Quiesce/resume preserve the prior API state.
 s3_fence_run_recovery_point() {
   local image="$1" env="$2" network="$3" e="$4" quiesce="$5" capture="$6" resume="$7" s key post_key pre_meta="$4/pre-owned.json" post_meta="$4/post-owned.json" pre_version
   s3_fence_callback "$quiesce" && s3_fence_callback "$capture" && s3_fence_callback "$resume" || return 1
   s3_fence_private_directory "$e" || return 1; s3_fence_preflight "$image" "$env" "$network" "$e" || return 1; s="$e/policy-snapshot"; s3_fence_snapshot_policy "$image" "$env" "$network" "$s" || return 1
-  key="$(s3_fence_new_probe_key)" && s3_fence_presigned_put "$image" "$env" "$network" "$key" "$e" && [[ "$S3_FENCE_HTTP" == 200 ]] && s3_fence_probe "$image" "$env" "$network" head "$key" "$pre_meta" null && s3_fence_ok "$pre_meta" || return 1
-  pre_version="$(jq -ce '.versionId | select(type == "string" and length > 0)' "$pre_meta")" || return 1
+  key="$(s3_fence_new_probe_key)" && s3_fence_presigned_put "$image" "$env" "$network" "$key" "$e" && [[ "$S3_FENCE_HTTP" == 200 ]] && s3_fence_probe "$image" "$env" "$network" head "$key" "$pre_meta" '' true && s3_fence_ok "$pre_meta" || return 1
+  pre_version="$(jq -er '.versionId | select(type == "string" and length > 0)' "$pre_meta")" || return 1
   "$quiesce" || return 1
   if ! s3_fence_apply_temporary_deny "$image" "$env" "$network" "$s"; then
     if [[ "$S3_FENCE_APPLY_STATE" == original ]] || s3_fence_original_verified "$image" "$env" "$network" "$s"; then "$resume"; return 1; fi
     s3_fence_restore_policy "$image" "$env" "$network" "$s" && "$resume"; return 1
   fi
-  if ! s3_fence_probe "$image" "$env" "$network" put "$key" "$e/fence-put.json" null || ! jq -e '.ok==false and .error=="AccessDenied"' "$e/fence-put.json" >/dev/null || ! s3_fence_probe "$image" "$env" "$network" remove-owned "$key" "$e/fence-delete.json" "$pre_version" || ! jq -e '.ok==false and .error=="AccessDenied"' "$e/fence-delete.json" >/dev/null || ! s3_fence_probe "$image" "$env" "$network" get "$key" "$e/fence-get.json" null || ! s3_fence_ok "$e/fence-get.json" || ! s3_fence_probe "$image" "$env" "$network" head "$key" "$e/fence-head.json" null || ! s3_fence_ok "$e/fence-head.json" || ! s3_fence_probe "$image" "$env" "$network" list "$key" "$e/fence-list.json" null || ! s3_fence_ok "$e/fence-list.json" || ! s3_fence_replay_presigned_put "$e" || ! [[ "$S3_FENCE_HTTP" == 403 ]] || ! grep -Fq '<Code>AccessDenied</Code>' "$e/presigned.replay.response" || ! "$capture"; then s3_fence_restore_policy "$image" "$env" "$network" "$s" && "$resume"; return 1; fi
+  if ! s3_fence_probe "$image" "$env" "$network" put "$key" "$e/fence-put.json" '' true || ! jq -e '.ok==false and .error=="AccessDenied"' "$e/fence-put.json" >/dev/null || ! s3_fence_probe "$image" "$env" "$network" remove-owned "$key" "$e/fence-delete.json" "$pre_version" false "$(<"$s/bucket")" || ! jq -e '.ok==false and .error=="AccessDenied"' "$e/fence-delete.json" >/dev/null || ! s3_fence_probe "$image" "$env" "$network" get "$key" "$e/fence-get.json" '' true || ! s3_fence_ok "$e/fence-get.json" || ! s3_fence_probe "$image" "$env" "$network" head "$key" "$e/fence-head.json" '' true || ! s3_fence_ok "$e/fence-head.json" || ! s3_fence_probe "$image" "$env" "$network" list "$key" "$e/fence-list.json" '' true || ! s3_fence_ok "$e/fence-list.json" || ! s3_fence_replay_presigned_put "$e" || ! [[ "$S3_FENCE_HTTP" == 403 ]] || ! grep -Fq '<Code>AccessDenied</Code>' "$e/presigned.replay.response" || ! "$capture"; then s3_fence_restore_policy "$image" "$env" "$network" "$s" && "$resume"; return 1; fi
   s3_fence_restore_policy "$image" "$env" "$network" "$s" || return 1
   post_key="$(s3_fence_new_probe_key)"
-  if ! s3_fence_probe "$image" "$env" "$network" put "$post_key" "$post_meta" null || ! s3_fence_ok "$post_meta"; then "$resume"; return 1; fi
-  if ! s3_fence_cleanup_owned "$image" "$env" "$network" "$key" "$pre_version" "$e/cleanup-pre-head.json" "$e/cleanup-pre.json" || ! s3_fence_cleanup_owned "$image" "$env" "$network" "$post_key" "$(jq -c '.versionId' "$post_meta")" "$e/cleanup-post-head.json" "$e/cleanup-post.json"; then "$resume"; return 1; fi
+  if ! s3_fence_probe "$image" "$env" "$network" put "$post_key" "$post_meta" '' true || ! s3_fence_ok "$post_meta"; then "$resume"; return 1; fi
+  local post_version
+  post_version="$(jq -er '.versionId | select(type == "string" and length > 0)' "$post_meta")" || { "$resume"; return 1; }
+  if ! s3_fence_cleanup_owned "$image" "$env" "$network" "$(<"$s/bucket")" "$key" "$pre_version" "$e/cleanup-pre-head.json" "$e/cleanup-pre.json" "$e/cleanup-pre-absence.json" || ! s3_fence_cleanup_owned "$image" "$env" "$network" "$(<"$s/bucket")" "$post_key" "$post_version" "$e/cleanup-post-head.json" "$e/cleanup-post.json" "$e/cleanup-post-absence.json"; then "$resume"; return 1; fi
   "$resume"
 }
