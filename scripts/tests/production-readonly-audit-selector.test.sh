@@ -367,5 +367,53 @@ RECORD
 }
 ok 'ambiguous exact prior recovery bindings are never selected by filename or recency' rollback_ambiguous_binding_case
 
+# A complete local fixture must publish independently-derived component statuses and
+# aggregate them fail-closed. Production uses the fixed constants by default.
+write_reference_content
+write_receipt
+write_record_and_selector
+OBJECT_RECEIPT="$TEST_ROOT/object-backup-receipt.json"
+jq -n --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{receipt_version:1,started_at_utc:$completed_at,completed_at_utc:$completed_at,source:"prod:buildingos-production",destination:"backup:buildingos-production-backup",copy_status:"PASS",verification_status:"PASS",status:"PASS",recovery_point_valid:"NOT_EVALUATED"}' >"$OBJECT_RECEIPT"
+chmod 600 "$OBJECT_RECEIPT"
+MECHANISM_MANIFEST="$TEST_ROOT/backup-postgres.identity.v1"
+printf 'path=test-backup-script\nsha256=test-digest\nowner=test-owner\ngroup=test-group\nmode=0775\n' >"$MECHANISM_MANIFEST"
+validate_backup_mechanism() { [[ "$1" == "$MECHANISM_MANIFEST" ]]; }
+RUNTIME_APP_SHA="$TARGET_SHA"
+RUNTIME_API_IMAGE_ID=''
+RUNTIME_WEB_IMAGE_ID=''
+report_output="$(report_backup_readiness "$SELECTOR" "$TEST_DEPLOYMENTS_ROOT" "$TEST_RECOVERY_ROOT" "$MECHANISM_MANIFEST" "$OBJECT_RECEIPT")"
+ok 'complete local recovery fixture reports valid recovery point and backup readiness pass' \
+  bash -c '[[ "$1" == *"CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR=PASS"* && "$1" == *"POSTGRES_BACKUP_MECHANISM=PASS"* && "$1" == *"POSTGRES_BACKUP_EVIDENCE=PASS"* && "$1" == *"OBJECT_BACKUP_RECEIPT=PASS"* && "$1" == *"OBJECT_BACKUP_COPY=PASS"* && "$1" == *"DB_OBJECT_REFERENCE_RECONCILIATION=PASS"* && "$1" == *"DB_OBJECT_CONTENT_IDENTITY=PASS"* && "$1" == *"RECOVERY_POINT_VALID=PASS"* && "$1" == *"BACKUP_READINESS=PASS"* ]]' _ "$report_output"
+
+backup_readiness_component_statuses=(
+  POSTGRES_BACKUP_MECHANISM
+  POSTGRES_BACKUP_EVIDENCE
+  OBJECT_BACKUP_RECEIPT
+  OBJECT_BACKUP_COPY
+  CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR
+  DB_OBJECT_REFERENCE_RECONCILIATION
+  DB_OBJECT_CONTENT_IDENTITY
+  RECOVERY_POINT_VALID
+)
+for missing_component in "${backup_readiness_component_statuses[@]}"; do
+  component_values=()
+  for component in "${backup_readiness_component_statuses[@]}"; do
+    if [[ "$component" == "$missing_component" ]]; then
+      component_values+=("$component=INCOMPLETE")
+    else
+      component_values+=("$component=PASS")
+    fi
+  done
+  ok "backup readiness is incomplete when $missing_component is non-PASS" \
+    bash -c 'source "$1"; [[ "$(backup_readiness_status "${@:2}")" == INCOMPLETE ]]' _ "$AUDIT_SCRIPT" "${component_values[@]}"
+  missing_values=()
+  for component in "${backup_readiness_component_statuses[@]}"; do
+    [[ "$component" == "$missing_component" ]] || missing_values+=("$component=PASS")
+  done
+  ok "backup readiness is incomplete when $missing_component is missing" \
+    bash -c 'source "$1"; [[ "$(backup_readiness_status "${@:2}")" == INCOMPLETE ]]' _ "$AUDIT_SCRIPT" "${missing_values[@]}"
+done
+
 (( fail == 0 )) || exit 1
 printf 'PASSED: %s assertions\n' "$pass"

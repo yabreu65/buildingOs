@@ -80,6 +80,9 @@ RUNTIME_APP_SHA='UNKNOWN'
 RUNTIME_API_IMAGE_ID='UNKNOWN'
 RUNTIME_WEB_IMAGE_ID='UNKNOWN'
 RECOVERY_POINT_AUDIT_STATUS='NOT_EVALUATED'
+RECOVERY_POINT_POSTGRES_BACKUP_EVIDENCE_STATUS='NOT_EVALUATED'
+RECOVERY_POINT_REFERENCE_RECONCILIATION_STATUS='NOT_EVALUATED'
+RECOVERY_POINT_CONTENT_IDENTITY_STATUS='NOT_EVALUATED'
 RECOVERY_POINT_SELECTOR_REPORTED=false
 SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD=''
 
@@ -1002,6 +1005,10 @@ validate_current_successful_deployment_selector_binding() {
 validate_selected_successful_deployment_recovery_point() {
   local selector_record="$1" recovery_root="$2"
   local recovery_id receipt bundle receipt_hash source_sha remote_root
+
+  RECOVERY_POINT_POSTGRES_BACKUP_EVIDENCE_STATUS='INCOMPLETE'
+  RECOVERY_POINT_REFERENCE_RECONCILIATION_STATUS='INCOMPLETE'
+  RECOVERY_POINT_CONTENT_IDENTITY_STATUS='INCOMPLETE'
   local input_hash content_hash dump_hash dump_bytes references unique actual_hash actual_bytes
 
   recovery_id="$(strict_key_value "$selector_record" recovery_point_id)" || return 1
@@ -1051,6 +1058,7 @@ validate_selected_successful_deployment_recovery_point() {
   actual_bytes="$(wc -c < "$bundle/postgresql/buildingos_${recovery_id}.dump")"; actual_bytes="${actual_bytes//[[:space:]]/}"
   [[ "$actual_bytes" == "$dump_bytes" ]] || return 1
   validate_pg_restore_list "$bundle/postgresql/buildingos_${recovery_id}.dump" || return 1
+  RECOVERY_POINT_POSTGRES_BACKUP_EVIDENCE_STATUS='PASS'
   jq -e --argjson references "$references" --argjson unique "$unique" '
     type == "array" and length == $references
     and ([.[].id] | unique | length) == length
@@ -1076,6 +1084,7 @@ validate_selected_successful_deployment_recovery_point() {
       and ([$manifest[0][] | select(.id == $row.id)] | length) == 1
       and ([$manifest[0][] | select(.id == $row.id)][0] | {id, tenantId, bucket, objectKey, objectVersionId, size, checksum}) == ($row | {id, tenantId, bucket, objectKey, objectVersionId, size, checksum}))
   ' "$bundle/metadata/reference-content-manifest.json" >/dev/null || return 1
+  RECOVERY_POINT_REFERENCE_RECONCILIATION_STATUS='PASS'
 
   local expected_blob_paths destination content_digest content_bytes blob actual_blob_digest actual_blob_bytes
   expected_blob_paths="$(jq -r '.[].destinationObjectPath' "$bundle/metadata/reference-content-manifest.json")" || return 1
@@ -1093,6 +1102,7 @@ validate_selected_successful_deployment_recovery_point() {
     destination="${blob#"$bundle/"}"
     printf '%s\n' "$expected_blob_paths" | grep -Fqx -- "$destination" || return 1
   done < <(find "$bundle/objects" -mindepth 1 -print)
+  RECOVERY_POINT_CONTENT_IDENTITY_STATUS='PASS'
 }
 
 validate_current_successful_deployment_selector() {
@@ -1103,12 +1113,21 @@ validate_current_successful_deployment_selector() {
 }
 
 report_recovery_point_selector() {
+  local selector="${1:-$CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR}"
+  local deployments_root="${2:-$DEPLOYMENTS_ROOT}"
+  local recovery_root="${3:-$RECOVERY_POINTS_ROOT}"
+  local runtime_sha="${4:-$RUNTIME_APP_SHA}"
+  local runtime_api_image_id="${5-$RUNTIME_API_IMAGE_ID}"
+  local runtime_web_image_id="${6-$RUNTIME_WEB_IMAGE_ID}"
   local selector_status='NOT_EVALUATED'
   local recovery_status='NOT_EVALUATED'
 
-  if [[ "$RUNTIME_APP_SHA" =~ ^[0-9a-f]{40}$ ]] && validate_current_successful_deployment_selector_binding "$CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR" "$DEPLOYMENTS_ROOT" "$RUNTIME_APP_SHA" "$RUNTIME_API_IMAGE_ID" "$RUNTIME_WEB_IMAGE_ID"; then
+  RECOVERY_POINT_POSTGRES_BACKUP_EVIDENCE_STATUS='INCOMPLETE'
+  RECOVERY_POINT_REFERENCE_RECONCILIATION_STATUS='INCOMPLETE'
+  RECOVERY_POINT_CONTENT_IDENTITY_STATUS='INCOMPLETE'
+  if [[ "$runtime_sha" =~ ^[0-9a-f]{40}$ ]] && validate_current_successful_deployment_selector_binding "$selector" "$deployments_root" "$runtime_sha" "$runtime_api_image_id" "$runtime_web_image_id"; then
     selector_status='PASS'
-    if validate_selected_successful_deployment_recovery_point "$SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD" "$RECOVERY_POINTS_ROOT"; then
+    if validate_selected_successful_deployment_recovery_point "$SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD" "$recovery_root"; then
       recovery_status='PASS'
     else
       AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
@@ -1194,46 +1213,96 @@ validate_object_backup_receipt() {
   (( started_epoch <= completed_epoch && age >= 0 && age <= MAX_BACKUP_AGE_SECONDS ))
 }
 
-# Object copy evidence remains separate from the unimplemented recovery-point contract.
+# Scheduled Object Storage copy evidence remains independently validated from recovery evidence.
 report_object_backup_receipt() {
   local receipt="$1"
-  local receipt_status='INCOMPLETE' copy_status='INCOMPLETE' recovery_component_status='NOT_EVALUATED'
+  local receipt_status='INCOMPLETE' copy_status='INCOMPLETE'
+  local postgres_evidence_status="$RECOVERY_POINT_POSTGRES_BACKUP_EVIDENCE_STATUS"
+  local reference_reconciliation_status="$RECOVERY_POINT_REFERENCE_RECONCILIATION_STATUS"
+  local content_identity_status="$RECOVERY_POINT_CONTENT_IDENTITY_STATUS"
   if validate_object_backup_receipt "$receipt"; then
     receipt_status='PASS'
     copy_status='PASS'
   else
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
   fi
-  if [[ "$RECOVERY_POINT_SELECTOR_REPORTED" == true ]]; then
-    [[ "$RECOVERY_POINT_AUDIT_STATUS" == PASS ]] && recovery_component_status='PASS'
-  else
-    recovery_component_status='NOT_IMPLEMENTED'
+  if [[ "$RECOVERY_POINT_SELECTOR_REPORTED" != true ]]; then
+    postgres_evidence_status='NOT_EVALUATED'
+    reference_reconciliation_status='NOT_IMPLEMENTED'
+    content_identity_status='NOT_IMPLEMENTED'
   fi
   printf 'OBJECT_BACKUP_RECEIPT=%s\n' "$receipt_status"
   printf 'OBJECT_BACKUP_COPY=%s\n' "$copy_status"
-  printf 'DB_OBJECT_REFERENCE_RECONCILIATION=%s\n' "$recovery_component_status"
-  printf 'DB_OBJECT_CONTENT_IDENTITY=%s\n' "$recovery_component_status"
+  printf 'POSTGRES_BACKUP_EVIDENCE=%s\n' "$postgres_evidence_status"
+  printf 'DB_OBJECT_REFERENCE_RECONCILIATION=%s\n' "$reference_reconciliation_status"
+  printf 'DB_OBJECT_CONTENT_IDENTITY=%s\n' "$content_identity_status"
   printf 'RECOVERY_POINT_VALID=%s\n' "$RECOVERY_POINT_AUDIT_STATUS"
-  printf 'BACKUP_READINESS=INCOMPLETE\n'
   [[ "$RECOVERY_POINT_AUDIT_STATUS" == PASS ]] || AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
 }
 
+backup_readiness_status() {
+  local component status value matches
+  local -a required_components=(
+    POSTGRES_BACKUP_MECHANISM
+    POSTGRES_BACKUP_EVIDENCE
+    OBJECT_BACKUP_RECEIPT
+    OBJECT_BACKUP_COPY
+    CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR
+    DB_OBJECT_REFERENCE_RECONCILIATION
+    DB_OBJECT_CONTENT_IDENTITY
+    RECOVERY_POINT_VALID
+  )
+
+  [[ "$#" -eq "${#required_components[@]}" ]] || { printf 'INCOMPLETE'; return; }
+  for component in "${required_components[@]}"; do
+    matches=0
+    value=''
+    for status in "$@"; do
+      if [[ "$status" == "$component="* ]]; then
+        matches=$((matches + 1))
+        value="${status#*=}"
+      fi
+    done
+    [[ "$matches" -eq 1 && "$value" == PASS ]] || { printf 'INCOMPLETE'; return; }
+  done
+  printf 'PASS'
+}
+
 report_backup_readiness() {
+  local selector="${1:-$CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR}"
+  local deployments_root="${2:-$DEPLOYMENTS_ROOT}"
+  local recovery_root="${3:-$RECOVERY_POINTS_ROOT}"
+  local mechanism_manifest="${4:-$BACKUP_IDENTITY_MANIFEST_PATH}"
+  local object_backup_receipt="${5:-$OBJECT_BACKUP_RECEIPT}"
   local mechanism_path='UNKNOWN' mechanism_digest='UNKNOWN' mechanism_owner='UNKNOWN' mechanism_group='UNKNOWN' mechanism_mode='UNKNOWN'
   local mechanism_identity='UNKNOWN' mechanism_status='INCOMPLETE'
+  local selector_status='INCOMPLETE' receipt_status='INCOMPLETE' copy_status='INCOMPLETE'
+  local postgres_evidence_status='INCOMPLETE' reference_reconciliation_status='INCOMPLETE' content_identity_status='INCOMPLETE' recovery_status='INCOMPLETE'
 
-  report_recovery_point_selector
-  report_object_backup_receipt "$OBJECT_BACKUP_RECEIPT"
-  if validate_backup_mechanism "$BACKUP_IDENTITY_MANIFEST_PATH"; then
-    mechanism_path="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" path)"
-    mechanism_digest="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" sha256)"
-    mechanism_owner="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" owner)"
-    mechanism_group="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" group)"
-    mechanism_mode="$(manifest_field "$BACKUP_IDENTITY_MANIFEST_PATH" mode)"
+  report_recovery_point_selector "$selector" "$deployments_root" "$recovery_root"
+  report_object_backup_receipt "$object_backup_receipt"
+  if validate_backup_mechanism "$mechanism_manifest"; then
+    mechanism_path="$(manifest_field "$mechanism_manifest" path)"
+    mechanism_digest="$(manifest_field "$mechanism_manifest" sha256)"
+    mechanism_owner="$(manifest_field "$mechanism_manifest" owner)"
+    mechanism_group="$(manifest_field "$mechanism_manifest" group)"
+    mechanism_mode="$(manifest_field "$mechanism_manifest" mode)"
     mechanism_identity="path=${mechanism_path};sha256=${mechanism_digest};owner=${mechanism_owner};group=${mechanism_group};mode=${mechanism_mode}"
     mechanism_status='PASS'
   else
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+  fi
+  selector_status='INCOMPLETE'
+  [[ "$RECOVERY_POINT_SELECTOR_REPORTED" == true && "$SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD" != '' ]] && selector_status='PASS'
+  if [[ "$RECOVERY_POINT_SELECTOR_REPORTED" == true ]]; then
+    postgres_evidence_status="$RECOVERY_POINT_POSTGRES_BACKUP_EVIDENCE_STATUS"
+    reference_reconciliation_status="$RECOVERY_POINT_REFERENCE_RECONCILIATION_STATUS"
+    content_identity_status="$RECOVERY_POINT_CONTENT_IDENTITY_STATUS"
+    recovery_status="$RECOVERY_POINT_AUDIT_STATUS"
+  fi
+  if validate_object_backup_receipt "$object_backup_receipt"; then
+    receipt_status='PASS'
+    copy_status='PASS'
   fi
   printf 'BACKUP_MECHANISM_PATH=%s\n' "$mechanism_path"
   printf 'BACKUP_MECHANISM_SHA256=%s\n' "$mechanism_digest"
@@ -1241,9 +1310,17 @@ report_backup_readiness() {
   printf 'BACKUP_MECHANISM_GROUP=%s\n' "$mechanism_group"
   printf 'BACKUP_MECHANISM_MODE=%s\n' "$mechanism_mode"
   printf 'BACKUP_MECHANISM_IDENTITY=%s\n' "$mechanism_identity"
-  printf 'BACKUP_IDENTITY_MANIFEST=%s\n' "$BACKUP_IDENTITY_MANIFEST_PATH"
+  printf 'BACKUP_IDENTITY_MANIFEST=%s\n' "$mechanism_manifest"
   printf 'POSTGRES_BACKUP_MECHANISM=%s\n' "$mechanism_status"
-  printf 'POSTGRES_BACKUP_EVIDENCE=INCOMPLETE\n'
+  printf 'BACKUP_READINESS=%s\n' "$(backup_readiness_status \
+    "POSTGRES_BACKUP_MECHANISM=$mechanism_status" \
+    "POSTGRES_BACKUP_EVIDENCE=$postgres_evidence_status" \
+    "OBJECT_BACKUP_RECEIPT=$receipt_status" \
+    "OBJECT_BACKUP_COPY=$copy_status" \
+    "CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR=$selector_status" \
+    "DB_OBJECT_REFERENCE_RECONCILIATION=$reference_reconciliation_status" \
+    "DB_OBJECT_CONTENT_IDENTITY=$content_identity_status" \
+    "RECOVERY_POINT_VALID=$recovery_status")"
 }
 
 report_minio_posture() {
