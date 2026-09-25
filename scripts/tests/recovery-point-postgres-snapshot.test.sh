@@ -36,8 +36,16 @@ case "$1" in
       sql="${!#}"
       token="$(printf '%s' "$sql" | awk -F"'" '/SET TRANSACTION SNAPSHOT/{print $2}')"
       [[ "$token" == 00000003-0000001B-1 ]] || exit 92
+      before_snapshot="${sql%%SET TRANSACTION SNAPSHOT*}"
+      after_snapshot="${sql#*SET TRANSACTION SNAPSHOT}"
+      [[ "$before_snapshot" == *'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;'* && "$after_snapshot" == *'information_schema.columns'* ]] || exit 93
+      [[ "$after_snapshot" == *"to_jsonb(file_row) -> 'objectVersionId'"* && "$sql" != *'"objectVersionId"'* ]] || exit 94
       [[ "${MODE:-ok}" != query-fail ]] || exit 12
-      case "${MODE:-ok}" in malformed-json) printf '{bad\n' ;; non-array) printf '{"not":"array"}\n' ;; empty) printf '[]\n' ;; invalid-row) printf '[{"unexpected":true}]\n' ;; *) printf '%s\n' '[{"id":"file-a","tenantId":"tenant-a","bucket":"bucket-a","objectKey":"private/object-key","objectVersionId":null,"size":7,"checksum":null}]' ;; esac
+      case "${MODE:-ok}" in
+        malformed-json) printf '{bad\n' ;; non-array) printf '{"not":"array"}\n' ;; empty) printf '[]\n' ;; invalid-row) printf '[{"unexpected":true}]\n' ;;
+        modern) printf '%s\n' '[{"id":"file-a","tenantId":"tenant-a","bucket":"bucket-a","objectKey":"private/object-key","objectVersionId":"version-a","size":7,"checksum":null}]' ;;
+        *) printf '%s\n' '[{"id":"file-a","tenantId":"tenant-a","bucket":"bucket-a","objectKey":"private/object-key","objectVersionId":null,"size":7,"checksum":null}]' ;;
+      esac
     else
       : >"$STATE/exporter-open"
       while IFS= read -r line; do
@@ -97,6 +105,12 @@ ok 'dump archive is validated and exporter is rolled back and closed' bash -c 'g
 ok 'capture does not expose File row data in output or command arguments' bash -c '! grep -Fq private/object-key "$1"' _ "$A"
 ok 'preflight verifies local timeout and container PostgreSQL tools without a database call' recovery_point_postgres_snapshot_require_runtime postgres-test
 ok 'exporter, dump, query, and restore are each wrapped in the six-hour timeout' bash -c 'test "$(grep -c "^timeout 6h$" "$1")" -ge 5' _ "$A"
+P="$T/private-modern"; mkdir "$P"; chmod 0700 "$P"; rm -f "$S"/*
+ok 'modern File schema records the object version from the imported snapshot' env MODE=modern bash -Eeuo pipefail -c 'source "$1"; recovery_point_postgres_snapshot_capture postgres-test appdb appuser "$2"' _ "$LIB" "$P"
+ok 'modern File schema retains the exact object version' bash -c 'grep -Fq "\"objectVersionId\":\"version-a\"" "$1/file-rows.json"' _ "$P"
+P="$T/private-legacy"; mkdir "$P"; chmod 0700 "$P"; rm -f "$S"/*
+ok 'legacy File schema emits a null object version without a direct column reference' bash -Eeuo pipefail -c 'source "$1"; recovery_point_postgres_snapshot_capture postgres-test appdb appuser "$2"' _ "$LIB" "$P"
+ok 'legacy File schema retains a null object version' bash -c 'grep -Fq "\"objectVersionId\":null" "$1/file-rows.json"' _ "$P"
 P="$T/private-existing"; mkdir "$P"; chmod 0700 "$P"; printf keep >"$P/postgres.dump"; chmod 0600 "$P/postgres.dump"
 bad 'existing output is never overwritten' bash -Eeuo pipefail -c 'source "$1"; recovery_point_postgres_snapshot_capture postgres-test appdb appuser "$2"' _ "$LIB" "$P"
 ok 'existing output remains intact' bash -c 'test "$(<"$1/postgres.dump")" = keep' _ "$P"

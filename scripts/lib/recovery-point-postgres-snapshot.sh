@@ -112,7 +112,20 @@ recovery_point_postgres_snapshot_capture_body() {
   timeout 6h docker exec -i "$container" pg_dump --format=custom --no-owner --no-privileges "--snapshot=$snapshot" -U "$user" -d "$database" >"$recovery_point_postgres_snapshot_dump_tmp" 2>/dev/null || return 1
   query="BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET TRANSACTION SNAPSHOT '$snapshot';
-SELECT COALESCE(json_agg(json_build_object('id', \"id\", 'tenantId', \"tenantId\", 'bucket', \"bucket\", 'objectKey', \"objectKey\", 'objectVersionId', \"objectVersionId\", 'size', \"size\", 'checksum', \"checksum\")), '[]'::json) FROM \"File\";
+SELECT COALESCE(json_agg(json_build_object(
+  'id', file_row.\"id\",
+  'tenantId', file_row.\"tenantId\",
+  'bucket', file_row.\"bucket\",
+  'objectKey', file_row.\"objectKey\",
+  'objectVersionId', CASE WHEN EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'File'
+      AND column_name = 'objectVersionId'
+  ) THEN to_jsonb(file_row) -> 'objectVersionId' ELSE NULL END,
+  'size', file_row.\"size\",
+  'checksum', file_row.\"checksum\"
+)), '[]'::json) FROM \"File\" AS file_row;
 COMMIT;"
   timeout 6h docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U "$user" -d "$database" -c "$query" >"$recovery_point_postgres_snapshot_rows_tmp" 2>/dev/null || return 1
   timeout 6h docker exec -i "$container" pg_restore --list <"$recovery_point_postgres_snapshot_dump_tmp" >/dev/null 2>&1 || return 1
