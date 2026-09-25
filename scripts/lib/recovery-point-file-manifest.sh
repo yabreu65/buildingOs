@@ -3,13 +3,15 @@
 # Usage: recovery_point_file_manifest_normalize INPUT_JSON EXPECTED_BUCKET PRIVATE_DIRECTORY
 # Successful calls create PRIVATE_DIRECTORY/file-manifest.json and file-manifest.sha256.
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/recovery-point-portable-stat.sh"
+
 recovery_point_file_manifest_error() {
   printf 'ERROR: recovery-point file manifest %s\n' "$1" >&2
   return 1
 }
 
 recovery_point_file_manifest_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+  recovery_point_portable_stat_mode "$1"
 }
 
 recovery_point_file_manifest_private_directory() {

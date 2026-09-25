@@ -3,12 +3,14 @@
 # Docker database commands are limited to six hours, matching the paired service bound.
 # Usage: recovery_point_postgres_snapshot_capture POSTGRES_CONTAINER DATABASE_NAME POSTGRES_USER PRIVATE_DIRECTORY
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/recovery-point-portable-stat.sh"
+
 recovery_point_postgres_snapshot_error() {
   printf 'ERROR: recovery-point PostgreSQL snapshot capture failed\n' >&2
   return 1
 }
 
-recovery_point_postgres_snapshot_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+recovery_point_postgres_snapshot_mode() { recovery_point_portable_stat_mode "$1"; }
 recovery_point_postgres_snapshot_inode() { stat -f '%d:%i' "$1" 2>/dev/null || stat -c '%d:%i' "$1" 2>/dev/null; }
 
 recovery_point_postgres_snapshot_private_directory() {

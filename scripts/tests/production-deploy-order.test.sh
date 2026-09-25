@@ -10,6 +10,7 @@ readonly WORKFLOW="$ROOT_DIR/.github/workflows/deploy-production.yml"
 line_number() { awk -v pattern="$1" 'index($0, pattern) { print NR; exit }' "$2"; }
 line_number_after() { awk -v start="$1" -v pattern="$2" 'NR > start && index($0, pattern) { print NR; exit }' "$3"; }
 recovery_helper_paths=(
+  scripts/lib/recovery-point-portable-stat.sh
   scripts/lib/recovery-point-capture.sh
   scripts/lib/recovery-point-postgres-snapshot.sh
   scripts/lib/recovery-point-file-manifest.sh

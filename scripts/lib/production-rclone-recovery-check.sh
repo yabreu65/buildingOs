@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Bounded rclone transfer and downloaded-byte verification for recovery artifacts.
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/recovery-point-portable-stat.sh"
+
 recovery_point_rclone_error() {
   printf 'ERROR: recovery-point rclone check failed\n' >&2
   return 1
 }
 
 recovery_point_rclone_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+  recovery_point_portable_stat_mode "$1"
 }
 
 recovery_point_rclone_private_file() {

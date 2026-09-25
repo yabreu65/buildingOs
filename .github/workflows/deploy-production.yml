@@ -65,6 +65,7 @@ jobs:
           test -x scripts/production-storage-cutover-guard.sh
           test -x scripts/verify-production-migration-baseline.sh
           test -f scripts/production-security-validate.sh && test ! -L scripts/production-security-validate.sh
+          test -f scripts/lib/recovery-point-portable-stat.sh && test ! -L scripts/lib/recovery-point-portable-stat.sh
           test -f scripts/lib/recovery-point-capture.sh && test ! -L scripts/lib/recovery-point-capture.sh
           test -f scripts/lib/recovery-point-postgres-snapshot.sh && test ! -L scripts/lib/recovery-point-postgres-snapshot.sh
           test -f scripts/lib/recovery-point-file-manifest.sh && test ! -L scripts/lib/recovery-point-file-manifest.sh
@@ -133,6 +134,7 @@ jobs:
             scripts/deploy-production.sh \
             scripts/production-storage-cutover-guard.sh \
             scripts/production-security-validate.sh \
+            scripts/lib/recovery-point-portable-stat.sh \
             scripts/lib/recovery-point-capture.sh \
             scripts/lib/recovery-point-postgres-snapshot.sh \
             scripts/lib/recovery-point-file-manifest.sh \
