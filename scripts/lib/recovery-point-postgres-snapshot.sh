@@ -11,7 +11,7 @@ recovery_point_postgres_snapshot_error() {
 }
 
 recovery_point_postgres_snapshot_mode() { recovery_point_portable_stat_mode "$1"; }
-recovery_point_postgres_snapshot_inode() { stat -f '%d:%i' "$1" 2>/dev/null || stat -c '%d:%i' "$1" 2>/dev/null; }
+recovery_point_postgres_snapshot_inode() { recovery_point_portable_stat_identity "$1"; }
 
 recovery_point_postgres_snapshot_private_directory() {
   local directory="$1" mode

@@ -16,7 +16,7 @@ recovery_point_capture_error() {
   return 1
 }
 recovery_point_capture_remote_incomplete() { printf 'ERROR: recovery bundle remote unique namespace is incomplete; remote residue may remain; operator cleanup is required; do not retry into it\n' >&2; return 1; }
-recovery_point_capture_inode() { stat -f '%d:%i' "$1" 2>/dev/null || stat -c '%d:%i' "$1" 2>/dev/null; }
+recovery_point_capture_inode() { recovery_point_portable_stat_identity "$1"; }
 recovery_point_capture_mode() { recovery_point_portable_stat_mode "$1"; }
 recovery_point_capture_reset() {
   RECOVERY_POINT_VALID=''; RECOVERY_POINT_CAPTURE_BACKUP_SET_ID=''; RECOVERY_POINT_CAPTURE_RECEIPT_SHA256=''

@@ -15,3 +15,19 @@ recovery_point_portable_stat_mode() {
   [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
   printf '%s\n' "$mode"
 }
+
+# Reads a device:inode identity using BSD/macOS or GNU stat without accepting non-identity output.
+recovery_point_portable_stat_identity() {
+  local path="${1:-}" identity=''
+  [[ "$#" -eq 1 ]] || return 1
+
+  identity="$(stat -f '%d:%i' "$path" 2>/dev/null)" || identity=''
+  if [[ "$identity" =~ ^[0-9]+:[0-9]+$ ]]; then
+    printf '%s\n' "$identity"
+    return 0
+  fi
+
+  identity="$(stat -c '%d:%i' -- "$path" 2>/dev/null)" || identity=''
+  [[ "$identity" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  printf '%s\n' "$identity"
+}

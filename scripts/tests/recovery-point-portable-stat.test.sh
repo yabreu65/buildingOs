@@ -5,6 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PORTABLE="$ROOT/scripts/lib/recovery-point-portable-stat.sh"
 FENCE="$ROOT/scripts/lib/production-s3-write-fence.sh"
 CAPTURE="$ROOT/scripts/lib/recovery-point-capture.sh"
+OBJECT_SOURCE="$ROOT/scripts/lib/recovery-point-object-source.sh"
+POSTGRES_SNAPSHOT="$ROOT/scripts/lib/recovery-point-postgres-snapshot.sh"
+FILE_OBJECT_BUNDLE="$ROOT/scripts/lib/recovery-point-file-object-bundle.sh"
 T="$(mktemp -d "${TMPDIR:-/tmp}/recovery-point-portable-stat.XXXXXX")"
 trap 'rm -rf -- "$T"' EXIT
 BIN="$T/bin"
@@ -35,6 +38,17 @@ case "${FAKE_STAT_SCENARIO:-}" in
   gnu-700)
     [[ "$1" == -f ]] && { printf 'not-a-mode\n'; exit 0; }
     [[ "$1" == -c && "$2" == '%a' && "$3" == -- ]] && { printf '700\n'; exit 0; }
+    ;;
+  gnu-invalid-first-identity)
+    [[ "$1" == -f && "$2" == '%d:%i' ]] && { printf 'not-an-identity\n'; exit 0; }
+    [[ "$1" == -c && "$2" == '%d:%i' && "$3" == -- ]] && { printf '42:99\n'; exit 0; }
+    ;;
+  bsd-identity)
+    [[ "$1" == -f && "$2" == '%d:%i' ]] && { printf '17:34\n'; exit 0; }
+    ;;
+  both-identity-malformed)
+    [[ "$1" == -f && "$2" == '%d:%i' ]] && { printf 'not-an-identity\n'; exit 0; }
+    [[ "$1" == -c && "$2" == '%d:%i' && "$3" == -- ]] && { printf 'also-not-an-identity\n'; exit 0; }
     ;;
   *)
     [[ "$1" == -f ]] && { printf 'not-a-mode\n'; exit 0; }
@@ -67,6 +81,13 @@ bad '0644 regular file remains rejected' env FAKE_STAT_SCENARIO=644 bash -c 'sou
 ln -s "$PRIVATE_FILE" "$T/private-file-link"
 bad 'symlink remains rejected before the mode reader' env FAKE_STAT_SCENARIO=600 bash -c 'source "$1"; source "$2"; s3_fence_private_readable_file "$3"' _ "$PORTABLE" "$FENCE" "$T/private-file-link"
 ok 'recovery-point capture uses the corrected fallback reader' env FAKE_STAT_SCENARIO=gnu-700 bash -c 'source "$1"; source "$2"; recovery_point_capture_private_empty_root "$3"' _ "$PORTABLE" "$CAPTURE" "$PRIVATE_DIRECTORY"
+ok 'GNU invalid first identity output falls through to valid fallback' env FAKE_STAT_SCENARIO=gnu-invalid-first-identity bash -c 'source "$1"; [[ "$(recovery_point_portable_stat_identity "$2")" == 42:99 ]]' _ "$PORTABLE" "$PRIVATE_FILE"
+ok 'valid BSD identity output is accepted' env FAKE_STAT_SCENARIO=bsd-identity bash -c 'source "$1"; [[ "$(recovery_point_portable_stat_identity "$2")" == 17:34 ]]' _ "$PORTABLE" "$PRIVATE_FILE"
+bad 'two malformed successful identity outputs fail closed' env FAKE_STAT_SCENARIO=both-identity-malformed bash -c 'source "$1"; recovery_point_portable_stat_identity "$2"' _ "$PORTABLE" "$PRIVATE_FILE"
+ok 'capture inode adapter uses the shared identity reader' env FAKE_STAT_SCENARIO=gnu-invalid-first-identity bash -c 'source "$1"; source "$2"; [[ "$(recovery_point_capture_inode "$3")" == 42:99 ]]' _ "$PORTABLE" "$CAPTURE" "$PRIVATE_FILE"
+ok 'object-source inode adapter uses the shared identity reader' env FAKE_STAT_SCENARIO=gnu-invalid-first-identity bash -c 'source "$1"; source "$2"; [[ "$(recovery_point_object_source_inode "$3")" == 42:99 ]]' _ "$PORTABLE" "$OBJECT_SOURCE" "$PRIVATE_FILE"
+ok 'postgres snapshot inode adapter uses the shared identity reader' env FAKE_STAT_SCENARIO=gnu-invalid-first-identity bash -c 'source "$1"; source "$2"; [[ "$(recovery_point_postgres_snapshot_inode "$3")" == 42:99 ]]' _ "$PORTABLE" "$POSTGRES_SNAPSHOT" "$PRIVATE_FILE"
+ok 'file-object-bundle inode adapter uses the shared identity reader' env FAKE_STAT_SCENARIO=gnu-invalid-first-identity bash -c 'source "$1"; source "$2"; [[ "$(recovery_point_file_object_bundle_inode "$3")" == 42:99 ]]' _ "$PORTABLE" "$FILE_OBJECT_BUNDLE" "$PRIVATE_FILE"
 
 (( FAIL == 0 )) || exit 1
 printf 'PASSED: %s assertions\n' "$PASS"

@@ -12,7 +12,7 @@ recovery_point_object_source_error() {
   return 1
 }
 recovery_point_object_source_mode() { recovery_point_portable_stat_mode "$1"; }
-recovery_point_object_source_inode() { stat -f '%d:%i' "$1" 2>/dev/null || stat -c '%d:%i' "$1" 2>/dev/null; }
+recovery_point_object_source_inode() { recovery_point_portable_stat_identity "$1"; }
 recovery_point_object_source_private_directory() {
   local directory="$1" mode
   [[ -n "$directory" && -d "$directory" && ! -L "$directory" ]] || return 1
