@@ -18,6 +18,7 @@ const INTERNAL_ERROR_CODES = new Set([
   'S3_FENCE_OBJECT_SIZE_MISMATCH',
   'S3_FENCE_OWNERSHIP_MISMATCH',
   'S3_FENCE_REQUEST_INVALID',
+  'S3_FENCE_VERSION_ID_INVALID',
   'S3_FENCE_VERSION_MISMATCH',
 ]);
 
@@ -51,7 +52,20 @@ function configuration() {
 function assertKey(key) {
   if (typeof key !== 'string' || !/^buildingos-fence-probe-[a-f0-9]{32}$/.test(key)) throw new Error('S3_FENCE_REQUEST_INVALID');
 }
-function versionId(value) { return typeof value === 'string' && value.length > 0 ? value : null; }
+function versionId(value) {
+  if (value === null) return null;
+  if (typeof value === 'string' && value.length > 0) return value;
+  throw new Error('S3_FENCE_VERSION_ID_INVALID');
+}
+function validateRequestedVersionId(value) {
+  if (value === null) return null;
+  if (typeof value === 'string' && value.length > 0) return value;
+  throw new Error('S3_FENCE_REQUEST_INVALID');
+}
+function isObjectAbsenceError(error) {
+  const code = error && typeof error === 'object' ? error.code : undefined;
+  return code === 'NotFound' || code === 'NoSuchKey';
+}
 function statOptions(id) { return id === null ? undefined : { versionId: id }; }
 function probeBody(key) { return Buffer.from(`BuildingOS recovery-point fence probe: ${key}\n`); }
 function readBuffer(stream) {
@@ -86,7 +100,7 @@ function objectOutputRoot() {
   return path.resolve(outputRoot);
 }
 function objectGetRequest(request) {
-  const requestedVersionId = request.versionId ?? null;
+  const requestedVersionId = request.versionId === undefined ? null : validateRequestedVersionId(request.versionId);
   if (typeof request.bucket !== 'string' || request.bucket.length === 0
     || typeof request.key !== 'string' || request.key.length === 0
     || (requestedVersionId !== null && typeof requestedVersionId !== 'string')
@@ -166,6 +180,20 @@ async function main(request) {
       return { ok: true };
     }
     if (request.action === 'policy-remove') { await client.setBucketPolicy(bucket, ''); return { ok: true }; }
+    if (request.action === 'verify-absent') {
+      if (request.bucket !== bucket || typeof request.bucket !== 'string') throw new Error('S3_FENCE_BUCKET_MISMATCH');
+      assertKey(request.key);
+      const id = validateRequestedVersionId(request.versionId);
+      if (id === null) throw new Error('S3_FENCE_REQUEST_INVALID');
+      try {
+        const stat = await client.statObject(bucket, request.key, { versionId: id });
+        if (versionId(stat.versionId) !== id) return fail('S3_FENCE_VERSION_MISMATCH');
+        return fail('S3_FENCE_OBJECT_PRESENT');
+      } catch (error) {
+        if (isObjectAbsenceError(error)) return { ok: true, state: 'absent', bucket, key: request.key, versionId: id };
+        throw error;
+      }
+    }
     assertKey(request.key);
     if (request.action === 'presigned-put') {
       if (request.expirySeconds !== PRESIGNED_PUT_EXPIRY_SECONDS) throw new Error('S3_FENCE_REQUEST_INVALID');
@@ -176,17 +204,16 @@ async function main(request) {
       const stat = await client.statObject(bucket, request.key);
       return { ok: true, versionId: versionId(stat.versionId) };
     }
-    if (request.action === 'get') { await drain(await client.getObject(bucket, request.key, statOptions(request.versionId ?? null))); return { ok: true }; }
+    if (request.action === 'get') { const id = validateRequestedVersionId(request.versionId ?? null); await drain(await client.getObject(bucket, request.key, statOptions(id))); return { ok: true }; }
     if (request.action === 'head') {
-      const id = request.versionId ?? null;
-      if (id !== null && typeof id !== 'string') throw new Error('S3_FENCE_REQUEST_INVALID');
+      const id = validateRequestedVersionId(request.versionId ?? null);
       const stat = await client.statObject(bucket, request.key, statOptions(id));
       return { ok: true, versionId: versionId(stat.versionId) };
     }
     if (request.action === 'list') return await listContains(client.listObjects(bucket, request.key, false), request.key) ? { ok: true } : fail('S3_FENCE_LIST_KEY_MISSING');
     if (request.action === 'verify-owned' || request.action === 'remove-owned') {
-      const id = request.versionId ?? null;
-      if (id !== null && typeof id !== 'string') throw new Error('S3_FENCE_REQUEST_INVALID');
+      if (request.bucket !== bucket || typeof request.bucket !== 'string') throw new Error('S3_FENCE_BUCKET_MISMATCH');
+      const id = validateRequestedVersionId(request.versionId ?? null);
       await assertOwnedObject(client, bucket, request.key, id);
       if (request.action === 'remove-owned') await client.removeObject(bucket, request.key, statOptions(id));
       return { ok: true };
