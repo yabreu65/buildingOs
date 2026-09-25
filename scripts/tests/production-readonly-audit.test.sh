@@ -65,7 +65,7 @@ assert_contains 'valid receipt reports copy PASS' 'OBJECT_BACKUP_COPY=PASS' "$RE
 assert_contains 'reference reconciliation remains unimplemented' 'DB_OBJECT_REFERENCE_RECONCILIATION=NOT_IMPLEMENTED' "$REPORT_OUTPUT"
 assert_contains 'content identity remains unimplemented' 'DB_OBJECT_CONTENT_IDENTITY=NOT_IMPLEMENTED' "$REPORT_OUTPUT"
 assert_contains 'recovery point remains unevaluated' 'RECOVERY_POINT_VALID=NOT_EVALUATED' "$REPORT_OUTPUT"
-assert_contains 'backup readiness remains incomplete' 'BACKUP_READINESS=INCOMPLETE' "$REPORT_OUTPUT"
+assert_absent 'component-only report defers aggregate readiness' 'BACKUP_READINESS=' "$REPORT_OUTPUT"
 [[ "$AUDIT_EVIDENCE_FAILURES" -gt 0 ]] && pass 'valid copy does not clear fail-closed evidence failure' || fail_test 'valid copy does not clear fail-closed evidence failure'
 
 printf '{malformed\n' > "$RECEIPT"
@@ -163,7 +163,7 @@ assert_contains 'audit keeps current PostgreSQL mechanism path' '/opt/pawtech/ba
 assert_contains 'audit keeps PostgreSQL identity manifest' 'infra/production/backup-postgres.identity.v1' "$auditor_text"
 assert_contains 'audit uses the Object Storage receipt path' '/var/lib/buildingos-object-backup/object-backup-receipt.json' "$auditor_text"
 assert_contains 'audit exposes Object Storage receipt marker' 'OBJECT_BACKUP_RECEIPT=%s' "$auditor_text"
-assert_contains 'audit keeps PostgreSQL fresh evidence incomplete' 'POSTGRES_BACKUP_EVIDENCE=INCOMPLETE' "$auditor_text"
+assert_contains 'audit exposes PostgreSQL fresh evidence status' 'POSTGRES_BACKUP_EVIDENCE=%s' "$auditor_text"
 assert_absent 'audit no longer requires paired receipt' 'paired-$backup_set_id.json' "$auditor_text"
 assert_absent 'audit no longer requires MinIO verification flag' 'minio_verified' "$auditor_text"
 assert_absent 'audit does not claim recovery validity' 'RECOVERY_POINT_VALID=YES' "$auditor_text"

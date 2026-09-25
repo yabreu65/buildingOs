@@ -35,7 +35,7 @@ presigned-put) [[ "$(jq -r .expirySeconds <<<"$req")" == 86400 ]]||exit 93; prin
 put) if [[ "$(<"$FAKE_STATE")" == present ]] && grep -Fq BuildingOSObjectBackupTemporaryWriteDeny "$FAKE_POLICY";then reply '{ok:false,error:"AccessDenied"}';else printf 'BuildingOS recovery-point fence probe: %s\n' "$key" >"$FAKE_OBJ/$key";reply --arg v "v-$key" '{ok:true,versionId:$v}';fi ;;
 get|list) reply '{ok:true}' ;;
 head) [[ -e "$FAKE_OBJ/$key" ]] && reply --arg v "v-$key" '{ok:true,versionId:$v}' || reply '{ok:false,error:"NoSuchKey"}' ;;
-verify-owned|remove-owned) if [[ "$(<"$FAKE_STATE")" == present ]] && grep -Fq BuildingOSObjectBackupTemporaryWriteDeny "$FAKE_POLICY";then reply '{ok:false,error:"AccessDenied"}';elif [[ ! -r "$FAKE_OBJ/$key" || "$(<"$FAKE_OBJ/$key")" != "BuildingOS recovery-point fence probe: $key" ]];then reply '{ok:false,error:"S3_FENCE_OWNERSHIP_MISMATCH"}';else [[ "$action" == remove-owned ]] && : >"$FAKE_OBJ/$key.deleted";reply '{ok:true}';fi ;;
+verify-owned|remove-owned) version="$(jq -r '.versionId // empty' <<<"$req")"; expected="v-$key"; [[ "${FAKE_FORCE_OWNERSHIP_MISMATCH:-}" == 1 ]] && expected=unexpected-version; if [[ ! -r "$FAKE_OBJ/$key" || "$(<"$FAKE_OBJ/$key")" != "BuildingOS recovery-point fence probe: $key" || "$version" != "$expected" ]];then reply '{ok:false,error:"S3_FENCE_OWNERSHIP_MISMATCH"}';elif [[ "$action" == remove-owned && "$(<"$FAKE_STATE")" == present ]] && grep -Fq BuildingOSObjectBackupTemporaryWriteDeny "$FAKE_POLICY";then printf 'delete-s3\n' >>"$FAKE_LOG"; reply '{ok:false,error:"AccessDenied"}';else [[ "$action" == remove-owned ]] && : >"$FAKE_OBJ/$key.deleted";reply '{ok:true}';fi ;;
 *) exit 92;; esac
 DOCKER
 chmod +x "$BIN/docker"
@@ -43,17 +43,27 @@ cat >"$BIN/curl" <<'CURL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 for a in "$@";do [[ "$a" != *never-log-url* && "$a" != *never-log-secret* ]]||exit 88;done
-out= body=;while (($#));do case "$1" in --output)out="$2";shift 2;; --data-binary)body="${2#@}";shift 2;; --config|--request|--write-out)shift 2;; *)shift;;esac;done
+out= body= config=;while (($#));do case "$1" in --output)out="$2";shift 2;; --data-binary)body="${2#@}";shift 2;; --config)config="$2";shift 2;; --request|--write-out)shift 2;; *)shift;;esac;done
+[[ -r "$config" ]] || exit 86; config_hash="$(if command -v sha256sum >/dev/null; then sha256sum "$config" | awk '{print $1}'; else shasum -a 256 "$config" | awk '{print $1}'; fi)"; printf '%s %s\n' "$config" "$config_hash" >>"$FAKE_CURL_LOG"
 if [[ "$(<"$FAKE_STATE")" == present ]] && grep -Fq BuildingOSObjectBackupTemporaryWriteDeny "$FAKE_POLICY";then printf '<Code>AccessDenied</Code>' >"$out";printf 403;else [[ -r "$body" ]] || exit 87; cp "$body" "$FAKE_OBJ/$(<"$FAKE_PRESIGNED_KEY")"; printf probe >"$out";printf 200;fi
 CURL
 chmod +x "$BIN/curl"
-export PATH="$BIN:/usr/bin:/bin" S3_FENCE_DOCKER_BIN=docker S3_FENCE_CURL_BIN=curl FAKE_ENV="$ENV_FILE" FAKE_NET="$NETWORK" FAKE_IMAGE="$IMAGE" FAKE_POLICY="$POLICY" FAKE_STATE="$STATE" FAKE_BUCKET="$BUCKET" FAKE_LOG="$LOG" FAKE_OBJ="$OBJ" FAKE_PRESIGNED_KEY="$T/presigned-key"
+export PATH="$BIN:/usr/bin:/bin" S3_FENCE_DOCKER_BIN=docker S3_FENCE_CURL_BIN=curl FAKE_ENV="$ENV_FILE" FAKE_NET="$NETWORK" FAKE_IMAGE="$IMAGE" FAKE_POLICY="$POLICY" FAKE_STATE="$STATE" FAKE_BUCKET="$BUCKET" FAKE_LOG="$LOG" FAKE_OBJ="$OBJ" FAKE_PRESIGNED_KEY="$T/presigned-key" FAKE_CURL_LOG="$T/curl-log"
 source "$LIB"
 quiesce(){ printf 'quiesce\n' >>"$LOG"; }; capture(){ printf 'capture\n' >>"$LOG"; }; capture_fail(){ printf 'capture\n' >>"$LOG"; return 1; }; resume(){ printf 'resume\n' >>"$LOG"; }
 
 export FAKE_MISSING=removeObject; bad 'missing SDK method blocks before quiescence' s3_fence_run_recovery_point "$IMAGE" "$ENV_FILE" "$NETWORK" "$T/missing" quiesce capture resume; unset FAKE_MISSING
 ok 'present lifecycle captures only under the proven fence' s3_fence_run_recovery_point "$IMAGE" "$ENV_FILE" "$NETWORK" "$T/present" quiesce capture resume
-has 'capture follows fence probes' $'fence-list\npresigned-put\ncapture' "$LOG"; has 'resume follows cleanup and exact restore' resume "$LOG"; ok 'private evidence includes exact raw policy' private_tree "$T/present"; has 'original raw bytes retain formatting' '  "Version":' "$T/present/policy-snapshot/policy.raw.json"
+has 'capture follows fence probes' $'fence-list\ncapture' "$LOG"; has 'resume follows cleanup and exact restore' resume "$LOG"; ok 'private evidence includes exact raw policy' private_tree "$T/present"; has 'original raw bytes retain formatting' '  "Version":' "$T/present/policy-snapshot/policy.raw.json"
+[[ "$(grep -c '^presigned-put$' "$LOG" || true)" == 1 ]] && pass 'presigned PUT is signed exactly once' || fail 'presigned PUT is signed exactly once'
+[[ "$(awk '/^quiesce$/{fenced=1;next} fenced && /^presigned-put$/{count++} END{print count+0}' "$LOG")" == 0 ]] && pass 'no presigned PUT signing occurs after quiescence' || fail 'no presigned PUT signing occurs after quiescence'
+[[ "$(wc -l <"$T/curl-log" | tr -d ' ')" == 2 && "$(sort -u "$T/curl-log" | wc -l | tr -d ' ')" == 1 ]] && pass 'presigned PUT replay uses the saved curl config identity' || fail 'presigned PUT replay uses the saved curl config identity'
+
+versioned_key='buildingos-fence-probe-fedcba9876543210fedcba9876543210'; printf 'BuildingOS recovery-point fence probe: %s\n' "$versioned_key" >"$OBJ/$versioned_key"; cat "$T/original-policy" >"$POLICY"; printf present >"$STATE"; s3_fence_snapshot_policy "$IMAGE" "$ENV_FILE" "$NETWORK" "$T/versioned-fence" && s3_fence_apply_temporary_deny "$IMAGE" "$ENV_FILE" "$NETWORK" "$T/versioned-fence" || exit 1
+before_delete_s3="$(grep -c '^delete-s3$' "$LOG" || true)"; s3_fence_probe "$IMAGE" "$ENV_FILE" "$NETWORK" remove-owned "$versioned_key" "$T/null-version-delete.json" null || exit 1; [[ "$(jq -r .error "$T/null-version-delete.json")" == S3_FENCE_OWNERSHIP_MISMATCH && "$(grep -c '^delete-s3$' "$LOG" || true)" == "$before_delete_s3" ]] && pass 'null version fails ownership before temporary deny' || fail 'null version fails ownership before temporary deny'
+s3_fence_probe "$IMAGE" "$ENV_FILE" "$NETWORK" remove-owned "$versioned_key" "$T/exact-version-delete.json" '"v-buildingos-fence-probe-fedcba9876543210fedcba9876543210"' || exit 1; [[ "$(jq -r .error "$T/exact-version-delete.json")" == AccessDenied && "$(grep -c '^delete-s3$' "$LOG" || true)" == "$((before_delete_s3 + 1))" ]] && pass 'exact version reaches S3 temporary deny' || fail 'exact version reaches S3 temporary deny'
+s3_fence_restore_policy "$IMAGE" "$ENV_FILE" "$NETWORK" "$T/versioned-fence" || exit 1
+capture_before_mismatch="$(grep -c '^capture$' "$LOG" || true)"; export FAKE_FORCE_OWNERSHIP_MISMATCH=1; bad 'ownership mismatch fails closed before capture' s3_fence_run_recovery_point "$IMAGE" "$ENV_FILE" "$NETWORK" "$T/ownership-mismatch" quiesce capture resume; unset FAKE_FORCE_OWNERSHIP_MISMATCH; [[ "$(grep -c '^capture$' "$LOG" || true)" == "$capture_before_mismatch" ]] && pass 'ownership mismatch leaves capture uncalled' || fail 'ownership mismatch leaves capture uncalled'
 [[ "$(<"$POLICY")" == *$'  "Version":'* ]] && pass 'exact raw policy was restored' || fail 'exact raw policy was restored'
 
 printf absent >"$STATE"; ok 'absent policy removes only temporary fence' s3_fence_run_recovery_point "$IMAGE" "$ENV_FILE" "$NETWORK" "$T/absent" quiesce capture resume; [[ "$(<"$STATE")" == absent ]] && pass 'absent state is restored' || fail 'absent state is restored'
