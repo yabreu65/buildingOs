@@ -65,6 +65,14 @@ jobs:
           test -x scripts/production-storage-cutover-guard.sh
           test -x scripts/verify-production-migration-baseline.sh
           test -f scripts/production-security-validate.sh && test ! -L scripts/production-security-validate.sh
+          test -f scripts/lib/recovery-point-capture.sh && test ! -L scripts/lib/recovery-point-capture.sh
+          test -f scripts/lib/recovery-point-postgres-snapshot.sh && test ! -L scripts/lib/recovery-point-postgres-snapshot.sh
+          test -f scripts/lib/recovery-point-file-manifest.sh && test ! -L scripts/lib/recovery-point-file-manifest.sh
+          test -f scripts/lib/recovery-point-file-object-bundle.sh && test ! -L scripts/lib/recovery-point-file-object-bundle.sh
+          test -f scripts/lib/recovery-point-object-source.sh && test ! -L scripts/lib/recovery-point-object-source.sh
+          test -f scripts/lib/production-rclone-recovery-check.sh && test ! -L scripts/lib/production-rclone-recovery-check.sh
+          test -f scripts/lib/production-s3-write-fence.sh && test ! -L scripts/lib/production-s3-write-fence.sh
+          test -f scripts/lib/recovery-point-s3-helper.cjs && test ! -L scripts/lib/recovery-point-s3-helper.cjs
           test -f infra/production/backup-postgres.identity.v1 && test ! -L infra/production/backup-postgres.identity.v1
           test -f scripts/verify-production-migration-manifest.sh && test ! -L scripts/verify-production-migration-manifest.sh
           test -f scripts/manifests/production-migrations-81-to-99.tsv && test ! -L scripts/manifests/production-migrations-81-to-99.tsv
@@ -125,6 +133,14 @@ jobs:
             scripts/deploy-production.sh \
             scripts/production-storage-cutover-guard.sh \
             scripts/production-security-validate.sh \
+            scripts/lib/recovery-point-capture.sh \
+            scripts/lib/recovery-point-postgres-snapshot.sh \
+            scripts/lib/recovery-point-file-manifest.sh \
+            scripts/lib/recovery-point-file-object-bundle.sh \
+            scripts/lib/recovery-point-object-source.sh \
+            scripts/lib/production-rclone-recovery-check.sh \
+            scripts/lib/production-s3-write-fence.sh \
+            scripts/lib/recovery-point-s3-helper.cjs \
             infra/production/backup-postgres.identity.v1 \
             | ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "$remote_command"
 

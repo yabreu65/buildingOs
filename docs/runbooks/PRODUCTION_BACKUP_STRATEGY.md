@@ -7,164 +7,116 @@ documentation only. It does not authorize a backup, restore, deployment,
 systemd change, sudoers change, storage mutation, or production configuration
 change.
 
-## Recovery Layers
+## Recovery layers
 
 | Asset | Protection | Status | High-level RPO/RTO |
 | --- | --- | --- | --- |
-| VPS, local configuration, PostgreSQL volume, Redis volume, local runtime state | Contabo VPS Auto Backup | Enabled externally; daily, 10 copies | Host-level disaster recovery; provider restore time applies |
-| PostgreSQL logical data | `pawtech-postgres-backup.service` and `.timer` | **CURRENT / ACTIVE** | Daily logical recovery; current job retains 7 local days and 30 remote days |
-| Uploaded documents and receipts | External Contabo S3-compatible Object Storage, bucket `buildingos-production` | **PENDING** independent backup | Object backup RPO/RTO is undefined until the separate implementation exists |
-| Application source and repository configuration | GitHub | Available for source recovery | Rebuild-based recovery; deployment and dependency installation time applies |
-| Redis | Reconstructable runtime state | No dedicated backup | Data is treated as ephemeral/rebuildable |
+| VPS, local configuration, PostgreSQL volume, Redis volume, local runtime state | Contabo VPS Auto Backup | Enabled externally; daily, 10 copies | Provider restore time applies |
+| PostgreSQL logical data | `pawtech-postgres-backup.service` and `.timer` | **CURRENT / ACTIVE** | Daily; 7 local days and 30 remote days |
+| Uploaded documents and receipts | External Contabo S3-compatible Object Storage, bucket `buildingos-production` | Independent object-copy job exists; exact recovery-point validity is not proven in production | Unverified until an authorized recovery-point run and audit succeed |
+| Application source and repository configuration | GitHub | Available for source recovery | Rebuild-based; deployment and dependency installation time applies |
+| Redis | Reconstructable runtime state | No dedicated backup | Treated as ephemeral/rebuildable |
 | Local MinIO | Existing local legacy service | **LEGACY / NON-AUTHORITATIVE** | Not a recovery source for production documents |
 
-## Current PostgreSQL Protection
+## Existing independent backup jobs
 
-The existing local systemd mechanism remains the production PostgreSQL backup
-mechanism. It currently performs all of the following:
+The local PostgreSQL systemd mechanism remains the production PostgreSQL backup
+mechanism. It performs daily `pg_dump -Fc` dumps, SHA-256 sidecars,
+`pg_restore --list` validation, external `rclone` copies, seven-day local
+retention, and thirty-day remote retention. Its active units are
+`pawtech-postgres-backup.service` and `pawtech-postgres-backup.timer`.
 
-- Daily `pg_dump -Fc` logical dumps.
-- SHA-256 sidecar generation.
-- Read-only `pg_restore --list` validation.
-- External `rclone` copies.
-- Seven-day local retention.
-- Thirty-day remote retention.
+The Object Storage copy remains independently scheduled. Neither timer is a
+substitute for a coherent recovery point. Freshness of each job alone does not
+prove that a database point is restorable with the exact object bytes referenced
+by its `File` rows. The independent timer contract remains unchanged by the
+recovery-point tooling; no timer, credential, retention, or storage policy
+change is authorized here.
 
-The current PostgreSQL mechanism must remain unchanged until a separately
-approved replacement exists and has been validated. The active service and
-timer are the legacy `pawtech-postgres-backup.service` and
-`pawtech-postgres-backup.timer`.
+## Recovery-point capture and selection
 
-## Pending Object Storage Protection
+`OBJECT_BACKUP_01_RECOVERY_POINT_GATE` implements a local, fail-closed
+pre-migration capture path. Stopping the API alone is insufficient because
+valid presigned PUT URLs may remain usable for 24 hours. The gate snapshots the
+exact bucket policy, applies a temporary server-side write-deny fence, and
+probes its behavior. While the fence is active, it captures the shared
+PostgreSQL/File MVCC point, the canonical File manifest, observed object
+versions where available, exact object bytes, a PostgreSQL dump, and hashes.
+The remote recovery bundle is verified before the exact original bucket policy
+is restored and positively checked. The API is resumed only if it was running
+before capture and policy restoration is proven. Failure paths fail closed;
+policy drift or uncertainty prevents unsafe restoration or API resume.
 
-The authoritative document store is the external S3-compatible bucket
-`buildingos-production` at Contabo Object Storage. PostgreSQL dumps do not
-contain those objects, and a VPS snapshot does not provide independent
-protection for an external bucket.
+The durable bundle includes the File manifest, content manifest, exact object
+blobs, PostgreSQL dump, integrity hashes, and a schema-validated receipt. The
+read-only audit follows only the fixed
+`/opt/pawtech/apps/buildingos/deployments/current-successful-deployment.v1`
+selector. It binds that selector to the exact consistent active runtime:
+checkout SHA, API revision, and Web revision. It then validates only the
+canonically referenced SUCCESS record, receipt, and bundle, including their
+private paths, hashes, manifest identities, dump, and object content. It never
+selects a recovery point by timestamp, recency, or directory name.
 
-The next small implementation PR should define an independent object-storage
-backup with these minimum properties:
+A failed deployment must not replace the prior selector. A successful deploy
+publishes its selector atomically only after the SUCCESS record and active
+runtime identity are verified. A successful rollback publishes a selector for
+the verified rollback runtime; recovery evidence is copied only from one exact
+matching prior SUCCESS record. Zero or ambiguous matching evidence stays
+`NOT_EVALUATED`—there is no fallback to another receipt.
 
-- A destination separate from the source bucket.
-- Versioning and retention enabled at the destination.
-- Source deletion never propagating to the backup destination.
-- Read-only verification of object count, size, and recoverability.
-- Credentials scoped to the required read/write operations only.
-- A separately approved schedule and recovery test.
+If the selector, runtime identity, record, receipt, hashes, manifests, or bundle
+is missing, stale, ambiguous, malformed, or mismatched, the audit reports
+`RECOVERY_POINT_VALID=NOT_EVALUATED`, fails, and keeps
+`BACKUP_READINESS=INCOMPLETE`. Independent daily backup timer and object-copy
+evidence remain separate checks and are never suppressed by a recovery-point
+PASS.
 
-For the object-storage timer, preflight accepts only these phases:
+This repository change is local tooling only. Production and staging were not
+accessed or changed; production recovery-point behavior remains unverified until
+a separate explicitly authorized production run and read-only audit succeed.
 
-- **PRE_ACTIVATION:** the loaded timer is disabled and inactive with no trigger;
-  the object-backup service remains inactive while target, calendar,
-  persistence, and randomized-delay settings are validated.
-- **ACTIVE:** the loaded timer is enabled and active with a valid future trigger,
-  with the same timer contract validations.
+## Recovery-point contract
 
-The first manual object backup and its independent verification must complete
-before enabling the scheduled object-storage backup.
-
-That implementation is intentionally deferred. This PR does not add a backup
-script or change storage configuration.
-
-## Recovery-Point Consistency Contract
-
-PostgreSQL and Object Storage backup jobs may remain independently scheduled
-and may retain independent failure domains. Independent scheduling does not
-mean that recovery points are independent or uncoordinated. Freshness of each
-job alone is insufficient evidence for a restorable production recovery point.
-
-No PostgreSQL dump and Object Storage backup combination may be advertised as
-restorable until reconciliation proves that every object referenced by the
-selected database recovery point is available in the selected object backup.
-Object-key presence alone is insufficient. Current application evidence allows
-presigned PUT URLs to remain valid for 24 hours, so a referenced key may be
-overwritten after the selected database point. `File.checksum` is not
-currently a mandatory trusted server-bound immutable content identity, and an
-optional or client-supplied checksum must not be treated as authoritative
-recovery identity.
-
-For every `File`/object reference selected from the database recovery point,
-the Object Storage recovery point must prove that the exact object bytes
-belonging to that database point are recoverable. The future
-`OBJECT-BACKUP-01` implementation owns the mechanism and its tests. It must
-choose and prove one safe mechanism, without this PR selecting or
-implementing it:
-
-- Immutable object identity, such as an S3 `VersionId` bound to the selected
-  database recovery point, or a trusted cryptographic digest/object identity
-  bound to that point and verified against the backed-up object.
-- An explicitly proven write-quiescence window spanning recovery-point capture
-  so referenced objects cannot be overwritten or deleted between the database
-  point and object capture.
-
-The implementation must produce enough durable evidence to bind and select
-the database/object recovery point, including reference reconciliation and
-exact content identity. If any referenced object is missing, mismatched, or
-otherwise not proven to have the exact bytes, the recovery point fails closed
-and must not be advertised as restorable. Current backup readiness remains
-**FAIL-CLOSED / INCOMPLETE** until this mechanism exists.
-
-The validity contract is:
+A recovery point is valid only when every component is proven:
 
 ```text
 POSTGRES_BACKUP_VALID
-+ OBJECT_BACKUP_VALID
-+ DB_OBJECT_REFERENCE_RECONCILIATION_PASS
-+ DB_OBJECT_CONTENT_IDENTITY_PASS
+* OBJECT_BACKUP_VALID
+* DB_OBJECT_REFERENCE_RECONCILIATION_PASS
+* DB_OBJECT_CONTENT_IDENTITY_PASS
 = RECOVERY_POINT_VALID
 ```
 
-This contract does not require reintroducing the superseded paired
-`CONTROL_UPDATE` or coordinator architecture merely to satisfy the contract.
-Scheduling and execution may remain separate while recovery-point selection is
-bound by explicit evidence.
+Object-key presence alone is insufficient. Presigned PUT URLs can outlive an API
+stop, and `File.checksum` is not currently a mandatory trusted server-bound
+identity. The temporary write-deny fence and the exact content capture address
+that risk for the capture window. If any referenced object is missing,
+mismatched, or not proven byte-for-byte, the recovery point fails closed and
+must not be advertised as restorable.
 
-## Current Production Audit Transition
+## Audit and readiness
 
-The current `production-readonly-audit.sh` control and
-`production-readonly-audit.yml` workflow still validate the old paired
-readiness contract: a paired receipt must be present and must contain
-`minio_verified=true`. They are current production-readiness dependencies, but
-their backup-readiness check has not yet been migrated to the simplified
-Object Storage evidence and reconciliation contract.
+`production-readonly-audit.sh` validates the runtime-bound selector and exact
+recovery evidence while retaining the independent daily backup receipt and
+timer checks. A recovery bundle PASS alone does not set
+`BACKUP_READINESS=PASS`; every independent readiness condition must also pass.
+Until an authorized production run creates a valid selector and audit evidence,
+recovery status remains `NOT_EVALUATED` and readiness remains
+**FAIL-CLOSED / INCOMPLETE**. No operator may bypass, suppress, or manually mark
+the audit `PASS`.
 
-Accordingly, this PR intentionally does not claim full production backup
-readiness. Under the simplified architecture, backup readiness remains
-**FAIL-CLOSED / INCOMPLETE** until Object Storage backup is implemented and
-the audit can validate the recovery-point contract above. `OBJECT-BACKUP-01`
-must update the production-readonly-audit contract together with the new
-Object Storage evidence and reconciliation mechanism. No operator may bypass,
-suppress, or manually mark the current audit `PASS`.
+## Scheduling and automation
 
-## Scheduling and Automation
+- Local systemd continues to own PostgreSQL and independent Object Storage backup scheduling.
+- GitHub Actions must not be used as a periodic backup scheduler or expose a standalone production backup execution path.
+- The approved deployment workflow may invoke its validated PostgreSQL pre-deploy backup as a safety prerequisite; it does not replace the daily PostgreSQL timer.
+- GitHub is a source-code recovery mechanism, not a production data-plane scheduler.
+- Every production mutation—including systemd, sudoers, credentials, buckets, retention, policy, or runtime services—requires separate explicit approval.
 
-- Local systemd may continue to own PostgreSQL backup scheduling.
-- GitHub Actions must not be used as a periodic backup scheduler or expose a
-  standalone production backup execution path.
-- The existing approved production deployment workflow may invoke its
-  mandatory validated PostgreSQL pre-deploy backup as a deployment safety
-  prerequisite. That invocation is not the regular backup scheduler and does
-  not replace the daily PostgreSQL systemd backup; it remains unchanged by
-  this PR.
-- Object Storage backup scheduling will also be local and independent when
-  that backup is implemented.
-- GitHub remains a source-code recovery mechanism, not a production data-plane
-  scheduler.
-- PostgreSQL and object-storage backup schedules should remain independent so a
-  database job cannot mask an object-storage failure; the recovery-point
-  consistency contract above still applies when selecting a restorable point.
-- Every production mutation requires separate explicit approval, including
-  changes to systemd, sudoers, credentials, buckets, retention, or runtime
-  services.
+## Superseded designs
 
-## Superseded Designs
-
-`PRODUCTION_BACKUP_ACTIVATION.md` is retained as historical/reference material
-only. Its paired PostgreSQL/MinIO activation flow and privileged
-`CONTROL_UPDATE` publication mechanism are not part of the target architecture
-and must not be activated under this strategy.
-
-The repository still contains related scripts, units, policies, workflows, and
-tests. They are intentionally not deleted in this documentation-only change;
-their classifications are recorded in
+`PRODUCTION_BACKUP_ACTIVATION.md` remains historical/reference material only.
+Its paired PostgreSQL/MinIO activation flow and privileged `CONTROL_UPDATE`
+publication mechanism are not part of the target architecture and must not be
+activated under this strategy. Related repository assets remain classified in
 [`PRODUCTION_BACKUP_LEGACY_INVENTORY.md`](PRODUCTION_BACKUP_LEGACY_INVENTORY.md).

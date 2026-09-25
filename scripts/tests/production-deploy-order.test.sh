@@ -9,6 +9,18 @@ readonly WORKFLOW="$ROOT_DIR/.github/workflows/deploy-production.yml"
 
 line_number() { awk -v pattern="$1" 'index($0, pattern) { print NR; exit }' "$2"; }
 line_number_after() { awk -v start="$1" -v pattern="$2" 'NR > start && index($0, pattern) { print NR; exit }' "$3"; }
+recovery_helper_paths=(
+  scripts/lib/recovery-point-capture.sh
+  scripts/lib/recovery-point-postgres-snapshot.sh
+  scripts/lib/recovery-point-file-manifest.sh
+  scripts/lib/recovery-point-file-object-bundle.sh
+  scripts/lib/recovery-point-object-source.sh
+  scripts/lib/production-rclone-recovery-check.sh
+  scripts/lib/production-s3-write-fence.sh
+  scripts/lib/recovery-point-s3-helper.cjs
+)
+bundle_start_line="$(line_number 'tar -czf -' "$WORKFLOW")"
+remote_invocation_line="$(line_number '| ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "$remote_command"' "$WORKFLOW")"
 storage_guard_line="$(line_number 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")"
 target_tree_line="$(awk '$0 == "materialize_target_tree" { print NR; exit }' "$DEPLOY_SCRIPT")"
 target_compose_line="$(line_number 'TARGET_COMPOSE_FILE' "$DEPLOY_SCRIPT")"
@@ -16,6 +28,9 @@ api_revision_line="$(line_number 'PREVIOUS_API_REVISION="$(docker image inspect'
 web_revision_line="$(line_number 'PREVIOUS_WEB_REVISION="$(docker image inspect' "$DEPLOY_SCRIPT")"
 revision_match_line="$(line_number 'PREVIOUS_API_REVISION" == "$PREVIOUS_WEB_REVISION' "$DEPLOY_SCRIPT")"
 previous_sha_line="$(line_number 'PREVIOUS_SHA="$PREVIOUS_API_REVISION"' "$DEPLOY_SCRIPT")"
+recovery_preflight_line="$(line_number "PHASE='recovery-point-preflight'" "$DEPLOY_SCRIPT")"
+recovery_capture_line="$(line_number "PHASE='recovery-point-capture'" "$DEPLOY_SCRIPT")"
+recovery_gate_line="$(line_number "recovery_point_validate_capture || fail 'Recovery-point receipt did not prove every required component'" "$DEPLOY_SCRIPT")"
 backup_phase_line="$(line_number "PHASE='backup'" "$DEPLOY_SCRIPT")"
 checkout_phase_line="$(line_number "PHASE='checkout'" "$DEPLOY_SCRIPT")"
 build_phase_line="$(line_number "PHASE='build'" "$DEPLOY_SCRIPT")"
@@ -37,14 +52,28 @@ rollback_compatibility_line="$(line_number 'validate_application_rollback_compat
 rollback_restore_line="$(line_number 'restore_quiesced_api_on_exit' "$ROLLBACK_SCRIPT")"
 rollback_recreate_started_line="$(line_number 'ROLLBACK_RECREATE_STARTED=true' "$ROLLBACK_SCRIPT")"
 rollback_record_line="$(line_number 'write_rollback_record IN_PROGRESS' "$ROLLBACK_SCRIPT")"
+rollback_smoke_line="$(line_number 'Rollback smoke failed' "$ROLLBACK_SCRIPT")"
+rollback_active_identity_line="$(line_number 'active_api_digest="$(docker inspect' "$ROLLBACK_SCRIPT")"
+rollback_recovery_binding_line="$(line_number 'bind_unique_prior_success_recovery_point "$DEPLOYMENTS_DIR" || true' "$ROLLBACK_SCRIPT")"
+rollback_success_record_line="$(line_number 'write_rollback_record SUCCESS' "$ROLLBACK_SCRIPT")"
+rollback_target_sha_line="$(line_number 'target_sha=%s' "$ROLLBACK_SCRIPT")"
+rollback_selector_publish_line="$(line_number 'if ! publish_current_successful_selector "$DEPLOYMENTS_DIR"' "$ROLLBACK_SCRIPT")"
 [[ -n "$backup_phase_line" && -n "$checkout_phase_line" && -n "$build_phase_line" ]]
 [[ -n "$baseline_phase_line" && -n "$migrations_phase_line" && -n "$baseline_line" ]]
 [[ -n "$early_state_line" && -n "$later_state_line" && -n "$migrate_line" && -n "$post_line" ]]
 [[ -n "$compatibility_line" && -n "$receipt_line" && -n "$recreate_line" ]]
-[[ -n "$checkpoint_line" ]]
+[[ -n "$checkpoint_line" && -n "$recovery_preflight_line" && -n "$recovery_capture_line" && -n "$recovery_gate_line" ]]
 [[ -n "$rollback_compose_line" && -n "$rollback_quiesce_line" && -n "$rollback_migration_line" && -n "$rollback_compatibility_line" ]]
-[[ -n "$rollback_restore_line" && -n "$rollback_recreate_started_line" && -n "$rollback_record_line" ]]
+[[ -n "$rollback_restore_line" && -n "$rollback_recreate_started_line" && -n "$rollback_record_line" && -n "$rollback_smoke_line" && -n "$rollback_active_identity_line" && -n "$rollback_recovery_binding_line" && -n "$rollback_success_record_line" && -n "$rollback_target_sha_line" && -n "$rollback_selector_publish_line" ]]
 [[ -n "$storage_guard_line" ]]
+[[ -n "$bundle_start_line" && -n "$remote_invocation_line" ]]
+(( bundle_start_line < remote_invocation_line ))
+for recovery_helper_path in "${recovery_helper_paths[@]}"; do
+  grep -F "test -f $recovery_helper_path && test ! -L $recovery_helper_path" "$WORKFLOW" >/dev/null
+  recovery_bundle_line="$(line_number_after "$bundle_start_line" "$recovery_helper_path" "$WORKFLOW")"
+  [[ -n "$recovery_bundle_line" ]]
+  (( bundle_start_line < recovery_bundle_line && recovery_bundle_line < remote_invocation_line ))
+done
 
 rollback_success_line="$(line_number 'if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '\''98'\'' || "$migration_count" == '\''99'\'' ) ]]; then' "$DEPLOY_SCRIPT")"
 rollback_previous_sha_line="$(line_number_after "$rollback_success_line" 'previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"' "$DEPLOY_SCRIPT")"
@@ -75,10 +104,11 @@ generic_reject_continue_line="$(line_number_after "$generic_reject_line" 'contin
 (( build_phase_line < baseline_phase_line && baseline_phase_line < migrations_phase_line ))
 (( baseline_line < later_state_line && later_state_line < migrate_line && migrate_line < post_line ))
 (( post_line < compatibility_line && compatibility_line < receipt_line && receipt_line < recreate_line ))
-(( previous_sha_line < checkpoint_line && checkpoint_line < backup_phase_line ))
+(( previous_sha_line < recovery_preflight_line && recovery_preflight_line < recovery_capture_line && recovery_capture_line < recovery_gate_line && recovery_gate_line < checkpoint_line && checkpoint_line < backup_phase_line ))
 (( rollback_compose_line < rollback_quiesce_line && rollback_quiesce_line < rollback_migration_line && rollback_migration_line < rollback_compatibility_line ))
 rollback_recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$ROLLBACK_SCRIPT")"
 (( rollback_compatibility_line < rollback_record_line && rollback_record_line < rollback_recreate_line && rollback_recreate_line < rollback_recreate_started_line ))
+(( rollback_smoke_line < rollback_active_identity_line && rollback_active_identity_line < rollback_recovery_binding_line && rollback_recovery_binding_line < rollback_success_record_line && rollback_success_record_line < rollback_selector_publish_line ))
 
 env_invocation_count="$(grep -F -c 'env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db' "$DEPLOY_SCRIPT")"
 [[ "$env_invocation_count" -eq 4 ]]
@@ -112,6 +142,13 @@ grep -F 'docker start buildingos-api' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Interrupted rollback state does not match the running predecessor or source images' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'RETRY_PREVIOUS_SHA="$from_sha"' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'write_rollback_record SUCCESS' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'target_sha=%s' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'Rollback runtime image IDs do not match the requested previous digests' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'Rollback API revision does not match the requested previous SHA' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'Rollback Web revision does not match the requested previous SHA' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'if ! publish_current_successful_selector "$DEPLOYMENTS_DIR"' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'bind_unique_prior_success_recovery_point "$DEPLOYMENTS_DIR" || true' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'find "$deployments_dir" -mindepth 1 -maxdepth 1 -type f -print0' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'from_api_digest' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'RETRY_RECOVERY_ACTIVE=true' "$DEPLOY_SCRIPT" >/dev/null
 grep -F "storage_transition='unknown'" "$DEPLOY_SCRIPT" >/dev/null
@@ -127,4 +164,4 @@ if grep -F 'scripts/manifests/production-migrations-81-to-98.tsv' "$WORKFLOW" >/
   exit 1
 fi
 if grep -F 'incompatible_rows=' "$ROLLBACK_SCRIPT" >/dev/null; then exit 1; fi
-printf 'PASS: readonly env propagation and backup -> checkout -> build -> baseline -> pre -> migrate -> post -> compatibility -> receipt -> application recreation\n'
+printf 'PASS: recovery helper bundle -> remote invocation and recovery point -> checkpoint -> backup -> checkout -> build -> baseline -> pre -> migrate -> post -> compatibility -> receipt -> application recreation\n'
