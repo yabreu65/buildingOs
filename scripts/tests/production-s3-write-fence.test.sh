@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LIB="$ROOT/scripts/lib/production-s3-write-fence.sh"
+PORTABLE="$ROOT/scripts/lib/recovery-point-portable-stat.sh"
 HELPER="$ROOT/scripts/lib/recovery-point-s3-helper.cjs"
 T="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-s3-fence.XXXXXX")"
 trap 'rm -rf "$T"' EXIT
@@ -10,7 +11,7 @@ IMAGE='registry.example.invalid/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); printf 'ok %s - %s\n' "$PASS" "$1"; }; fail(){ FAIL=$((FAIL+1)); printf 'not ok - %s\n' "$1" >&2; }
 ok(){ local n="$1"; shift; if "$@" >>"$T/audit" 2>&1; then pass "$n"; else fail "$n"; fi; }; bad(){ local n="$1"; shift; if "$@" >>"$T/audit" 2>&1; then fail "$n (unexpected success)"; else pass "$n"; fi; }
-has(){ grep -Fq -- "$2" "$3" >>"$T/audit" 2>&1 && pass "$1" || fail "$1"; }; mode(){ stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+has(){ grep -Fq -- "$2" "$3" >>"$T/audit" 2>&1 && pass "$1" || fail "$1"; }; mode(){ recovery_point_portable_stat_mode "$1"; }
 private_tree(){ [[ "$(mode "$1")" == 700 ]] || return 1; local f; while IFS= read -r -d '' f; do [[ "$(mode "$f")" == 600 ]] || return 1; done < <(find "$1" -type f -print0); }
 mkdir -p "$BIN" "$OBJ"; printf 'S3_ENDPOINT=https://storage.example.invalid\nS3_ACCESS_KEY=never-log-secret\nS3_SECRET_KEY=never-log-secret\nS3_BUCKET=%s\nS3_REGION=us-east-1\n' "$BUCKET" >"$ENV_FILE"
 printf '{\n  "Version": "2012-10-17",\n  "Statement": [{"Sid":"keep","Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::source-bucket/*"}]\n}\n' >"$POLICY"
@@ -49,6 +50,7 @@ if [[ "$(<"$FAKE_STATE")" == present ]] && grep -Fq BuildingOSObjectBackupTempor
 CURL
 chmod +x "$BIN/curl"
 export PATH="$BIN:/usr/bin:/bin" S3_FENCE_DOCKER_BIN=docker S3_FENCE_CURL_BIN=curl FAKE_ENV="$ENV_FILE" FAKE_NET="$NETWORK" FAKE_IMAGE="$IMAGE" FAKE_POLICY="$POLICY" FAKE_STATE="$STATE" FAKE_BUCKET="$BUCKET" FAKE_LOG="$LOG" FAKE_OBJ="$OBJ" FAKE_PRESIGNED_KEY="$T/presigned-key" FAKE_CURL_LOG="$T/curl-log"
+source "$PORTABLE"
 source "$LIB"
 quiesce(){ printf 'quiesce\n' >>"$LOG"; }; capture(){ printf 'capture\n' >>"$LOG"; }; capture_fail(){ printf 'capture\n' >>"$LOG"; return 1; }; resume(){ printf 'resume\n' >>"$LOG"; }
 

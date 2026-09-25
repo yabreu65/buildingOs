@@ -8,6 +8,7 @@ CONTROL_ROOT="$(dirname -- "$SCRIPT_DIR")"
 readonly CONTROL_ROOT
 readonly SECURITY_VALIDATOR="$SCRIPT_DIR/production-security-validate.sh"
 readonly STORAGE_CUTOVER_GUARD="$SCRIPT_DIR/production-storage-cutover-guard.sh"
+readonly RECOVERY_POINT_PORTABLE_STAT_LIBRARY="$SCRIPT_DIR/lib/recovery-point-portable-stat.sh"
 readonly RECOVERY_POINT_CAPTURE_LIBRARY="$SCRIPT_DIR/lib/recovery-point-capture.sh"
 readonly S3_WRITE_FENCE_LIBRARY="$SCRIPT_DIR/lib/production-s3-write-fence.sh"
 readonly BACKUP_IDENTITY_MANIFEST="$CONTROL_ROOT/infra/production/backup-postgres.identity.v1"
@@ -19,12 +20,14 @@ readonly BACKUP_IDENTITY_MANIFEST="$CONTROL_ROOT/infra/production/backup-postgre
   printf 'ERROR: Trusted production storage transition guard is missing or invalid\n' >&2
   exit 1
 }
-[[ -f "$RECOVERY_POINT_CAPTURE_LIBRARY" && ! -L "$RECOVERY_POINT_CAPTURE_LIBRARY" && -f "$S3_WRITE_FENCE_LIBRARY" && ! -L "$S3_WRITE_FENCE_LIBRARY" ]] || {
+[[ -f "$RECOVERY_POINT_PORTABLE_STAT_LIBRARY" && ! -L "$RECOVERY_POINT_PORTABLE_STAT_LIBRARY" && -f "$RECOVERY_POINT_CAPTURE_LIBRARY" && ! -L "$RECOVERY_POINT_CAPTURE_LIBRARY" && -f "$S3_WRITE_FENCE_LIBRARY" && ! -L "$S3_WRITE_FENCE_LIBRARY" ]] || {
   printf 'ERROR: Trusted recovery-point helpers are missing or invalid\n' >&2
   exit 1
 }
 # shellcheck source=scripts/production-security-validate.sh
 source "$SECURITY_VALIDATOR"
+# shellcheck source=scripts/lib/recovery-point-portable-stat.sh
+source "$RECOVERY_POINT_PORTABLE_STAT_LIBRARY"
 # shellcheck source=scripts/lib/recovery-point-capture.sh
 # recovery-point-capture loads the fence through its trusted sibling control path.
 source "$RECOVERY_POINT_CAPTURE_LIBRARY"
@@ -507,7 +510,7 @@ recovery_point_validate_backup_destination() {
 }
 
 recovery_point_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+  recovery_point_portable_stat_mode "$1"
 }
 
 recovery_point_create_private_state_dir() {

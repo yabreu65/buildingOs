@@ -65,6 +65,20 @@ jobs:
         run: npm run test:ci
         continue-on-error: false
 
+      - name: 🛡️ Recovery-point portable-stat regressions
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          timeout 120s bash scripts/tests/production-s3-write-fence.test.sh
+          timeout 120s bash scripts/tests/recovery-point-postgres-snapshot.test.sh
+          timeout 120s bash scripts/tests/recovery-point-file-manifest.test.sh
+          timeout 120s bash scripts/tests/recovery-point-object-source.test.sh
+          timeout 120s bash scripts/tests/recovery-point-file-object-bundle.test.sh
+          timeout 120s bash scripts/tests/recovery-point-capture.test.sh
+          timeout 120s bash scripts/tests/production-rclone-recovery-check.test.sh
+          timeout 120s bash scripts/tests/recovery-point-portable-stat.test.sh
+
       - name: 🧪 E2E Tests (API)
         run: npm run test:e2e:ci
         continue-on-error: false

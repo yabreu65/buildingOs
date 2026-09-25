@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LIB="$ROOT/scripts/lib/recovery-point-postgres-snapshot.sh"
+PORTABLE="$ROOT/scripts/lib/recovery-point-portable-stat.sh"
 T="$(mktemp -d "${TMPDIR:-/tmp}/recovery-postgres-snapshot.XXXXXX")"
 trap 'rm -rf -- "$T"' EXIT
 B="$T/bin" A="$T/audit" S="$T/state"
@@ -11,7 +12,7 @@ pass_test() { pass=$((pass + 1)); printf 'ok %s - %s\n' "$pass" "$1"; }
 fail_test() { fail=$((fail + 1)); printf 'not ok %s - %s\n' "$fail" "$1" >&2; }
 ok() { local name="$1"; shift; if "$@" >>"$A" 2>&1; then pass_test "$name"; else fail_test "$name"; fi; }
 bad() { local name="$1"; shift; if "$@" >>"$A" 2>&1; then fail_test "$name (unexpected success)"; else pass_test "$name"; fi; }
-mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+mode() { recovery_point_portable_stat_mode "$1"; }
 no_capture_artifacts() { [[ ! -e "$1/postgres.dump" && ! -L "$1/postgres.dump" && ! -e "$1/file-rows.json" && ! -L "$1/file-rows.json" ]] && [[ -z "$(find "$1" -maxdepth 1 -name '.recovery-point-postgres-*' -print -quit)" ]] && [[ ! -e "$S/exporter-open" ]]; }
 
 mkdir -p "$B" "$S"
@@ -95,11 +96,12 @@ exec "$@"
 MOCK
 chmod +x "$B/timeout"
 export PATH="$B:/usr/bin:/bin" AUDIT="$A" STATE="$S"
+source "$PORTABLE"
 source "$LIB"
 
 P="$T/private-ok"; mkdir "$P"; chmod 0700 "$P"
 ok 'capture holds the exporter transaction through dump and File query' bash -Eeuo pipefail -c 'source "$1"; recovery_point_postgres_snapshot_capture postgres-test appdb appuser "$2"' _ "$LIB" "$P"
-ok 'capture publishes private output pair' bash -c '[[ "$(stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1")" == 700 && -f "$1/postgres.dump" && ! -L "$1/postgres.dump" && "$(stat -f %Lp "$1/postgres.dump" 2>/dev/null || stat -c %a "$1/postgres.dump")" == 600 && -f "$1/file-rows.json" && ! -L "$1/file-rows.json" && "$(stat -f %Lp "$1/file-rows.json" 2>/dev/null || stat -c %a "$1/file-rows.json")" == 600 ]]' _ "$P"
+ok 'capture publishes private output pair' bash -c 'source "$1"; [[ "$(recovery_point_portable_stat_mode "$2")" == 700 && -f "$2/postgres.dump" && ! -L "$2/postgres.dump" && "$(recovery_point_portable_stat_mode "$2/postgres.dump")" == 600 && -f "$2/file-rows.json" && ! -L "$2/file-rows.json" && "$(recovery_point_portable_stat_mode "$2/file-rows.json")" == 600 ]]' _ "$PORTABLE" "$P"
 ok 'dump and query receive the identical exported snapshot' bash -c 'grep -F -- "--snapshot=00000003-0000001B-1" "$1" >/dev/null && grep -F -- "SET TRANSACTION SNAPSHOT '\''00000003-0000001B-1'\''" "$1" >/dev/null' _ "$A"
 ok 'dump archive is validated and exporter is rolled back and closed' bash -c 'grep -Fx pg_restore "$1" >/dev/null && test -e "$2/exporter-rolled-back" && test -e "$2/exporter-closed" && test ! -e "$2/exporter-open"' _ "$A" "$S"
 ok 'capture does not expose File row data in output or command arguments' bash -c '! grep -Fq private/object-key "$1"' _ "$A"

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # SDK-only S3 recovery-point fence. Integration supplies the pinned image, protected env file, network, and callbacks.
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/recovery-point-portable-stat.sh"
+
 readonly S3_FENCE_POLICY_PRESENT='POLICY_PRESENT'
 readonly S3_FENCE_POLICY_ABSENT='POLICY_ABSENT'
 readonly S3_FENCE_PRESIGNED_PUT_EXPIRY_SECONDS=86400
@@ -8,7 +10,7 @@ readonly S3_FENCE_OBJECT_STAGING_ROOT_PATH='/recovery-point-object-staging'
 s3_fence_error() { printf 'ERROR: %s\n' "$1" >&2; return 1; }
 s3_fence_private_file() { [[ ! -L "$1" ]] || { s3_fence_error 'private artifact must not be a symlink'; return 1; }; [[ ! -e "$1" ]] || chmod 0600 "$1" || return 1; (umask 077; : > "$1") && chmod 0600 "$1"; }
 s3_fence_private_directory() { [[ ! -e "$1" && ! -L "$1" ]] || { s3_fence_error 'private evidence directory must be new'; return 1; }; (umask 077; mkdir -p "$1") && chmod 0700 "$1"; }
-s3_fence_private_readable_file() { local mode; [[ -r "$1" && -f "$1" && ! -L "$1" ]] || return 1; mode="$(stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null)" || return 1; [[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 8#077) == 0 )); }
+s3_fence_private_readable_file() { local mode; [[ -r "$1" && -f "$1" && ! -L "$1" ]] || return 1; mode="$(recovery_point_portable_stat_mode "$1")" || return 1; (( (8#$mode & 8#077) == 0 )); }
 s3_fence_bucket() { [[ "$1" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]]; }
 s3_fence_image() { [[ "$1" =~ ^sha256:[a-f0-9]{64}$ || "$1" =~ ^[^[:space:]@]+@sha256:[a-f0-9]{64}$ ]]; }
 s3_fence_network() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; }

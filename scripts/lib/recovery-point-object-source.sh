@@ -3,6 +3,7 @@
 # Usage: recovery_point_object_source_fetch API_IMAGE API_ENV_FILE DOCKER_NETWORK BUCKET KEY VERSION_ID SIZE STAGING OUTPUT
 # On success, RECOVERY_POINT_OBJECT_SOURCE_BYTES, _SHA256, and _OBSERVED_VERSION_ID are set.
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/recovery-point-portable-stat.sh"
 # shellcheck source=production-s3-write-fence.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/production-s3-write-fence.sh"
 
@@ -10,8 +11,8 @@ recovery_point_object_source_error() {
   printf 'ERROR: recovery-point object fetch failed\n' >&2
   return 1
 }
-recovery_point_object_source_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
-recovery_point_object_source_inode() { stat -f '%d:%i' "$1" 2>/dev/null || stat -c '%d:%i' "$1" 2>/dev/null; }
+recovery_point_object_source_mode() { recovery_point_portable_stat_mode "$1"; }
+recovery_point_object_source_inode() { recovery_point_portable_stat_identity "$1"; }
 recovery_point_object_source_private_directory() {
   local directory="$1" mode
   [[ -n "$directory" && -d "$directory" && ! -L "$directory" ]] || return 1

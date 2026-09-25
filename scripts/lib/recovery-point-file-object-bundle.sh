@@ -10,7 +10,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/production-rclone-recovery
 recovery_point_file_object_bundle_error() { printf 'ERROR: recovery-point file object bundle failed\n' >&2; return 1; }
 recovery_point_file_object_bundle_remote_incomplete() { printf 'ERROR: recovery bundle remote unique namespace is incomplete; remote residue may remain; operator cleanup is required; do not retry.\n' >&2; return 1; }
 recovery_point_file_object_bundle_decode() { local decoded; decoded="$(printf '%s' "$1" | { base64 --decode 2>/dev/null || base64 -D || exit; printf '\001'; })" || return 1; REPLY="${decoded%$'\001'}"; }
-recovery_point_file_object_bundle_inode() { stat -f '%d:%i' "$1" 2>/dev/null || stat -c '%d:%i' "$1" 2>/dev/null; }
+recovery_point_file_object_bundle_inode() { recovery_point_portable_stat_identity "$1"; }
 recovery_point_file_object_bundle_remember() { local inode; inode="$(recovery_point_file_object_bundle_inode "$1")" || return 1; owned_paths+=("$1"); owned_inodes+=("$inode"); }
 recovery_point_file_object_bundle_cleanup() {
   local path inode index
