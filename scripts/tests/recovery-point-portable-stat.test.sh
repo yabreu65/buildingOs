@@ -50,6 +50,17 @@ case "${FAKE_STAT_SCENARIO:-}" in
     [[ "$1" == -f && "$2" == '%d:%i' ]] && { printf 'not-an-identity\n'; exit 0; }
     [[ "$1" == -c && "$2" == '%d:%i' && "$3" == -- ]] && { printf 'also-not-an-identity\n'; exit 0; }
     ;;
+  gnu-invalid-first-uid)
+    [[ "$1" == -f && "$2" == '%u' ]] && { printf 'not-a-uid\n'; exit 0; }
+    [[ "$1" == -c && "$2" == '%u' && "$3" == -- ]] && { printf '501\n'; exit 0; }
+    ;;
+  bsd-uid)
+    [[ "$1" == -f && "$2" == '%u' ]] && { printf '502\n'; exit 0; }
+    ;;
+  both-uid-malformed)
+    [[ "$1" == -f && "$2" == '%u' ]] && { printf 'not-a-uid\n'; exit 0; }
+    [[ "$1" == -c && "$2" == '%u' && "$3" == -- ]] && { printf 'also-not-a-uid\n'; exit 0; }
+    ;;
   *)
     [[ "$1" == -f ]] && { printf 'not-a-mode\n'; exit 0; }
     [[ "$1" == -c && "$2" == '%a' && "$3" == -- ]] && { printf '%s\n' "${FAKE_STAT_SCENARIO:-600}"; exit 0; }
@@ -84,6 +95,9 @@ ok 'recovery-point capture uses the corrected fallback reader' env FAKE_STAT_SCE
 ok 'GNU invalid first identity output falls through to valid fallback' env FAKE_STAT_SCENARIO=gnu-invalid-first-identity bash -c 'source "$1"; [[ "$(recovery_point_portable_stat_identity "$2")" == 42:99 ]]' _ "$PORTABLE" "$PRIVATE_FILE"
 ok 'valid BSD identity output is accepted' env FAKE_STAT_SCENARIO=bsd-identity bash -c 'source "$1"; [[ "$(recovery_point_portable_stat_identity "$2")" == 17:34 ]]' _ "$PORTABLE" "$PRIVATE_FILE"
 bad 'two malformed successful identity outputs fail closed' env FAKE_STAT_SCENARIO=both-identity-malformed bash -c 'source "$1"; recovery_point_portable_stat_identity "$2"' _ "$PORTABLE" "$PRIVATE_FILE"
+ok 'GNU invalid first UID output falls through to numeric fallback' env FAKE_STAT_SCENARIO=gnu-invalid-first-uid bash -c 'source "$1"; [[ "$(recovery_point_portable_stat_uid "$2")" == 501 ]]' _ "$PORTABLE" "$PRIVATE_FILE"
+ok 'numeric BSD UID output is accepted' env FAKE_STAT_SCENARIO=bsd-uid bash -c 'source "$1"; [[ "$(recovery_point_portable_stat_uid "$2")" == 502 ]]' _ "$PORTABLE" "$PRIVATE_FILE"
+bad 'two malformed successful UID outputs fail closed' env FAKE_STAT_SCENARIO=both-uid-malformed bash -c 'source "$1"; recovery_point_portable_stat_uid "$2"' _ "$PORTABLE" "$PRIVATE_FILE"
 ok 'capture inode adapter uses the shared identity reader' env FAKE_STAT_SCENARIO=gnu-invalid-first-identity bash -c 'source "$1"; source "$2"; [[ "$(recovery_point_capture_inode "$3")" == 42:99 ]]' _ "$PORTABLE" "$CAPTURE" "$PRIVATE_FILE"
 ok 'object-source inode adapter uses the shared identity reader' env FAKE_STAT_SCENARIO=gnu-invalid-first-identity bash -c 'source "$1"; source "$2"; [[ "$(recovery_point_object_source_inode "$3")" == 42:99 ]]' _ "$PORTABLE" "$OBJECT_SOURCE" "$PRIVATE_FILE"
 ok 'postgres snapshot inode adapter uses the shared identity reader' env FAKE_STAT_SCENARIO=gnu-invalid-first-identity bash -c 'source "$1"; source "$2"; [[ "$(recovery_point_postgres_snapshot_inode "$3")" == 42:99 ]]' _ "$PORTABLE" "$POSTGRES_SNAPSHOT" "$PRIVATE_FILE"

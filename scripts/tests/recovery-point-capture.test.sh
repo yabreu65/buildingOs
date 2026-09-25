@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; LIB="$ROOT/scripts/lib/recovery-point-capture.sh"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; LIB="$ROOT/scripts/lib/recovery-point-capture.sh"; PORTABLE="$ROOT/scripts/lib/recovery-point-portable-stat.sh"
 T="$(mktemp -d "${TMPDIR:-/tmp}/recovery-capture.XXXXXX")"; trap '[[ -n "${KEEP:-}" ]] || rm -rf -- "$T"' EXIT
 B="$T/bin"; A="$T/audit"; E="$T/api.protected.env"; R="$T/rclone.conf"; SHA=0123456789abcdef0123456789abcdef01234567; IMAGE='registry.example.invalid/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; NETWORK=private_net; BUCKET=source-bucket
-pass=0; fail=0; ok(){ local n="$1";shift;if "$@" >>"$A" 2>&1;then pass=$((pass+1));printf 'ok %s - %s\n' "$pass" "$n";else fail=$((fail+1));printf 'not ok %s - %s\n' "$fail" "$n" >&2;fi;};bad(){ local n="$1";shift;if "$@" >>"$A" 2>&1;then fail=$((fail+1));printf 'not ok %s - unexpected success\n' "$fail" "$n" >&2;else pass=$((pass+1));printf 'ok %s - %s\n' "$pass" "$n";fi;}; mode(){ stat -f '%Lp' "$1" 2>/dev/null||stat -c '%a' "$1" 2>/dev/null; }; clean(){ [[ -z "$(find "$1" -mindepth 1 -print -quit)" ]]; }
+pass=0; fail=0; ok(){ local n="$1";shift;if "$@" >>"$A" 2>&1;then pass=$((pass+1));printf 'ok %s - %s\n' "$pass" "$n";else fail=$((fail+1));printf 'not ok %s - %s\n' "$fail" "$n" >&2;fi;};bad(){ local n="$1";shift;if "$@" >>"$A" 2>&1;then fail=$((fail+1));printf 'not ok %s - unexpected success\n' "$fail" "$n" >&2;else pass=$((pass+1));printf 'ok %s - %s\n' "$pass" "$n";fi;}; mode(){ recovery_point_portable_stat_mode "$1"; }; clean(){ [[ -z "$(find "$1" -mindepth 1 -print -quit)" ]]; }
 mkdir -p "$B"; : >"$A"; chmod 0600 "$A"; printf 'S3_ENDPOINT=https://storage.example.invalid\nS3_ACCESS_KEY=secret-value\nS3_SECRET_KEY=secret-value\nS3_BUCKET=%s\n' "$BUCKET" >"$E"; : >"$R"; chmod 0600 "$E" "$R"
 cat >"$B/timeout" <<'EOF'
 #!/usr/bin/env bash
@@ -26,10 +26,11 @@ set -Eeuo pipefail
 printf '%s\n' "$@" >>"$AUDIT"; [[ "$1" == check && "$2" == --help ]]&&{ printf '%s\n' --download;exit;};[[ "$1" == help ]]&&{ printf '%s\n' --files-from-raw;exit;};if [[ "$1" == --config && "$3" == lsf ]];then exit;fi;if [[ "$1" == --config && "$3" == copyto ]];then [[ "${MODE:-ok}" != dump-copy-fail ]]||exit 2;exit;fi
 RCLONE
 chmod +x "$B"/*; export PATH="$B:/usr/bin:/bin" AUDIT="$A" S3_FENCE_DOCKER_BIN=docker FAKE_ENV="$E" FAKE_NETWORK="$NETWORK" FAKE_IMAGE="$IMAGE" FAKE_BUCKET="$BUCKET"
+source "$PORTABLE"
 source "$LIB"
 run(){ recovery_point_capture_create postgres-test appdb appuser "$IMAGE" "$E" "$NETWORK" "$BUCKET" "$B/rclone" "$R" archive:unique-root "$1" "$SHA" backup-01; }
 P="$T/success";mkdir "$P";chmod 0700 "$P";ok 'threads exact SDK integration through a complete recovery capture' run "$P"
-ok 'publishes private dump, content manifest, and receipt' bash -c 'test "$(stat -f %Lp "$1" 2>/dev/null||stat -c %a "$1")" = 700 && test "$(stat -f %Lp "$1/postgresql/buildingos_backup-01.dump" 2>/dev/null||stat -c %a "$1/postgresql/buildingos_backup-01.dump")" = 600 && jq -e ".status==\"PASS\" and .referenceCount==1 and .uniqueObjectCount==1" "$1/metadata/recovery-point-receipt.json"' _ "$P"
+ok 'publishes private dump, content manifest, and receipt' bash -c 'source "$1"; test "$(recovery_point_portable_stat_mode "$2")" = 700 && test "$(recovery_point_portable_stat_mode "$2/postgresql/buildingos_backup-01.dump")" = 600 && jq -e ".status==\"PASS\" and .referenceCount==1 and .uniqueObjectCount==1" "$2/metadata/recovery-point-receipt.json"' _ "$PORTABLE" "$P"
 ok 'capture rejects tampered content mapping' bash -c 'source "$1"; ! recovery_point_capture_content_valid "$2/file-manifest.json" "$2/metadata/reference-content-manifest.json" 2 1' _ "$LIB" "$P"
 P="$T/object-fail";mkdir "$P";chmod 0700 "$P";bad 'object SDK failure aborts capture and cleans local outputs' env MODE=object-fail bash -c 'source "$1"; recovery_point_capture_create postgres-test appdb appuser "$2" "$3" "$4" "$5" "$6" "$7" "$8" archive:object-fail "$9" "${10}" backup-01' _ "$LIB" "$IMAGE" "$E" "$NETWORK" "$BUCKET" "$B/rclone" "$R" "$P" "$SHA";ok 'object failure root is empty' clean "$P"
 P="$T/postgres-fail";mkdir "$P";chmod 0700 "$P";bad 'database failure remains fail-closed' env MODE=postgres-fail bash -c 'source "$1"; recovery_point_capture_create postgres-test appdb appuser "$2" "$3" "$4" "$5" "$6" "$7" "$8" archive:postgres-fail "$9" "${10}" backup-01' _ "$LIB" "$IMAGE" "$E" "$NETWORK" "$BUCKET" "$B/rclone" "$R" "$P" "$SHA";ok 'database failure root is empty' clean "$P"

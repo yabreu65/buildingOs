@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LIB="$ROOT/scripts/lib/recovery-point-object-source.sh"
+PORTABLE="$ROOT/scripts/lib/recovery-point-portable-stat.sh"
 T="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-recovery-point-object.XXXXXX")"
 trap '[[ -n "${KEEP:-}" ]] || rm -rf -- "$T"' EXIT
 B="$T/bin"; STAGING="$T/staging"; ENV_FILE="$T/api.protected.env"; PAYLOAD="$T/payload"; AUDIT="$T/audit"
@@ -13,7 +14,7 @@ pass(){ PASS=$((PASS+1)); printf 'ok %s - %s\n' "$PASS" "$1"; }
 fail(){ FAIL=$((FAIL+1)); printf 'not ok %s - %s\n' "$FAIL" "$1" >&2; }
 ok(){ local n="$1"; shift; if "$@" >>"$AUDIT" 2>&1; then pass "$n"; else fail "$n"; fi; }
 bad(){ local n="$1"; shift; if "$@" >>"$AUDIT" 2>&1; then fail "$n (unexpected success)"; else pass "$n"; fi; }
-mode(){ stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+mode(){ recovery_point_portable_stat_mode "$1"; }
 sha(){ if command -v sha256sum >/dev/null; then sha256sum "$1"|awk '{print $1}'; else shasum -a 256 "$1"|awk '{print $1}'; fi; }
 absent(){ [[ ! -e "$1" && ! -L "$1" ]]; }
 
@@ -65,6 +66,7 @@ esac
 DOCKER
 chmod +x "$B/docker"
 export PATH="$B:/usr/bin:/bin" S3_FENCE_DOCKER_BIN=docker FAKE_ENV="$ENV_FILE" FAKE_NETWORK="$NETWORK" FAKE_IMAGE="$IMAGE" FAKE_BUCKET="$BUCKET" FAKE_KEY="$KEY" FAKE_VERSION="$VERSION" FAKE_PAYLOAD="$PAYLOAD" FAKE_UID="$(id -u)" FAKE_GID="$(id -g)"
+source "$PORTABLE"
 source "$LIB"
 PINNED="$STAGING/pinned-object"; CURRENT="$STAGING/current-object"
 ok 'pinned SDK object fetch succeeds with private output' recovery_point_object_source_fetch "$IMAGE" "$ENV_FILE" "$NETWORK" "$BUCKET" "$KEY" "$VERSION" 21 "$STAGING" "$PINNED"

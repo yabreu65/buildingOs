@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LIB="$ROOT/scripts/lib/production-rclone-recovery-check.sh"
+PORTABLE="$ROOT/scripts/lib/recovery-point-portable-stat.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-rclone-recovery.XXXXXX")"
 cleanup() { chmod 0700 "$TEST_ROOT" 2>/dev/null || true; rm -rf -- "$TEST_ROOT"; }
 trap cleanup EXIT
@@ -26,7 +27,7 @@ pass() { PASS=$((PASS + 1)); printf 'ok %s - %s\n' "$PASS" "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf 'not ok %s - %s\n' "$FAIL" "$1" >&2; }
 ok() { local name="$1"; shift; if "$@" >> "$AUDIT" 2>&1; then pass "$name"; else fail "$name"; fi; }
 bad() { local name="$1"; shift; if "$@" >> "$AUDIT" 2>&1; then fail "$name (unexpected success)"; else pass "$name"; fi; }
-mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+mode() { recovery_point_portable_stat_mode "$1"; }
 no_list() { [[ ! -e "$LIST" && ! -L "$LIST" ]]; }
 
 mkdir -p "$BIN" "$LOCAL_ROOT/objects" "$LOCAL_ROOT/postgresql" "$LOCAL_ROOT/metadata" "$PRIVATE_PARENT"
@@ -43,6 +44,7 @@ cat > "$BIN/rclone" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 for arg in "$@"; do [[ "$arg" != *"$FAKE_CREDENTIAL"* ]] || exit 87; done
+source "$FAKE_PORTABLE"
 printf '%s\n' "$@" >> "$FAKE_LOG"
 case "${1:-}" in
   check)
@@ -71,7 +73,7 @@ case "${1:-}" in
       check)
         [[ "${FAKE_CHECK_FAIL:-false}" != true ]] || exit 4
         [[ "$#" == 9 && "$4" == --download && "$5" == --one-way && "$6" == --files-from-raw && "$8" == "$FAKE_LOCAL" && "$9" == "$FAKE_REMOTE" ]] || exit 92
-        [[ "$(stat -f '%Lp' "$7" 2>/dev/null || stat -c '%a' "$7" 2>/dev/null)" == 600 && ! -L "$7" ]] || exit 93
+        [[ "$(recovery_point_portable_stat_mode "$7")" == 600 && ! -L "$7" ]] || exit 93
         cmp -s <(printf '%s\n' "$FAKE_PATH") "$7" || exit 94
         cp "$7" "$FAKE_CAPTURED_LIST"
         ;;
@@ -82,7 +84,8 @@ case "${1:-}" in
 esac
 MOCK
 chmod +x "$BIN/rclone"
-export PATH="$BIN:/usr/bin:/bin" FAKE_LOG="$LOG" FAKE_CONFIG="$CONFIG" FAKE_LOCAL="$LOCAL_ROOT" FAKE_REMOTE="$REMOTE_ROOT" FAKE_PATH="$OBJECT_PATH" FAKE_OBJECT="$LOCAL_ROOT/$OBJECT_PATH" FAKE_CAPTURED_LIST="$TEST_ROOT/captured.list" FAKE_CREDENTIAL="$CREDENTIAL"
+export PATH="$BIN:/usr/bin:/bin" FAKE_LOG="$LOG" FAKE_CONFIG="$CONFIG" FAKE_LOCAL="$LOCAL_ROOT" FAKE_REMOTE="$REMOTE_ROOT" FAKE_PATH="$OBJECT_PATH" FAKE_OBJECT="$LOCAL_ROOT/$OBJECT_PATH" FAKE_CAPTURED_LIST="$TEST_ROOT/captured.list" FAKE_CREDENTIAL="$CREDENTIAL" FAKE_PORTABLE="$PORTABLE"
+source "$PORTABLE"
 source "$LIB"
 
 ok 'capability check accepts private config and required help flags' recovery_point_rclone_require_download_check "$RCLONE_BIN" "$CONFIG"

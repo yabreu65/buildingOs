@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LIB="$ROOT/scripts/lib/recovery-point-file-manifest.sh"
+PORTABLE="$ROOT/scripts/lib/recovery-point-portable-stat.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-recovery-point-manifest.XXXXXX")"
 trap 'rm -rf -- "$TEST_ROOT"' EXIT
 AUDIT="$TEST_ROOT/audit.log"
@@ -14,7 +15,7 @@ pass() { PASS=$((PASS + 1)); printf 'ok %s - %s\n' "$PASS" "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf 'not ok %s - %s\n' "$FAIL" "$1" >&2; }
 ok() { local name="$1"; shift; if "$@" >> "$AUDIT" 2>&1; then pass "$name"; else fail "$name"; fi; }
 bad() { local name="$1"; shift; if "$@" >> "$AUDIT" 2>&1; then fail "$name (unexpected success)"; else pass "$name"; fi; }
-mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+mode() { recovery_point_portable_stat_mode "$1"; }
 private_file() { [[ -f "$1" && ! -L "$1" && "$(mode "$1")" == 600 ]]; }
 private_directory() { [[ -d "$1" && ! -L "$1" && "$(mode "$1")" == 700 ]]; }
 private_artifacts() { private_file "$1" && private_file "$2" && private_directory "$3"; }
@@ -60,6 +61,7 @@ printf '%s\n' '[{"id":"fractional","tenantId":"tenant-a","bucket":"authoritative
 printf '%s\n' '[{"id":"empty-version","tenantId":"tenant-a","bucket":"authoritative-bucket","objectKey":"private/a","objectVersionId":"","size":1,"checksum":null}]' > "$TEST_ROOT/empty-version.json"
 printf '%s\n' '[]' > "$TEST_ROOT/empty.json"
 
+source "$PORTABLE"
 source "$LIB"
 
 ok 'pinned and null objectVersionId manifest normalizes' recovery_point_file_manifest_normalize "$TEST_ROOT/ordered.json" "$BUCKET" "$TEST_ROOT/one"

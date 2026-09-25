@@ -31,3 +31,19 @@ recovery_point_portable_stat_identity() {
   [[ "$identity" =~ ^[0-9]+:[0-9]+$ ]] || return 1
   printf '%s\n' "$identity"
 }
+
+# Reads a numeric UID using BSD/macOS or GNU stat without accepting malformed output.
+recovery_point_portable_stat_uid() {
+  local path="${1:-}" uid=''
+  [[ "$#" -eq 1 ]] || return 1
+
+  uid="$(stat -f '%u' "$path" 2>/dev/null)" || uid=''
+  if [[ "$uid" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$uid"
+    return 0
+  fi
+
+  uid="$(stat -c '%u' -- "$path" 2>/dev/null)" || uid=''
+  [[ "$uid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$uid"
+}
