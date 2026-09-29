@@ -451,6 +451,45 @@ database_contracts_match() {
   return 1
 }
 
+target_requires_modern_liquidation_insert() {
+  local target_sha="$1"
+  local migration_path='apps/api/prisma/migrations/20260918000000_enforce_modern_distribution_unit_ownership/migration.sql'
+  local migration_digest
+
+  if ! git cat-file -e "$target_sha:$migration_path" 2>/dev/null; then
+    [[ "${MIGRATION_TARGET_APPLIED:-0}" -lt 106 ]] \
+      || security_fail 'Migration target 106 is missing its liquidation ownership contract'
+    return 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    migration_digest="$(git show "$target_sha:$migration_path" | sha256sum)" \
+      || security_fail 'Unable to verify the liquidation ownership migration'
+  elif command -v shasum >/dev/null 2>&1; then
+    migration_digest="$(git show "$target_sha:$migration_path" | shasum -a 256)" \
+      || security_fail 'Unable to verify the liquidation ownership migration'
+  else
+    security_fail 'sha256sum or shasum is required for rollback compatibility validation'
+  fi
+  [[ "${migration_digest%% *}" == '5932afb02d9a47bab3ff779bad155b293acf4a31d7a4da91ef17b7501fe1dfa1' ]] \
+    || security_fail 'Unrecognized liquidation ownership migration contract'
+}
+
+previous_application_supports_modern_liquidation_insert() {
+  local previous_sha="$1"
+  local schema_source writer_source caller_source
+
+  schema_source="$(git show "$previous_sha:apps/api/prisma/schema.prisma" 2>/dev/null)" \
+    || return 1
+  writer_source="$(git show "$previous_sha:apps/api/src/finanzas/liquidation-publication.use-case.ts" 2>/dev/null)" \
+    || return 1
+  caller_source="$(git show "$previous_sha:apps/api/src/finanzas/liquidations.service.ts" 2>/dev/null)" \
+    || return 1
+  [[ "$schema_source" == *'publicationIntegrityVersion Int?'* \
+    && "$writer_source" == *'publicationIntegrityVersion: input.publicationIntegrityVersion,'* \
+    && "$caller_source" == *'publicationIntegrityVersion: 1,'* ]]
+}
+
 database_delta_is_receipt_snapshot_only() {
   local previous_sha="$1"
   local target_sha="$2"
@@ -529,6 +568,11 @@ validate_application_rollback_compatibility() {
   ROLLBACK_COMPATIBILITY_BASIS=''
   ROLLBACK_COMPATIBILITY_PREVIOUS_SHA=''
   ROLLBACK_COMPATIBILITY_TARGET_SHA=''
+
+  if target_requires_modern_liquidation_insert "$target_sha"; then
+    previous_application_supports_modern_liquidation_insert "$previous_sha" \
+      || security_fail 'Previous application cannot satisfy the target liquidation publication contract'
+  fi
 
   if database_contracts_match "$previous_sha" "$target_sha"; then
     ROLLBACK_COMPATIBILITY_BASIS='SAME_DB_CONTRACT'

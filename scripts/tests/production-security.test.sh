@@ -9,6 +9,8 @@ readonly ROLLBACK="$ROOT_DIR/scripts/rollback-production.sh"
 readonly MANIFEST="$ROOT_DIR/infra/production/backup-postgres.identity.v1"
 readonly TARGET_SHA='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 readonly PREVIOUS_SHA='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+readonly PREVIOUS_PRODUCTION_APP_SHA='db82d3d37fc6184a6d4063709b9a15b923371695'
+readonly PR_CANDIDATE_SHA='d07b1695f2c1c9acc593787ac21a605247f09802'
 readonly API_DIGEST='sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
 readonly WEB_DIGEST='sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
 
@@ -322,6 +324,39 @@ expect_success 'shared compatibility guard accepts safe data' \
 expect_failure 'shared compatibility guard rejects unsafe data' \
   run_contract_validation "$fixture_base_sha" "$fixture_schema_changed_sha" UNSAFE
 
+old_liquidation_writer="$(git show "$PREVIOUS_PRODUCTION_APP_SHA:apps/api/src/finanzas/liquidation-publication.use-case.ts")"
+old_prisma_schema="$(git show "$PREVIOUS_PRODUCTION_APP_SHA:apps/api/prisma/schema.prisma")"
+[[ "$old_liquidation_writer" == *'tx.liquidation.create({'* ]] \
+  || fail_test 'known previous production app no longer resolves to the liquidation insert path'
+[[ "$old_liquidation_writer" != *publicationIntegrityVersion* ]] \
+  || fail_test 'known previous production app unexpectedly writes publication integrity version'
+[[ "$old_prisma_schema" != *publicationIntegrityVersion* ]] \
+  || fail_test 'known previous production Prisma schema unexpectedly exposes publicationIntegrityVersion'
+pass 'known previous production API Liquidation INSERT omits publicationIntegrityVersion and its Prisma schema lacks the field'
+
+origin_trigger="$(git show "$PR_CANDIDATE_SHA:apps/api/prisma/migrations/20260918000000_enforce_modern_distribution_unit_ownership/migration.sql")"
+[[ "$origin_trigger" == *'IF TG_OP = '\''INSERT'\'' AND NEW."publicationIntegrityVersion" IS NULL THEN'* \
+  && "$origin_trigger" == *'RAISE EXCEPTION '\''new liquidations require publication integrity v1'\'';'* ]] \
+  || fail_test 'migration 106 does not prove rejection of the previous app insert'
+pass 'migration 106 rejects inserts that omit the required publication integrity version'
+
+rm -f "$docker_marker"
+expect_failure '106 trigger rejects incompatible previous production app even when its data predicate reports zero' \
+  env \
+    PATH="$mock_bin:$PATH" \
+    MOCK_COMPATIBILITY=SAFE \
+    bash -c 'cd "$1"; source "$2"; MIGRATION_TARGET_APPLIED=106; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4"' _ \
+    "$ROOT_DIR" "$VALIDATOR" "$PREVIOUS_PRODUCTION_APP_SHA" "$PR_CANDIDATE_SHA"
+[[ ! -e "$docker_marker" ]] || fail_test 'schema-incompatible app reached the row-only data predicate'
+pass 'incompatible app rejected before zero-row predicate can authorize rollback'
+
+expect_output_contains '106 application contract keeps SAME_DB_CONTRACT valid for a capable previous app' \
+  'basis=SAME_DB_CONTRACT' \
+  env \
+    PATH="$mock_bin:$PATH" \
+    bash -c 'cd "$1"; source "$2"; MIGRATION_TARGET_APPLIED=106; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4"' _ \
+    "$ROOT_DIR" "$VALIDATOR" "$PR_CANDIDATE_SHA" "$PR_CANDIDATE_SHA"
+
 expect_output_contains 'same schema and migrations with new data use SAME_DB_CONTRACT' \
   'basis=SAME_DB_CONTRACT' \
   run_contract_validation "$fixture_base_sha" "$fixture_same_sha" UNSAFE
@@ -389,6 +424,15 @@ expect_failure 'receipt generation rejects unvalidated compatibility' \
     ROLLBACK_EXPECTED_OWNER="$current_owner" \
     ROLLBACK_EXPECTED_GROUP="$current_group" \
     bash -c 'source "$1"; MIGRATION_TARGET_APPLIED=99; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 99' _ \
+    "$VALIDATOR" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST"
+
+expect_failure 'receipt generation rejects a migration target different from the verified target' \
+  env \
+    TEST_MODE=1 \
+    ROLLBACK_PROTECTED_DIR="$protected_dir" \
+    ROLLBACK_EXPECTED_OWNER="$current_owner" \
+    ROLLBACK_EXPECTED_GROUP="$current_group" \
+    bash -c 'source "$1"; MIGRATION_TARGET_APPLIED=105; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 106' _ \
     "$VALIDATOR" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST"
 
 generated_receipt="$(env \
