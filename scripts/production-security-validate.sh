@@ -575,7 +575,8 @@ generate_rollback_compatibility_receipt() {
     || security_fail 'Receipt generation requires exact commit SHAs'
   [[ "$previous_api_digest" =~ ^sha256:[0-9a-f]{64}$ && "$previous_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
     || security_fail 'Receipt generation requires immutable image digests'
-  [[ "$migration_count" == '99' ]] || security_fail 'Receipt generation requires exactly 99 applied migrations'
+  [[ "${MIGRATION_TARGET_APPLIED:-}" =~ ^[0-9]+$ && "$migration_count" == "$MIGRATION_TARGET_APPLIED" ]] \
+    || security_fail 'Receipt generation requires the exact verified migration target'
   [[ "$ROLLBACK_COMPATIBILITY_BASIS" == 'SAME_DB_CONTRACT' || "$ROLLBACK_COMPATIBILITY_BASIS" == 'DATA_COMPATIBILITY' ]] \
     || security_fail 'Receipt generation requires validated rollback compatibility'
   [[ "$ROLLBACK_COMPATIBILITY_TARGET_SHA" == "$target_sha" && "$ROLLBACK_COMPATIBILITY_PREVIOUS_SHA" == "$previous_sha" ]] \

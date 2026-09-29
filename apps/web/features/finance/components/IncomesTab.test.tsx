@@ -93,7 +93,7 @@ const makeIncome = (overrides: Record<string, unknown> = {}) => ({
 const makePlan = (applications: unknown[] = []) => ({
   incomeId: 'income-1',
   currencyCode: 'ARS',
-  totalAmountMinor: applications.reduce((sum, app) => sum + ((app as { amountMinor?: number }).amountMinor ?? 0), 0),
+  totalAmountMinor: applications.reduce<number>((sum, app) => sum + ((app as { amountMinor?: number }).amountMinor ?? 0), 0),
   applications,
 });
 

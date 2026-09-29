@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
-readonly MANIFEST_FILE="${MANIFEST_FILE:-$SCRIPT_DIR/manifests/production-migrations-81-to-99.tsv}"
+readonly MANIFEST_FILE="${MANIFEST_FILE:-$SCRIPT_DIR/manifests/production-migrations-81-to-106.tsv}"
 readonly METADATA_EXCEPTION_FILE="${METADATA_EXCEPTION_FILE:-$SCRIPT_DIR/manifests/production-migration-metadata-exceptions.tsv}"
 readonly MIGRATIONS_DIR="${MIGRATIONS_DIR:-$REPO_ROOT/apps/api/prisma/migrations}"
 readonly POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-pawtech-postgres}"
@@ -18,9 +18,7 @@ readonly MANIFEST_VERSION=1
 readonly BASELINE_APPLIED=81
 readonly BASELINE_FAILED=0
 readonly PRE_DEPLOY_APPLIED=97
-readonly TARGET_APPLIED=99
 readonly TARGET_FAILED=0
-readonly EXPECTED_PENDING=18
 readonly TAB=$'\t'
 readonly METADATA_EXCEPTION_VERSION=1
 
@@ -52,6 +50,13 @@ EXPECTED_NAMES=(
   '20260816000004_legacy_income_application_provenance'
   '20260831000000_add_payment_receipt_issuance_snapshot'
   '20260905000000_add_object_version_identity'
+  '20260906000000_add_liquidation_distribution_snapshot'
+  '20260913000000_add_phase3d2_publication_integrity'
+  '20260914000000_allow_authorized_parent_cascades'
+  '20260915000000_align_liquidation_valuation_mode_enum'
+  '20260916000000_harden_phase3d2_distribution_integrity'
+  '20260917000000_harden_phase3d2_nullable_publication_validation'
+  '20260918000000_enforce_modern_distribution_unit_ownership'
 )
 
 EXPECTED_CHECKSUMS=(
@@ -73,7 +78,17 @@ EXPECTED_CHECKSUMS=(
   'f77a48381a9d32198b34f3ed92465190f8f6284ec80cc4916c304ec776905a2b'
   '36e92c7ae5a01b9193daec266183441ece906b123981154ad8d5a59f157468d0'
   '3161d9f1ece049e80d4e8cd14f301a73f86605e4405059777b8ea1ab6b9324c5'
+  '63fed2df75bb5becb0dfc68ad55e9627797624ddeb106462783ac6d9c03da1cb'
+  '7743eb93ee3355c3bb47903fc1bbf69273e7d0af788c4b503ec86da2879ed312'
+  'f8140bdf0ed05a5cec11e1f255eeae93d26c968455a0ce0eb18f38a972cfbeec'
+  'e9c837990efc95d356c8755881a3b3a48c4e1b861c62852bc0aaaa8af58f4608'
+  'fcd9d2b86ad38ad40e2f6c30ccab201d612433a42f3656e5287d7b5167eb677d'
+  'aa926621eb544bb6d243e1c6c6d76dcf13a1c8e8b7c541b1030982984b8b4b83'
+  '5932afb02d9a47bab3ff779bad155b293acf4a31d7a4da91ef17b7501fe1dfa1'
 )
+
+readonly EXPECTED_PENDING="${#EXPECTED_NAMES[@]}"
+readonly TARGET_APPLIED="$((BASELINE_APPLIED + EXPECTED_PENDING))"
 
 cleanup() {
   if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
@@ -119,6 +134,8 @@ validate_manifest() {
   local line_number=0
   local migration_index
   local expected_line
+
+  [[ "${#EXPECTED_NAMES[@]}" -eq "${#EXPECTED_CHECKSUMS[@]}" ]] || fail 'trusted_migration_inventory_invalid'
 
   [[ -f "$MANIFEST_FILE" && ! -L "$MANIFEST_FILE" ]] || fail 'manifest_not_regular_file'
   [[ -s "$MANIFEST_FILE" ]] || fail 'manifest_empty'

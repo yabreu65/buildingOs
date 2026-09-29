@@ -2,12 +2,17 @@
 set -euo pipefail
 
 extract_target_applied() {
-  awk -F '=' '/^[[:space:]]*readonly[[:space:]]+TARGET_APPLIED[[:space:]]*=/ { value=$2; gsub(/[[:space:]]/, "", value); gsub(/\047/, "", value); if (value ~ /^[0-9]+$/) { print value; exit } }'
+  awk -F '\t' '$NF ~ /^target=[0-9]+$/ { sub(/^target=/, "", $NF); print $NF; count++ } END { if (count != 1) exit 1 }'
 }
 
-[[ "$(printf '%s\n' 'readonly TARGET_APPLIED=98' | extract_target_applied)" == '98' ]]
-[[ "$(printf '%s\n' "readonly TARGET_APPLIED='98'" | extract_target_applied)" == '98' ]]
-[[ "$(printf '%s\n' 'readonly TARGET_APPLIED = 123' | extract_target_applied)" == '123' ]]
-[[ -z "$(printf '%s\n' 'readonly TARGET_APPLIED=not-a-number' | extract_target_applied)" ]]
+[[ "$(printf 'status=ok\tmode=verify-files\tlocal=106\ttarget=106\n' | extract_target_applied)" == '106' ]]
+if printf 'status=ok\tmode=verify-files\ttarget=106\nstatus=ok\tmode=verify-files\ttarget=107\n' | extract_target_applied >/dev/null; then
+  printf 'FAIL: duplicate target fields were accepted\n' >&2
+  exit 1
+fi
+if printf 'status=ok\tmode=verify-files\ttarget=invalid\n' | extract_target_applied >/dev/null; then
+  printf 'FAIL: malformed target field was accepted\n' >&2
+  exit 1
+fi
 
-printf 'PASS: unquoted, quoted, spaced, and invalid manifest target assignments are handled safely\n'
+printf 'PASS: structured verifier target is parsed exactly once and rejects malformed/duplicate fields\n'

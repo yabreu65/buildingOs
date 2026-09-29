@@ -22,7 +22,7 @@ The workflow must never be dispatched to compensate for a failed preflight.
 | Checkout | Clean, detached, exact target SHA |
 | Backup | Exact external script identity plus new verified custom dump before checkout/build/migration |
 | Images | SHA tag plus `org.opencontainers.image.revision` |
-| Migration | Immutable 81→99 manifest verified against files and database before and after the dedicated runner |
+| Migration | Immutable 81→106 manifest verified against files and database before and after the dedicated runner |
 | Runtime change | Recreate only `buildingos-api` and `buildingos-web` |
 | Infrastructure | Never recreate PostgreSQL, Redis, MinIO, Traefik, networks, or volumes |
 | Seeds | Prohibited |
@@ -122,17 +122,17 @@ For incident recovery, use the separately gated candidate-restore, swap, and rev
 
 ## Exact migration transition
 
-`scripts/manifests/production-migrations-81-to-99.tsv` binds the only approved transition: 81 successful migrations, zero failed migrations, the exact next 18 migration names and SHA-256 values, and a final state of 99 successful migrations with zero failed or rolled-back rows. The verified production pre-deploy state is 97 successful migrations with `20260831000000_add_payment_receipt_issuance_snapshot` and `20260905000000_add_object_version_identity` pending. `scripts/manifests/production-migration-metadata-exceptions.tsv` contains the only approved historical metadata exception: `20260719000000_add_receipt_sequence` may be finished and active with `applied_steps_count=0` only when its audited checksum matches and the ReceiptSequence DDL baseline passes exactly.
+`scripts/manifests/production-migrations-81-to-106.tsv` binds the exact migration inventory after the 81-row baseline through target 106, including every migration name and SHA-256 value. The counts for the pinned suffix and final target are derived from that trusted chain. The verified production pre-deploy state is 97 successful migrations; its exact pending suffix is migrations 98–106 (nine rows), including `20260831000000_add_payment_receipt_issuance_snapshot`, `20260905000000_add_object_version_identity`, and the seven later pinned migrations. `scripts/manifests/production-migration-metadata-exceptions.tsv` contains the only approved historical metadata exception: `20260719000000_add_receipt_sequence` may be finished and active with `applied_steps_count=0` only when its audited checksum matches and the ReceiptSequence DDL baseline passes exactly.
 
 The deploy sequence is fail-closed:
 
 1. The workflow validates the manifest and local migration files before opening SSH.
-2. Before opening SSH, the runner materializes `DEPLOY_SHA` and the trusted control checkout validates that target tree with `scripts/verify-production-target-contract.sh`; this rejects pre-99 target trees without relying on the target tree's own verifier.
+2. Before opening SSH, the runner materializes `DEPLOY_SHA` and the trusted control checkout validates that target tree with `scripts/verify-production-target-contract.sh`; this rejects pre-106 target trees without relying on the target tree's own verifier.
 3. After the exact target checkout, deployment revalidates local files from that target.
 4. Immediately before `prisma migrate deploy`, the database must match the verified 97-row production pre-state and contain only the exact target migrations pending.
-5. Immediately after migration, the database must contain exactly the 99 expected active, finished rows; all 18 new database checksums must match the manifest.
+5. Immediately after migration, the database must contain exactly the 106 expected active, finished rows. The verifier checks every pinned migration after the 81-row baseline; the production pre-state determines which suffix rows were pending for this deployment.
 
-If a previous attempt completed migration and stopped afterward, the strict 97-row pre-check reports the exact count mismatch and deployment may enter its retry path. A durable `IN_PROGRESS` predecessor checkpoint is written before migration; if the host is lost before a failure record can be written, retry recovery uses that checkpoint or the last successful 97-migration deployment record to bind the predecessor images. If a newer failed or interrupted target is replaced by an approved target, the recovery signal and storage provider from that record are preserved while the preceding successful 98- or 99-migration record supplies the known-good predecessor images. The retry path accepts only a fully validated 99-row target state, skips migration application, and still requires post-verification, rollback compatibility, receipt generation, application recreation, and health checks. Partial, failed, extra, or checksum-mismatched states remain rejected.
+If a previous attempt completed migration and stopped afterward, the strict 97-row pre-check reports the exact count mismatch and deployment may enter its retry path. A durable `IN_PROGRESS` predecessor checkpoint is written before migration; if the host is lost before a failure record can be written, retry recovery uses that checkpoint or the last successful 97-migration deployment record to bind the predecessor images. Existing successful 97-, 98-, and 99-migration records retain their historical meanings; the current target is taken from the pinned verifier chain. If a newer failed or interrupted target is replaced by an approved target, recovery preserves its signal and storage provider while selecting only a recognized successful predecessor. The retry path accepts only a fully validated current target state, skips migration application, and still requires post-verification, rollback compatibility, receipt generation, application recreation, and health checks. Partial, failed, extra, or checksum-mismatched states remain rejected.
 
 Any missing, extra, duplicate, failed, rolled-back, partial, reordered, renamed, or checksum-mismatched migration stops deployment. No zero-step row is accepted outside the immutable historical exception manifest. Do not edit migration history or bypass the verifier.
 
@@ -151,7 +151,7 @@ target_sha=<deployed-40-character-sha>
 previous_sha=<previous-40-character-sha>
 previous_api_digest=sha256:<64-hex>
 previous_web_digest=sha256:<64-hex>
-migration_count=99
+migration_count=106
 ```
 
 The filename must be `<receipt_id>.receipt`. Store receipts as direct children of `/opt/pawtech/apps/buildingos/compatibility/`, owned by `yoryi:yoryi`, with directory mode exactly `0700` and receipt mode exactly `0600`; the directory path and every component must be canonical and contain no symlinks. Fields must appear exactly once in the order shown, use LF endings, and end with one LF. Never commit environment-specific receipts. If compatibility is `CONDITIONAL`, `UNKNOWN`, or `UNSAFE`, do not create a SAFE receipt and do not run rollback.

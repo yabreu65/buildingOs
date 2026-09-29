@@ -80,6 +80,7 @@ NEW_API_DIGEST='unknown'
 NEW_WEB_DIGEST='unknown'
 BACKUP_ID='unknown'
 MIGRATION_COUNT='unknown'
+MIGRATION_TARGET_APPLIED='unknown'
 MIGRATION_RETRY=false
 ROLLBACK_RECEIPT='unknown'
 STORAGE_TRANSITION='unknown'
@@ -127,24 +128,41 @@ materialize_target_tree() {
 validate_database_migration_state() {
   local verifier="$1"
   local migration_preflight_output
+  local target_value
 
-  migration_preflight_output="$(mktemp /tmp/buildingos-production-migration-preflight.XXXXXX)"
-  if env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
-    bash "$verifier" verify-db pre > "$migration_preflight_output" 2>&1; then
-    cat "$migration_preflight_output"
+  if migration_preflight_output="$(env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
+    bash "$verifier" verify-db pre 2>&1)"; then
+    target_value="$(printf '%s\n' "$migration_preflight_output" | awk -F '\t' '$NF ~ /^target=[0-9]+$/ { sub(/^target=/, "", $NF); print $NF; count++ } END { if (count != 1) exit 1 }')" \
+      || fail 'Migration verifier returned an invalid target count'
+    [[ "$target_value" =~ ^[0-9]+$ ]] || fail 'Migration verifier returned an invalid target count'
+    MIGRATION_TARGET_APPLIED="$target_value"
+    printf '%s\n' "$migration_preflight_output"
     MIGRATION_RETRY=false
   else
-    if grep -F $'\tcode=database_pre_state_count_invalid' "$migration_preflight_output" >/dev/null; then
-      env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
-        bash "$verifier" verify-db retry
+    if grep -F $'\tcode=database_pre_state_count_invalid' <<< "$migration_preflight_output" >/dev/null; then
+      if ! migration_preflight_output="$(env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
+        bash "$verifier" verify-db retry 2>&1)"; then
+        printf '%s\n' "$migration_preflight_output" >&2
+        fail 'Production database did not match the exact migration retry state'
+      fi
+      target_value="$(printf '%s\n' "$migration_preflight_output" | awk -F '\t' '$NF ~ /^target=[0-9]+$/ { sub(/^target=/, "", $NF); print $NF; count++ } END { if (count != 1) exit 1 }')" \
+        || fail 'Migration verifier returned an invalid retry target count'
+      [[ "$target_value" =~ ^[0-9]+$ ]] || fail 'Migration verifier returned an invalid retry target count'
+      MIGRATION_TARGET_APPLIED="$target_value"
+      printf '%s\n' "$migration_preflight_output"
       MIGRATION_RETRY=true
     else
-      cat "$migration_preflight_output" >&2
-      rm -f "$migration_preflight_output"
+      printf '%s\n' "$migration_preflight_output" >&2
       fail 'Production database did not match the exact 97-migration pre-state'
     fi
   fi
-  rm -f "$migration_preflight_output"
+}
+
+is_retryable_migration_count() {
+  local actual="$1"
+  [[ "$actual" == 'unknown' ]] && return 0
+  [[ "$actual" =~ ^[0-9]+$ && "$MIGRATION_TARGET_APPLIED" =~ ^[0-9]+$ ]] || return 1
+  (( 10#$actual >= 98 && 10#$actual <= 10#$MIGRATION_TARGET_APPLIED ))
 }
 
 read_deployment_record_value() {
@@ -182,7 +200,7 @@ load_retry_predecessor_record() {
       previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"
       from_api_digest="$(read_deployment_record_value "$record" from_api_digest || true)"
       from_web_digest="$(read_deployment_record_value "$record" from_web_digest || true)"
-      [[ "$phase" == 'application-recreate' && ( "$migration_count" == '98' || "$migration_count" == '99' ) ]] \
+      [[ "$phase" == 'application-recreate' && ( "$migration_count" == '98' || "$migration_count" == '99' || "$migration_count" == "$MIGRATION_TARGET_APPLIED" ) ]] \
         || fail 'Interrupted rollback record has an invalid recovery state'
       [[ "$from_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'Interrupted rollback record has an invalid source SHA'
       [[ "$previous_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'Interrupted rollback record has an invalid predecessor SHA'
@@ -214,12 +232,12 @@ load_retry_predecessor_record() {
     fi
     if [[ "$status" == 'SUCCESS' ]]; then
       migration_count="$(read_deployment_record_value "$record" migration_count || true)"
-      if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '98' || "$migration_count" == '99' ) ]]; then
+      if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '98' || "$migration_count" == '99' || "$migration_count" == "$MIGRATION_TARGET_APPLIED" ) ]]; then
         previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"
         previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"
         previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"
         storage_transition='unknown'
-      elif [[ "$migration_count" == '99' || "$migration_count" == '98' || "$migration_count" == '97' ]]; then
+      elif [[ "$migration_count" == "$MIGRATION_TARGET_APPLIED" || "$migration_count" == '99' || "$migration_count" == '98' || "$migration_count" == '97' ]]; then
         previous_sha="$(read_deployment_record_value "$record" target_sha || true)"
         previous_api_digest="$(read_deployment_record_value "$record" new_api_digest || true)"
         previous_web_digest="$(read_deployment_record_value "$record" new_web_digest || true)"
@@ -247,7 +265,7 @@ load_retry_predecessor_record() {
     phase="$(read_deployment_record_value "$record" phase || true)"
     migration_count="$(read_deployment_record_value "$record" migration_count || true)"
     [[ "$phase" == 'pre-migration' || "$phase" == 'migrations' || "$phase" == 'rollback-compatibility' || "$phase" == 'application-recreate' || "$phase" == 'observability' ]] || continue
-    [[ "$migration_count" == '99' || "$migration_count" == '98' || "$migration_count" == 'unknown' ]] || continue
+    is_retryable_migration_count "$migration_count" || continue
     storage_transition="$(read_deployment_record_value "$record" storage_transition || true)"
     [[ -n "$storage_transition" ]] || storage_transition='unknown'
     if [[ "$record_target_sha" != "$TARGET_SHA" ]]; then
@@ -770,7 +788,7 @@ fi
 env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db \
   bash ./scripts/verify-production-migration-manifest.sh verify-db post
 MIGRATION_COUNT="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
-[[ "$MIGRATION_COUNT" == '99' ]] || fail "Final migration count is not exactly 99"
+[[ "$MIGRATION_COUNT" == "$MIGRATION_TARGET_APPLIED" ]] || fail 'Final migration count is not exactly the verified target'
 
 PHASE='rollback-compatibility'
 validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$TARGET_SHA"
