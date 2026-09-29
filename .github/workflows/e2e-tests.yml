@@ -87,35 +87,85 @@ jobs:
 
       - name: Start MinIO storage
         run: |
-          docker run -d \
-            --name minio-e2e \
-            --network host \
-            -e MINIO_ROOT_USER="$S3_ACCESS_KEY" \
-            -e MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
-            -e MINIO_API_CORS_ALLOW_ORIGIN="http://localhost:3000" \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z \
-            server /data --address :9000 --console-address :9001
+          set -euo pipefail
+
+          MINIO_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/buildingos-minio-tools.XXXXXX")"
+          MINIO_DATA_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/buildingos-minio-data.XXXXXX")"
+          MINIO_SERVER_BIN="$MINIO_TOOLS_DIR/minio"
+          MINIO_MC_BIN="$MINIO_TOOLS_DIR/mc"
+          MINIO_SERVER_LOG="$MINIO_TOOLS_DIR/minio-server.log"
+          {
+            echo "MINIO_TOOLS_DIR=$MINIO_TOOLS_DIR"
+            echo "MINIO_DATA_DIR=$MINIO_DATA_DIR"
+            echo "MINIO_SERVER_LOG=$MINIO_SERVER_LOG"
+          } >> "$GITHUB_ENV"
+
+          curl --fail --location --silent --show-error \
+            "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z" \
+            -o "$MINIO_SERVER_BIN"
+          test -s "$MINIO_SERVER_BIN"
+          echo "SERVER_DOWNLOAD_PASS"
+          printf '%s  %s\n' \
+            '7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f' \
+            "$MINIO_SERVER_BIN" | sha256sum --check --status
+          echo "SERVER_SHA256_PASS"
+          chmod 0755 "$MINIO_SERVER_BIN"
+
+          curl --fail --location --silent --show-error \
+            "https://github.com/minio/mc/releases/download/RELEASE.2025-08-13T08-35-41Z/mc.linux-amd64.RELEASE.2025-08-13T08-35-41Z" \
+            -o "$MINIO_MC_BIN"
+          test -s "$MINIO_MC_BIN"
+          echo "MC_DOWNLOAD_PASS"
+          printf '%s  %s\n' \
+            '01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891' \
+            "$MINIO_MC_BIN" | sha256sum --check --status
+          echo "MC_SHA256_PASS"
+          chmod 0755 "$MINIO_MC_BIN"
+
+          MINIO_ROOT_USER="$S3_ACCESS_KEY" \
+          MINIO_ROOT_PASSWORD="$S3_SECRET_KEY" \
+          MINIO_API_CORS_ALLOW_ORIGIN="http://localhost:3000" \
+            "$MINIO_SERVER_BIN" server "$MINIO_DATA_DIR" \
+              --address :9000 --console-address :9001 \
+              > "$MINIO_SERVER_LOG" 2>&1 &
+          MINIO_SERVER_PID=$!
+          echo "MINIO_SERVER_PID=$MINIO_SERVER_PID" >> "$GITHUB_ENV"
+          echo "MINIO_STARTUP_PASS"
 
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
               echo "MinIO is ready!"
+              echo "MINIO_READINESS_PASS"
               break
+            fi
+            if ! kill -0 "$MINIO_SERVER_PID" 2>/dev/null; then
+              echo "MinIO server exited before readiness; bounded server log follows:" >&2
+              tail -n 200 "$MINIO_SERVER_LOG" | sed \
+                -e "s/${S3_ACCESS_KEY}/[REDACTED]/g" \
+                -e "s/${S3_SECRET_KEY}/[REDACTED]/g" >&2
+              exit 1
             fi
             if [ "$i" -eq 30 ]; then
               echo "MinIO failed to become ready within 30 seconds"
+              tail -n 200 "$MINIO_SERVER_LOG" | sed \
+                -e "s/${S3_ACCESS_KEY}/[REDACTED]/g" \
+                -e "s/${S3_SECRET_KEY}/[REDACTED]/g" >&2
               exit 1
             fi
             sleep 1
           done
 
-          docker run --rm \
-            --network host \
-            --entrypoint /bin/sh \
-            -e S3_ACCESS_KEY="$S3_ACCESS_KEY" \
-            -e S3_SECRET_KEY="$S3_SECRET_KEY" \
-            -e S3_BUCKET="$S3_BUCKET" \
-            quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z \
-            -lc 'mc alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY" && mc mb --ignore-existing "local/$S3_BUCKET" && mc version enable "local/$S3_BUCKET" && version_info="$(mc version info --json "local/$S3_BUCKET")" && printf "%s\\n" "$version_info" && case "$version_info" in *"Enabled"*) echo "MinIO versioning is enabled" ;; *) echo "MinIO versioning is not enabled" >&2; exit 1 ;; esac'
+          export MC_CONFIG_DIR="$MINIO_TOOLS_DIR/mc-config"
+          "$MINIO_MC_BIN" alias set local http://127.0.0.1:9000 "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
+          "$MINIO_MC_BIN" mb --ignore-existing "local/$S3_BUCKET"
+          echo "MINIO_BUCKET_SETUP_PASS"
+          "$MINIO_MC_BIN" version enable "local/$S3_BUCKET"
+          version_info="$("$MINIO_MC_BIN" version info --json "local/$S3_BUCKET")"
+          printf '%s\n' "$version_info"
+          case "$version_info" in
+            *"Enabled"*) echo "MinIO versioning is enabled"; echo "MINIO_VERSIONING_PASS" ;;
+            *) echo "MinIO versioning is not enabled" >&2; exit 1 ;;
+          esac
 
           cors_response="$(curl -sS -D - -o /dev/null \
             -H "Origin: http://localhost:3000" \
@@ -128,6 +178,7 @@ jobs:
             exit 1
           fi
           echo "MinIO global CORS exposes x-amz-version-id to http://localhost:3000"
+          echo "MINIO_CORS_PASS"
 
       - name: Setup environment
         run: |
@@ -382,10 +433,17 @@ jobs:
       - name: Stop MinIO storage
         if: always()
         run: |
-          if docker ps -a --format '{{.Names}}' | grep -qx 'minio-e2e'; then
-            docker rm -f minio-e2e
+          if [ -n "${MINIO_SERVER_PID:-}" ] && kill -0 "$MINIO_SERVER_PID" 2>/dev/null; then
+            kill "$MINIO_SERVER_PID"
+            wait "$MINIO_SERVER_PID" 2>/dev/null || true
           else
-            echo "::warning::MinIO container already stopped or not accessible from this shell"
+            echo "MinIO server process already stopped or was not started"
+          fi
+          if [ -n "${MINIO_DATA_DIR:-}" ]; then
+            rm -rf -- "$MINIO_DATA_DIR"
+          fi
+          if [ -n "${MINIO_TOOLS_DIR:-}" ]; then
+            rm -rf -- "$MINIO_TOOLS_DIR"
           fi
 
       - name: Upload playwright report

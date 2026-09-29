@@ -56,8 +56,13 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          deploy_migration_count="$(awk -F "'" '/MIGRATION_COUNT.*==/ { print $2; exit }' scripts/deploy-production.sh)"
-          manifest_target_applied="$(awk -F '=' '/^[[:space:]]*readonly[[:space:]]+TARGET_APPLIED[[:space:]]*=/ { value=$2; gsub(/[[:space:]]/, "", value); gsub(/\047/, "", value); if (value ~ /^[0-9]+$/) { print value; exit } }' scripts/verify-production-migration-manifest.sh)"
+          verifier_output="$(bash scripts/verify-production-migration-manifest.sh verify-files)"
+          manifest_target_applied="$(printf '%s\n' "$verifier_output" | awk -F '\t' '$NF ~ /^target=[0-9]+$/ { sub(/^target=/, "", $NF); print $NF; count++ } END { if (count != 1) exit 1 }')"
+          if grep -F 'MIGRATION_COUNT" == "$MIGRATION_TARGET_APPLIED"' scripts/deploy-production.sh >/dev/null; then
+            deploy_migration_count="$manifest_target_applied"
+          else
+            deploy_migration_count='UNKNOWN'
+          fi
           [[ -n "$deploy_migration_count" ]] || deploy_migration_count='UNKNOWN'
           [[ -n "$manifest_target_applied" ]] || manifest_target_applied='UNKNOWN'
           certified_migration_count="$(find apps/api/prisma/migrations -mindepth 1 -maxdepth 1 -type d -print | wc -l | tr -d '[:space:]')"

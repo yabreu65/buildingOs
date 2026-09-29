@@ -19,26 +19,26 @@ fail_test() {
 pass_test() { printf 'ok - %s\n' "$1"; }
 line_number() { awk -v pattern="$1" 'index($0, pattern) { print NR; exit }' "$2"; }
 
-old_target="$TMP_ROOT/pre-99"
+old_target="$TMP_ROOT/pre-106"
 mkdir -p "$old_target/scripts/manifests"
 printf 'manifest_version\t1\nbaseline\t81\t0\ntarget\t98\t0\n' \
   > "$old_target/scripts/manifests/production-migrations-81-to-98.tsv"
 if bash "$GATE" "$old_target" >/dev/null 2>&1; then
-  fail_test 'pre-99 target contract was accepted'
+  fail_test 'pre-106 target contract was accepted'
 fi
-pass_test 'pre-99 target contract is rejected'
+pass_test 'pre-106 target contract is rejected'
 
-valid_target="$TMP_ROOT/valid-99"
+valid_target="$TMP_ROOT/valid-106"
 mkdir -p "$valid_target/scripts/manifests" "$valid_target/apps/api/prisma"
-cp "$ROOT_DIR/scripts/manifests/production-migrations-81-to-99.tsv" \
-  "$valid_target/scripts/manifests/production-migrations-81-to-99.tsv"
+cp "$ROOT_DIR/scripts/manifests/production-migrations-81-to-106.tsv" \
+  "$valid_target/scripts/manifests/production-migrations-81-to-106.tsv"
 cp -R "$ROOT_DIR/apps/api/prisma/migrations" "$valid_target/apps/api/prisma/"
 printf '#!/usr/bin/env bash\nexit 99\n' > "$valid_target/scripts/verify-production-migration-manifest.sh"
 chmod 755 "$valid_target/scripts/verify-production-migration-manifest.sh"
 if ! bash "$GATE" "$valid_target" >/dev/null; then
-  fail_test 'valid 99 target contract was rejected'
+  fail_test 'valid 106 target contract was rejected'
 fi
-pass_test 'valid 99 target contract is accepted using trusted control logic'
+pass_test 'valid 106 target contract is accepted using trusted control logic'
 
 grep -F 'readonly TRUSTED_VERIFIER="$SCRIPT_DIR/verify-production-migration-manifest.sh"' "$GATE" >/dev/null
 if grep -F 'target_tree/scripts/verify-production-migration-manifest.sh' "$GATE" >/dev/null; then

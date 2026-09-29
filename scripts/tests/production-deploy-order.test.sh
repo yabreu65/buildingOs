@@ -76,11 +76,11 @@ for recovery_helper_path in "${recovery_helper_paths[@]}"; do
   (( bundle_start_line < recovery_bundle_line && recovery_bundle_line < remote_invocation_line ))
 done
 
-rollback_success_line="$(line_number 'if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '\''98'\'' || "$migration_count" == '\''99'\'' ) ]]; then' "$DEPLOY_SCRIPT")"
+rollback_success_line="$(line_number 'if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '\''98'\'' || "$migration_count" == '\''99'\'' || "$migration_count" == "$MIGRATION_TARGET_APPLIED" ) ]]; then' "$DEPLOY_SCRIPT")"
 rollback_previous_sha_line="$(line_number_after "$rollback_success_line" 'previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"' "$DEPLOY_SCRIPT")"
 rollback_api_digest_line="$(line_number_after "$rollback_success_line" 'previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"' "$DEPLOY_SCRIPT")"
 rollback_web_digest_line="$(line_number_after "$rollback_success_line" 'previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"' "$DEPLOY_SCRIPT")"
-generic_success_line="$(line_number 'elif [[ "$migration_count" == '\''99'\'' || "$migration_count" == '\''98'\'' || "$migration_count" == '\''97'\'' ]]; then' "$DEPLOY_SCRIPT")"
+generic_success_line="$(line_number 'elif [[ "$migration_count" == "$MIGRATION_TARGET_APPLIED" || "$migration_count" == '\''99'\'' || "$migration_count" == '\''98'\'' || "$migration_count" == '\''97'\'' ]]; then' "$DEPLOY_SCRIPT")"
 generic_reject_line="$(line_number_after "$generic_success_line" 'else' "$DEPLOY_SCRIPT")"
 generic_reject_continue_line="$(line_number_after "$generic_reject_line" 'continue' "$DEPLOY_SCRIPT")"
 [[ -n "$rollback_success_line" && -n "$rollback_previous_sha_line" && -n "$rollback_api_digest_line" && -n "$rollback_web_digest_line" ]]
@@ -113,7 +113,7 @@ rollback_recreate_line="$(line_number 'up --detach --no-deps --force-recreate bu
 
 env_invocation_count="$(grep -F -c 'env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db' "$DEPLOY_SCRIPT")"
 [[ "$env_invocation_count" -eq 4 ]]
-if awk '/POSTGRES_CONTAINER="\$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db/ && $0 !~ /^[[:space:]]*(if )?env / { bad = 1 } END { exit bad }' "$DEPLOY_SCRIPT"; then
+if awk '/POSTGRES_CONTAINER="\$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db/ && $0 !~ /env POSTGRES_CONTAINER=/ { bad = 1 } END { exit bad }' "$DEPLOY_SCRIPT"; then
   :
 else
   printf 'FAIL: readonly environment was reassigned in the parent shell\n' >&2
@@ -153,14 +153,15 @@ grep -F 'find "$deployments_dir" -mindepth 1 -maxdepth 1 -type f -print0' "$ROLL
 grep -F 'from_api_digest' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'RETRY_RECOVERY_ACTIVE=true' "$DEPLOY_SCRIPT" >/dev/null
 grep -F "storage_transition='unknown'" "$DEPLOY_SCRIPT" >/dev/null
-grep -F 'Final migration count is not exactly 99' "$DEPLOY_SCRIPT" >/dev/null
-grep -F 'if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '\''98'\'' || "$migration_count" == '\''99'\'' ) ]]; then' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'Final migration count is not exactly the verified target' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '\''98'\'' || "$migration_count" == '\''99'\'' || "$migration_count" == "$MIGRATION_TARGET_APPLIED" ) ]]; then' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'previous_sha="$(read_deployment_record_value "$record" previous_sha || true)"' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'previous_api_digest="$(read_deployment_record_value "$record" api_digest || true)"' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'previous_web_digest="$(read_deployment_record_value "$record" web_digest || true)"' "$DEPLOY_SCRIPT" >/dev/null
-grep -F 'migration_count" == '\''99'\'' || "$migration_count" == '\''98'\'' || "$migration_count" == '\''97'\''' "$DEPLOY_SCRIPT" >/dev/null
-grep -F 'migration_count" == '\''99'\'' || "$migration_count" == '\''98'\'' || "$migration_count" == '\''unknown'\''' "$DEPLOY_SCRIPT" >/dev/null
-grep -F 'scripts/manifests/production-migrations-81-to-99.tsv' "$WORKFLOW" >/dev/null
+grep -F 'migration_count" == "$MIGRATION_TARGET_APPLIED" || "$migration_count" == '\''99'\'' || "$migration_count" == '\''98'\'' || "$migration_count" == '\''97'\''' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'is_retryable_migration_count "$migration_count" || continue' "$DEPLOY_SCRIPT" >/dev/null
+grep -F '(( 10#$actual >= 98 && 10#$actual <= 10#$MIGRATION_TARGET_APPLIED ))' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'scripts/manifests/production-migrations-81-to-106.tsv' "$WORKFLOW" >/dev/null
 if grep -F 'scripts/manifests/production-migrations-81-to-98.tsv' "$WORKFLOW" >/dev/null; then
   exit 1
 fi
