@@ -13,11 +13,42 @@ readonly QA_EMAIL='admin.autogestionada@staging.buildingos.local'
 readonly SNAPSHOT_MIGRATION='20260831000000_add_payment_receipt_issuance_snapshot'
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CONTROL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PASSWORD_SNAPSHOT=''
+PASSWORD_RESTORE_REQUIRED=0
+COMPOSE_COMMAND=()
+RUN_CLEANUP_PASS=0
 
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
   exit 1
 }
+
+restore_golden_password_baseline() {
+  local original_status=$?
+  local restore_status=0
+  trap - EXIT
+  if [[ "$PASSWORD_RESTORE_REQUIRED" == '1' ]]; then
+    if ! printf '%s' "$PASSWORD_SNAPSHOT" | "${COMPOSE_COMMAND[@]}" run --rm --no-deps -T \
+      -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/app/apps/api/finance-staging-acceptance.mjs:ro" \
+      -v "$SCRIPT_DIR/lib/finance-staging-acceptance-cleanup.mjs:/app/apps/api/finance-staging-acceptance-cleanup.mjs:ro" \
+      --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs restore-golden-passwords; then
+      printf 'GOLDEN_PASSWORD_HASH_RESTORE_FAIL\n' >&2
+      restore_status=1
+    else
+      printf 'GOLDEN_BASELINE_MUTATION_RESIDUE=0\n'
+      printf 'QA_GOLDEN_BASELINE_RESTORE_PASS\n'
+    fi
+  fi
+  unset PASSWORD_SNAPSHOT
+  if [[ "$RUN_CLEANUP_PASS" == '1' && "$restore_status" == '0' && "$PASSWORD_RESTORE_REQUIRED" == '1' ]]; then
+    printf 'QA_RUN_RESIDUE_ZERO_PASS\n'
+  fi
+  if [[ "$original_status" -ne 0 ]]; then exit "$original_status"; fi
+  if [[ "$restore_status" -ne 0 ]]; then exit 1; fi
+  exit 0
+}
+
+trap restore_golden_password_baseline EXIT
 
 usage() {
   printf 'Usage: %s <tested_sha> <app_path> <compose_file> <project> <env_file> <api_base_url>\n' "${0##*/}" >&2
@@ -173,19 +204,29 @@ main() {
   printf 'tested_application_sha=%s\n' "$tested_sha"
   printf 'tenant_allowlist=%s\n' "$ALLOWED_TENANT"
 
-  local compose=(docker compose --project-name "$project" --env-file "$env_file" --file "$app_path/$compose_file")
+  COMPOSE_COMMAND=(docker compose --project-name "$project" --env-file "$env_file" --file "$app_path/$compose_file")
+  local compose=("${COMPOSE_COMMAND[@]}")
+  PASSWORD_SNAPSHOT="$("${compose[@]}" run --rm --no-deps -T \
+    -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/app/apps/api/finance-staging-acceptance.mjs:ro" \
+    -v "$SCRIPT_DIR/lib/finance-staging-acceptance-cleanup.mjs:/app/apps/api/finance-staging-acceptance-cleanup.mjs:ro" \
+    --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs capture-golden-passwords)" || fail 'unable to capture Golden password baseline'
+  [[ -n "$PASSWORD_SNAPSHOT" ]] || fail 'Golden password baseline snapshot is empty'
+  PASSWORD_RESTORE_REQUIRED=1
+
   "${compose[@]}" --profile seed-staging-golden run --rm --build -T \
     -e STAGING_GOLDEN_TENANTS=stg-golden-tenant-auto \
     -v "$CONTROL_ROOT/apps/api/prisma/seed-staging-golden.ts:/app/apps/api/prisma/seed-staging-golden.ts:ro" \
     -v "$CONTROL_ROOT/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:/app/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:ro" \
     api-seed-staging-golden
 
-  "${compose[@]}" run --rm --no-deps -T \
+  printf '%s' "$PASSWORD_SNAPSHOT" | "${compose[@]}" run --rm --no-deps -T \
     -e STAGING_GOLDEN_QA_PASSWORD \
     -e FINANCE_ACCEPTANCE_RUN_ID \
     -e FINANCE_ACCEPTANCE_API_BASE_URL="$api_base_url" \
     -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/app/apps/api/finance-staging-acceptance.mjs:ro" \
+    -v "$SCRIPT_DIR/lib/finance-staging-acceptance-cleanup.mjs:/app/apps/api/finance-staging-acceptance-cleanup.mjs:ro" \
     --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs
+  RUN_CLEANUP_PASS=1
 
   local storage_after
   storage_after="$(assert_staging_runtime "$tested_sha" "$app_path" "$compose_file" "$project" "$env_file")"

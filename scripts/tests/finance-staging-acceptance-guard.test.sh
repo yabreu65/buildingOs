@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly SCRIPT="$ROOT_DIR/scripts/finance-staging-acceptance.sh"
+readonly ACCEPTANCE_MJS="$ROOT_DIR/scripts/finance-staging-acceptance.mjs"
 readonly SHA='15b8587c4e4740abd6d91e6c795c83ceeaf6bdcf'
 readonly VALID_ARGS=(
   "$SHA"
@@ -74,6 +75,66 @@ while IFS= read -r line; do
 done < "$golden_seed_source"
 [[ "$golden_seed_contract" == *"nodeEnv !== 'staging'"* ]] || {
   printf 'FAIL: Golden seed NODE_ENV=staging contract changed\n' >&2
+  exit 1
+}
+
+password_capture_line="$(grep -n 'capture-golden-passwords' "$SCRIPT" | head -1 | cut -d: -f1)"
+seed_line="$(grep -n 'profile seed-staging-golden run' "$SCRIPT" | head -1 | cut -d: -f1)"
+[[ -n "$password_capture_line" && -n "$seed_line" && "$password_capture_line" -lt "$seed_line" ]] || {
+  printf 'FAIL: Golden password baseline must be captured before seed\n' >&2
+  exit 1
+}
+grep -Fq 'trap restore_golden_password_baseline EXIT' "$SCRIPT" || {
+  printf 'FAIL: Golden password restore must be registered for all shell exits\n' >&2
+  exit 1
+}
+grep -Fq 'DURABLE_AUDIT_EVIDENCE' "$ROOT_DIR/scripts/lib/finance-staging-acceptance-cleanup.mjs" || {
+  printf 'FAIL: mutation inventory must classify durable audit evidence\n' >&2
+  exit 1
+}
+if grep -Eq 'prisma\.auditLog\.(delete|deleteMany)' "$ROOT_DIR/scripts/lib/finance-staging-acceptance-cleanup.mjs"; then
+  printf 'FAIL: acceptance cleanup must preserve AuditLog history\n' >&2
+  exit 1
+fi
+grep -Fq 'cleanup.markSessionAttempted()' "$ACCEPTANCE_MJS" || {
+  printf 'FAIL: auth session identity capture must fail closed after login\n' >&2
+  exit 1
+}
+
+restore_output="$(bash -c '
+  source "$1"
+  docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }
+  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  PASSWORD_RESTORE_REQUIRED=1
+  RUN_CLEANUP_PASS=1
+  COMPOSE_COMMAND=(docker)
+  trap - EXIT
+  restore_golden_password_baseline
+' _ "$SCRIPT")"
+[[ "$restore_output" == *'GOLDEN_PASSWORD_HASH_RESTORE_PASS'* && "$restore_output" == *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
+  printf 'FAIL: exit trap must restore the exact baseline and report zero residue only after cleanup\n' >&2
+  exit 1
+}
+[[ "$restore_output" != *'PRIVATE_HASH_SENTINEL'* ]] || {
+  printf 'FAIL: password baseline escaped into output\n' >&2
+  exit 1
+}
+
+set +e
+failed_restore_output="$(bash -c '
+  source "$1"
+  docker() { cat >/dev/null; return 1; }
+  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  PASSWORD_RESTORE_REQUIRED=1
+  RUN_CLEANUP_PASS=1
+  COMPOSE_COMMAND=(docker)
+  trap - EXIT
+  restore_golden_password_baseline
+' _ "$SCRIPT" 2>&1)"
+failed_restore_status=$?
+set -e
+[[ "$failed_restore_status" -ne 0 && "$failed_restore_output" == *'GOLDEN_PASSWORD_HASH_RESTORE_FAIL'* && "$failed_restore_output" != *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
+  printf 'FAIL: failed Golden password restoration must fail acceptance without claiming zero residue\n' >&2
   exit 1
 }
 
