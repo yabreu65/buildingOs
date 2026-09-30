@@ -25,6 +25,18 @@ function requireIdentity(value, label) {
   return value;
 }
 
+function isGenericDocumentObjectKey(objectKey, tenantId) {
+  const prefixes = [
+    `tenant-${tenantId}/documents/`,
+    `tenant-${tenantId}/payment-proofs/`,
+  ];
+  const prefix = prefixes.find((candidate) => objectKey.startsWith(candidate));
+  if (!prefix) return false;
+  const relativePath = objectKey.slice(prefix.length);
+  return relativePath.length > 0 && !relativePath.includes("\\") && !relativePath.includes("\0") &&
+    relativePath.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
 export function decodeRunSessionId(cookieValues, expectedUserId) {
   const access = cookieValues.find((value) => value.startsWith("bo_access_token="));
   if (!access) throw new Error("login did not issue an access token");
@@ -113,6 +125,7 @@ export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tena
   }
   const resources = Object.fromEntries(resourceKinds.map((kind) => [kind, new Map()]));
   const objects = new Map();
+  const receiptFileIds = new Set();
   const paymentRowsById = new Map();
   let sessionId;
   let sessionAttempted = false;
@@ -137,13 +150,46 @@ export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tena
     const objectVersionId = requireIdentity(object?.objectVersionId, "storage object version");
     const fileId = object?.fileId ?? null;
     if (fileId !== null) requireIdentity(fileId, "storage File id");
-    if (object.tenantId !== tenantId || !objectKey.startsWith(`tenant/${tenantId}/`)) {
+    if (object.tenantId !== tenantId || !isGenericDocumentObjectKey(objectKey, tenantId)) {
       throw new Error("storage object is outside the fixed tenant");
     }
     const identity = `${bucket}\0${objectKey}\0${objectVersionId}`;
     const previous = objects.get(identity);
     if (previous && previous.fileId && fileId && previous.fileId !== fileId) throw new Error("storage object identity has conflicting File owners");
     objects.set(identity, { bucket, objectKey, objectVersionId, fileId: fileId ?? previous?.fileId ?? null });
+  };
+
+  const registerReceiptObject = (payment, document, file) => {
+    if (!payment || !resources.payment.has(payment.id) || payment.tenantId !== tenantId || payment.buildingId !== buildingId) {
+      throw new Error("receipt Payment is not the exact registered Golden Payment");
+    }
+    const receiptDocumentId = requireIdentity(payment.receiptDocumentId, "receipt Document id");
+    const receiptNumber = requireIdentity(payment.receiptNumber, "receipt number");
+    if (!/^R-[A-Z0-9]+-\d{4}-\d{6}$/.test(receiptNumber)) {
+      throw new Error("receipt number is not canonical");
+    }
+    if (document?.id !== receiptDocumentId || document.tenantId !== tenantId || document.buildingId !== buildingId) {
+      throw new Error("receipt Document ownership or Payment binding mismatch");
+    }
+    const fileId = requireIdentity(document.fileId, "receipt Document File id");
+    if (file?.id !== fileId || file.tenantId !== tenantId) {
+      throw new Error("receipt File ownership or Document binding mismatch");
+    }
+    const bucket = requireIdentity(file.bucket, "receipt storage bucket");
+    const objectKey = requireIdentity(file.objectKey, "receipt storage key");
+    const objectVersionId = requireIdentity(file.objectVersionId, "receipt storage version");
+    const expectedKey = `tenant/${tenantId}/payments/${payment.id}/receipts/${receiptNumber}.pdf`;
+    if (objectKey !== expectedKey) throw new Error("receipt storage key does not match the exact Payment receipt");
+
+    if (!resources.document.has(document.id)) register("document", document);
+    if (!resources.file.has(file.id)) register("file", file);
+    receiptFileIds.add(file.id);
+    const identity = `${bucket}\0${objectKey}\0${objectVersionId}`;
+    const previous = objects.get(identity);
+    if (previous && previous.fileId && previous.fileId !== file.id) {
+      throw new Error("receipt storage identity has conflicting File owners");
+    }
+    objects.set(identity, { bucket, objectKey, objectVersionId, fileId: file.id });
   };
 
   const deleteExact = async (kind, delegate, row, extraWhere = {}) => {
@@ -268,18 +314,20 @@ export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tena
         await attempt(() => deleteExact("PaymentAuditLog", prisma.paymentAuditLog, row, { paymentId: payment.id }));
       }
       const receiptId = currentPayment?.receiptDocumentId;
-      if (receiptId && !resources.document.has(receiptId)) {
-        const document = await prisma.document.findFirst({ where: { id: receiptId } });
-        if (document) {
-          if (document.tenantId !== tenantId || document.buildingId !== buildingId) throw new Error("receipt Document ownership mismatch");
-          register("document", document);
-          const file = await prisma.file.findFirst({ where: { id: document.fileId } });
-          if (file) {
-            if (file.tenantId !== tenantId) throw new Error("receipt File ownership mismatch");
-            register("file", file);
-            registerObject({ ...file, fileId: file.id, objectVersionId: file.objectVersionId });
+      if (receiptId || currentPayment?.receiptNumber) {
+        await attempt(async () => {
+          if (!receiptId || !currentPayment.receiptNumber) {
+            throw new Error("exact Payment receipt identity is incomplete");
           }
-        }
+          const document = await prisma.document.findFirst({ where: { id: receiptId } });
+          if (!document) throw new Error("exact Payment receipt Document is missing");
+          if (document.tenantId !== tenantId || document.buildingId !== buildingId || typeof document.fileId !== "string" || !document.fileId) {
+            throw new Error("exact Payment receipt Document binding is invalid");
+          }
+          const file = await prisma.file.findFirst({ where: { id: document.fileId } });
+          if (!file) throw new Error("exact Payment receipt File is missing");
+          registerReceiptObject(currentPayment, document, file);
+        });
       }
     }
 
@@ -288,7 +336,9 @@ export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tena
       if (file && file.tenantId !== tenantId) throw new Error("Document File ownership mismatch");
       if (file && !resources.file.has(file.id)) register("file", file);
       if (file && typeof file.objectVersionId === "string" && file.objectVersionId.length) {
-        registerObject({ ...file, fileId: file.id, objectVersionId: file.objectVersionId });
+        if (!receiptFileIds.has(file.id)) {
+          registerObject({ ...file, fileId: file.id, objectVersionId: file.objectVersionId });
+        }
       }
     }
 

@@ -18,6 +18,34 @@ PASSWORD_RESTORE_REQUIRED=0
 COMPOSE_COMMAND=()
 RUN_CLEANUP_PASS=0
 
+acceptance_output_proves_cleanup() {
+  local output="$1"
+  local marker
+  for marker in \
+    QA_RUN_MUTABLE_DB_CLEANUP_PASS \
+    QA_RUN_STORAGE_CLEANUP_PASS \
+    QA_AUTH_SESSION_CLEANUP_PASS \
+    QA_AUDIT_HISTORY_PRESERVED_PASS \
+    RUN_SCOPED_MUTABLE_DB_RESIDUE=0 \
+    RUN_SCOPED_STORAGE_RESIDUE=0 \
+    RUN_SCOPED_ACTIVE_SESSION_RESIDUE=0; do
+    grep -Fxq -- "$marker" <<<"$output" || return 1
+  done
+}
+
+record_acceptance_result() {
+  local child_status="$1"
+  local output="$2"
+  printf '%s\n' "$output"
+  if acceptance_output_proves_cleanup "$output"; then
+    RUN_CLEANUP_PASS=1
+  elif [[ "$child_status" == '0' ]]; then
+    printf 'ERROR: acceptance child exited successfully without complete cleanup evidence\n' >&2
+    return 1
+  fi
+  return "$child_status"
+}
+
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
   exit 1
@@ -219,14 +247,20 @@ main() {
     -v "$CONTROL_ROOT/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:/app/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:ro" \
     api-seed-staging-golden
 
-  printf '%s' "$PASSWORD_SNAPSHOT" | "${compose[@]}" run --rm --no-deps -T \
+  local acceptance_output=''
+  local acceptance_status=0
+  if acceptance_output="$(printf '%s' "$PASSWORD_SNAPSHOT" | "${compose[@]}" run --rm --no-deps -T \
     -e STAGING_GOLDEN_QA_PASSWORD \
     -e FINANCE_ACCEPTANCE_RUN_ID \
     -e FINANCE_ACCEPTANCE_API_BASE_URL="$api_base_url" \
     -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/app/apps/api/finance-staging-acceptance.mjs:ro" \
     -v "$SCRIPT_DIR/lib/finance-staging-acceptance-cleanup.mjs:/app/apps/api/finance-staging-acceptance-cleanup.mjs:ro" \
-    --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs
-  RUN_CLEANUP_PASS=1
+    --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs 2>&1)"; then
+    acceptance_status=0
+  else
+    acceptance_status=$?
+  fi
+  record_acceptance_result "$acceptance_status" "$acceptance_output" || return $?
 
   local storage_after
   storage_after="$(assert_staging_runtime "$tested_sha" "$app_path" "$compose_file" "$project" "$env_file")"
