@@ -4,8 +4,10 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly ACCEPTANCE_SCRIPT="$ROOT_DIR/scripts/finance-staging-acceptance.sh"
 readonly SMOKE_SCRIPT_HOST="$ROOT_DIR/scripts/tests/finance-staging-acceptance-module-resolution-smoke.mjs"
+readonly CLEANUP_HELPER_HOST="$ROOT_DIR/scripts/lib/finance-staging-acceptance-cleanup.mjs"
 readonly IMAGE="buildingos-finance-acceptance-module-resolution-smoke:local-${PPID}-$$-${RANDOM}"
 readonly SMOKE_SCRIPT_CONTAINER='/app/apps/api/finance-staging-acceptance-module-resolution-smoke.mjs'
+readonly CLEANUP_HELPER_CONTAINER='/app/apps/api/finance-staging-acceptance-cleanup.mjs'
 image_created=false
 
 node - "$ACCEPTANCE_SCRIPT" <<'NODE'
@@ -24,6 +26,9 @@ if (!source.includes(newTarget)) {
 }
 if (!source.includes(executionPath)) {
   throw new Error('acceptance module must execute from the mounted API package path');
+}
+if (!source.includes('finance-staging-acceptance-cleanup.mjs:/app/apps/api/finance-staging-acceptance-cleanup.mjs:ro')) {
+  throw new Error('exact-cleanup helper must be mounted read-only beside the acceptance module');
 }
 if (source.includes('npm install') || source.includes('npm ci')) {
   throw new Error('acceptance must not install runtime dependencies');
@@ -55,5 +60,6 @@ docker run --rm \
   --network none \
   --env DATABASE_URL='postgresql://smoke:smoke@127.0.0.1:1/smoke' \
   --volume "$SMOKE_SCRIPT_HOST:$SMOKE_SCRIPT_CONTAINER:ro" \
+  --volume "$CLEANUP_HELPER_HOST:$CLEANUP_HELPER_CONTAINER:ro" \
   --entrypoint node \
   "$IMAGE" "$SMOKE_SCRIPT_CONTAINER"

@@ -1,8 +1,12 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { Client as MinioClient } from "minio";
 import { PrismaClient } from "@prisma/client";
+import {
+  captureAcceptanceBaseline,
+  createAcceptanceCleanup,
+  decodeRunSessionId,
+  restoreGoldenPasswordHashes,
+} from "./finance-staging-acceptance-cleanup.mjs";
 
 const tenantId = "stg-golden-tenant-auto";
 const buildingId = "stg-golden-building-auto";
@@ -12,14 +16,14 @@ const password = process.env.STAGING_GOLDEN_QA_PASSWORD;
 const apiBaseUrl =
   process.env.FINANCE_ACCEPTANCE_API_BASE_URL ?? "http://buildingos-api:3000";
 const runId = process.env.FINANCE_ACCEPTANCE_RUN_ID;
+const qaUserId = "stg-golden-user-auto-admin";
 const marker = `FIN-02C-STAGING:${runId}`;
 const acceptanceDate = new Date().toISOString().slice(0, 10);
 const prisma = new PrismaClient();
-const tempDirectory = fs.mkdtempSync(
-  path.join(os.tmpdir(), "finance-02c-auth-"),
-);
-const cookiePath = path.join(tempDirectory, "cookies");
+let cookieValues = [];
 const MAX_API_ERROR_SUMMARY_LENGTH = 240;
+let cleanup;
+let acceptanceBaseline;
 
 function fail(message) {
   throw new Error(message);
@@ -30,15 +34,34 @@ function assert(condition, message) {
 }
 
 function readCookies() {
-  try {
-    return fs.readFileSync(cookiePath, "utf8");
-  } catch {
-    return "";
-  }
+  return cookieValues.join("; ");
 }
 
 function persistCookies(values) {
-  fs.writeFileSync(cookiePath, values.join("; "), { mode: 0o600 });
+  cookieValues = values;
+}
+
+function createStorageClient() {
+  const endpoint = process.env.S3_ENDPOINT;
+  const accessKey = process.env.S3_ACCESS_KEY;
+  const secretKey = process.env.S3_SECRET_KEY;
+  const bucket = process.env.S3_BUCKET;
+  assert(typeof endpoint === "string" && typeof accessKey === "string" && typeof secretKey === "string" && typeof bucket === "string", "staging storage configuration is incomplete");
+  const url = new URL(endpoint);
+  const client = new MinioClient({
+    endPoint: url.hostname,
+    port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
+    useSSL: url.protocol === "https:",
+    accessKey,
+    secretKey,
+    region: process.env.S3_REGION || "us-east-1",
+    pathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
+  });
+  return {
+    bucket,
+    removeObject: (bucketName, objectKey, options) => client.removeObject(bucketName, objectKey, options),
+    getObject: (bucketName, objectKey, options) => client.getObject(bucketName, objectKey, options),
+  };
 }
 
 async function parseResponse(response) {
@@ -125,6 +148,7 @@ async function login() {
     typeof runId === "string" && runId.length > 0,
     "acceptance run identity is unavailable",
   );
+  cleanup.markSessionAttempted();
   const response = await fetch(`${apiBaseUrl}/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-tenant-id": tenantId },
@@ -149,9 +173,17 @@ async function login() {
     "staging login did not issue both temporary auth cookies",
   );
   persistCookies(values);
+  const sessionId = decodeRunSessionId(values, qaUserId);
+  const membership = await prisma.membership.findFirst({
+    where: { userId: qaUserId, tenantId },
+    select: { userId: true, tenantId: true },
+  });
+  assert(membership?.userId === qaUserId && membership.tenantId === tenantId, "run AuthSession user has no allowlisted tenant membership");
+  cleanup.setSessionId(sessionId);
   const memberships = Array.isArray(payload?.memberships)
     ? payload.memberships
     : [];
+  assert(payload?.user?.id === qaUserId, "login returned an unexpected Golden QA user");
   const activeMembership = memberships.find(
     (membership) => membership.tenantId === tenantId,
   );
@@ -243,8 +275,10 @@ async function acceptExpense(expenseCategoryId, period) {
       description: `${marker}:expense`,
     },
   );
+  assert(expense?.id, "Expense creation returned no exact identity");
+  cleanup.register("expense", expense);
   assert(
-    expense?.tenantId === tenantId && expense?.status === "DRAFT",
+    expense.tenantId === tenantId && expense.status === "DRAFT",
     "Expense did not persist as a Golden DRAFT",
   );
   const updated = await request(
@@ -305,8 +339,10 @@ async function acceptIncome(incomeCategoryId, period) {
     receivedDate: `${acceptanceDate}T12:00:00.000Z`,
     description: `${marker}:income`,
   });
+  assert(income?.id, "Income creation returned no exact identity");
+  cleanup.register("income", income);
   assert(
-    income?.tenantId === tenantId && income?.status === "DRAFT",
+    income.tenantId === tenantId && income.status === "DRAFT",
     "Income did not persist as a Golden DRAFT",
   );
   const persisted = await prisma.income.findFirst({
@@ -412,6 +448,12 @@ async function createPaymentProof() {
   assert(upload.ok, "payment proof upload failed");
   const objectVersionId = upload.headers.get("x-amz-version-id")?.trim();
   assert(objectVersionId, "payment proof upload did not return x-amz-version-id");
+  cleanup.registerObject({
+    tenantId,
+    bucket: process.env.S3_BUCKET,
+    objectKey: presign.objectKey,
+    objectVersionId,
+  });
   const document = await request("POST", `/tenants/${tenantId}/documents`, {
     title: `${marker}:payment-proof`,
     category: "RECEIPT",
@@ -431,6 +473,16 @@ async function createPaymentProof() {
     document?.id && document?.file?.id,
     "payment proof document response is incomplete",
   );
+  cleanup.register("document", document);
+  const storedDocument = await prisma.document.findFirst({ where: { id: document.id } });
+  assert(storedDocument?.tenantId === tenantId && storedDocument.buildingId === buildingId && storedDocument.fileId === document.file.id, "payment proof Document ownership could not be verified");
+  const storedFile = await prisma.file.findFirst({ where: { id: document.file.id } });
+  assert(storedFile?.tenantId === tenantId && storedFile.bucket === process.env.S3_BUCKET && storedFile.objectKey === presign.objectKey && storedFile.objectVersionId === objectVersionId, "payment proof File does not bind the uploaded exact object version");
+  cleanup.register("file", storedFile);
+  cleanup.registerObject({
+    ...storedFile,
+    fileId: storedFile.id,
+  });
   return document.file.id;
 }
 
@@ -787,6 +839,7 @@ async function databaseIntegrity(payment, chargeId) {
 }
 
 async function main() {
+  cleanup = createAcceptanceCleanup({ prisma, storage: createStorageClient(), runId, baseline: acceptanceBaseline, qaUserId });
   assert(
     apiBaseUrl === "http://buildingos-api:3000",
     "acceptance API must be the internal staging API",
@@ -815,6 +868,7 @@ async function main() {
     charge?.id && charge?.tenantId === tenantId,
     "synthetic charge creation failed",
   );
+  cleanup.register("charge", charge);
   await assertCanonicalAcceptanceCharge(charge.id);
   const proofFileId = await createPaymentProof();
   const payment = await request("POST", `/buildings/${buildingId}/payments`, {
@@ -828,10 +882,10 @@ async function main() {
     proofFileId,
     transferDate: acceptanceDate,
   });
+  assert(payment?.id, "Payment creation returned no exact identity");
+  cleanup.register("payment", payment);
   assert(
-    payment?.id &&
-      payment.status === "SUBMITTED" &&
-      payment.tenantId === tenantId,
+    payment.status === "SUBMITTED" && payment.tenantId === tenantId,
     "synthetic payment was not SUBMITTED in the allowlisted tenant",
   );
   const approved = await request(
@@ -859,14 +913,47 @@ async function main() {
   console.log("gateway_mutations=0");
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(
-    `FINANCE_02C_ACCEPTANCE_FAILED: ${error instanceof Error ? error.message : "unknown error"}`,
-  );
-  process.exitCode = 1;
-} finally {
-  await prisma.$disconnect();
-  fs.rmSync(tempDirectory, { recursive: true, force: true });
+const mode = process.argv[2];
+if (mode === "capture-golden-passwords") {
+  try {
+    process.stdout.write(await captureAcceptanceBaseline(prisma));
+  } catch (error) {
+    console.error(`GOLDEN_PASSWORD_SNAPSHOT_FAILED: ${error instanceof Error ? error.message : "unknown error"}`);
+    process.exitCode = 1;
+  } finally {
+    await prisma.$disconnect();
+  }
+} else if (mode === "restore-golden-passwords") {
+  try {
+    let serializedSnapshot = "";
+    for await (const chunk of process.stdin) serializedSnapshot += chunk;
+    await restoreGoldenPasswordHashes(prisma.user, serializedSnapshot);
+    console.log("GOLDEN_PASSWORD_HASH_RESTORE_PASS");
+  } catch (error) {
+    console.error(`GOLDEN_PASSWORD_HASH_RESTORE_FAIL: ${error instanceof Error ? error.message : "unknown error"}`);
+    process.exitCode = 1;
+  } finally {
+    await prisma.$disconnect();
+  }
+} else {
+  try {
+    let serializedBaseline = "";
+    for await (const chunk of process.stdin) serializedBaseline += chunk;
+    acceptanceBaseline = JSON.parse(serializedBaseline);
+    await main();
+  } catch (error) {
+    console.error(`FINANCE_02C_ACCEPTANCE_FAILED: ${error instanceof Error ? error.message : "unknown error"}`);
+    process.exitCode = 1;
+  } finally {
+    if (cleanup) {
+      try {
+        await cleanup.cleanup();
+      } catch (error) {
+        console.error(`FINANCE_02C_CLEANUP_FAILED: ${error instanceof Error ? error.message : "unknown error"}`);
+        process.exitCode = 1;
+      }
+    }
+    cookieValues = [];
+    await prisma.$disconnect();
+  }
 }

@@ -179,6 +179,7 @@ jobs:
           { printf '%s' "$QA_PASSWORD"; tar -cf - \
               scripts/finance-staging-acceptance.sh \
               scripts/finance-staging-acceptance.mjs \
+              scripts/lib/finance-staging-acceptance-cleanup.mjs \
               apps/api/prisma/seed-staging-golden.ts \
               apps/api/prisma/lib/staging-seed/staging-golden-seed.ts; } | \
             ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "$remote_command"
