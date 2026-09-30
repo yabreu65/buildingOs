@@ -101,6 +101,86 @@ grep -Fq 'cleanup.markSessionAttempted()' "$ACCEPTANCE_MJS" || {
   exit 1
 }
 
+successful_cleanup_markers=$'QA_RUN_MUTABLE_DB_CLEANUP_PASS\nQA_RUN_STORAGE_CLEANUP_PASS\nQA_AUTH_SESSION_CLEANUP_PASS\nQA_AUDIT_HISTORY_PRESERVED_PASS\nRUN_SCOPED_MUTABLE_DB_RESIDUE=0\nRUN_SCOPED_STORAGE_RESIDUE=0\nRUN_SCOPED_ACTIVE_SESSION_RESIDUE=0'
+failed_acceptance_output="$successful_cleanup_markers"$'\nFINANCE_02C_ACCEPTANCE_FAILED: synthetic original failure'
+acceptance_output_proves_cleanup "$successful_cleanup_markers" || {
+  printf 'FAIL: all exact cleanup success markers and zero residue counts must prove child cleanup\n' >&2
+  exit 1
+}
+recorded_success_output="$(bash -c '
+  source "$1"
+  trap - EXIT
+  record_acceptance_result 0 "$2" >/dev/null || exit $?
+  [[ "$RUN_CLEANUP_PASS" == "1" ]] || exit 1
+  printf "STATE_PASS\\n"
+' _ "$SCRIPT" "$successful_cleanup_markers")"
+[[ "$recorded_success_output" == 'STATE_PASS' ]] || {
+  printf 'FAIL: the output/state helper must record proven child cleanup\n' >&2
+  exit 1
+}
+for incomplete_output in \
+  "${successful_cleanup_markers/QA_RUN_STORAGE_CLEANUP_PASS/QA_RUN_STORAGE_CLEANUP_FAIL}" \
+  "${successful_cleanup_markers/RUN_SCOPED_STORAGE_RESIDUE=0/RUN_SCOPED_STORAGE_RESIDUE=1}"; do
+  if acceptance_output_proves_cleanup "$incomplete_output"; then
+    printf 'FAIL: incomplete child cleanup evidence must not set cleanup-success state\n' >&2
+    exit 1
+  fi
+done
+set +e
+incomplete_success_output="$(bash -c '
+  source "$1"
+  trap - EXIT
+  record_acceptance_result 0 "$2"
+' _ "$SCRIPT" "${successful_cleanup_markers/RUN_SCOPED_ACTIVE_SESSION_RESIDUE=0/}" 2>&1)"
+incomplete_success_status=$?
+set -e
+[[ "$incomplete_success_status" -ne 0 && "$incomplete_success_output" == *'without complete cleanup evidence'* ]] || {
+  printf 'FAIL: a successful child without all cleanup markers must fail the shell acceptance\n' >&2
+  exit 1
+}
+
+set +e
+preserved_failure_output="$(bash -c '
+  source "$1"
+  docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }
+  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  PASSWORD_RESTORE_REQUIRED=1
+  COMPOSE_COMMAND=(docker)
+  trap - EXIT
+  set +e
+  record_acceptance_result 7 "$2"
+  original_status=$?
+  (exit "$original_status")
+  restore_golden_password_baseline
+' _ "$SCRIPT" "$failed_acceptance_output" 2>&1)"
+preserved_failure_status=$?
+set -e
+[[ "$preserved_failure_status" -eq 7 && "$preserved_failure_output" == *'FINANCE_02C_ACCEPTANCE_FAILED: synthetic original failure'* && "$preserved_failure_output" == *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
+  printf 'FAIL: successful exact cleanup plus password restoration must report zero residue without masking the original failure\n' >&2
+  exit 1
+}
+
+set +e
+missing_cleanup_output="$(bash -c '
+  source "$1"
+  docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }
+  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  PASSWORD_RESTORE_REQUIRED=1
+  COMPOSE_COMMAND=(docker)
+  trap - EXIT
+  set +e
+  record_acceptance_result 7 "$2"
+  original_status=$?
+  (exit "$original_status")
+  restore_golden_password_baseline
+' _ "$SCRIPT" "${failed_acceptance_output/RUN_SCOPED_ACTIVE_SESSION_RESIDUE=0/}" 2>&1)"
+missing_cleanup_status=$?
+set -e
+[[ "$missing_cleanup_status" -eq 7 && "$missing_cleanup_output" == *'FINANCE_02C_ACCEPTANCE_FAILED: synthetic original failure'* && "$missing_cleanup_output" != *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
+  printf 'FAIL: missing child cleanup evidence must not report zero residue\n' >&2
+  exit 1
+}
+
 restore_output="$(bash -c '
   source "$1"
   docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }

@@ -104,7 +104,7 @@ function addBaseResources(fixture, { withReceipt = false } = {}) {
     paymentAllocation: { id: "alloc-1", tenantId, paymentId: "payment-1" },
     paymentAuditLog: { id: "payment-audit-1", tenantId, paymentId: "payment-1" },
     document: { id: "proof-doc-1", tenantId, buildingId, fileId: "proof-file-1" },
-    file: { id: "proof-file-1", tenantId, bucket: "staging", objectKey: `tenant/${tenantId}/proof/run-1`, objectVersionId: versionId },
+    file: { id: "proof-file-1", tenantId, bucket: "staging", objectKey: `tenant-${tenantId}/payment-proofs/run-1.pdf`, objectVersionId: versionId },
     authSession: { id: "session-run", userId: qaUserId, revokedAt: null, expiresAt: new Date(Date.now() + 60_000) },
     membership: { id: "membership-1", userId: qaUserId, tenantId },
     receiptSequence: { id: "seq-1", tenantId, year: 2026, lastNumber: withReceipt ? 11 : 10, updatedAt: new Date(withReceipt ? "2026-01-02T00:00:00.000Z" : "2026-01-01T00:00:00.000Z") },
@@ -122,7 +122,7 @@ function addBaseResources(fixture, { withReceipt = false } = {}) {
   fixture.storageRows.set(`${rows.file.bucket}\0${rows.file.objectKey}\0${versionId}`, true);
   if (withReceipt) {
     const receipt = { id: "receipt-doc-1", tenantId, buildingId, fileId: "receipt-file-1" };
-    const file = { id: "receipt-file-1", tenantId, bucket: "staging", objectKey: `tenant/${tenantId}/payments/payment-1/receipts/receipt.pdf`, objectVersionId: "receipt-version" };
+    const file = { id: "receipt-file-1", tenantId, bucket: "staging", objectKey: `tenant/${tenantId}/payments/payment-1/receipts/R-GOLDEN-2026-000011.pdf`, objectVersionId: "receipt-version" };
     fixture.add("document", receipt);
     fixture.add("file", file);
     fixture.storageRows.set(`${file.bucket}\0${file.objectKey}\0${file.objectVersionId}`, true);
@@ -184,15 +184,32 @@ test("failure after Expense cleans its exact registered row", async () => {
 test("failure after Income cleans its exact registered row", async () => {
   const f = createFixture(); const row = { id: "income-fail", tenantId, buildingId }; f.add("income", row); f.cleanup.register("income", row); await f.cleanup.cleanup(); assert.equal(f.delegates.income.values.size, 0);
 });
-test("failure after storage upload cleans exact version before a File exists", async () => {
-  const f = createFixture(); const key = `tenant/${tenantId}/proof/orphan`; f.storageRows.set(`staging\0${key}\0${versionId}`, true); f.cleanup.registerObject({ tenantId, bucket: "staging", objectKey: key, objectVersionId: versionId }); await f.cleanup.cleanup();
+test("generic Document and payment-proof namespaces accept exact product keys", () => {
+  const f = createFixture();
+  for (const objectKey of [`tenant-${tenantId}/documents/doc.pdf`, `tenant-${tenantId}/payment-proofs/proof.pdf`]) {
+    assert.doesNotThrow(() => f.cleanup.registerObject({ tenantId, bucket: "staging", objectKey, objectVersionId: versionId }));
+  }
+});
+test("generic storage registration rejects slash namespaces, cross-tenant keys, and tenant-prefix collisions", () => {
+  const f = createFixture();
+  for (const objectKey of [
+    `tenant/${tenantId}/payment-proofs/proof.pdf`,
+    "tenant-stg-golden-tenant-auto-other/payment-proofs/proof.pdf",
+    "tenant-other-tenant/payment-proofs/proof.pdf",
+  ]) {
+    assert.throws(() => f.cleanup.registerObject({ tenantId, bucket: "staging", objectKey, objectVersionId: versionId }), /fixed tenant/);
+  }
+  assert.throws(() => f.cleanup.registerObject({ tenantId: "other-tenant", bucket: "staging", objectKey: `tenant-${tenantId}/payment-proofs/proof.pdf`, objectVersionId: versionId }), /fixed tenant/);
+});
+test("failure after payment-proof upload cleans exact version before a File exists", async () => {
+  const f = createFixture(); const key = `tenant-${tenantId}/payment-proofs/orphan.pdf`; f.storageRows.set(`staging\0${key}\0${versionId}`, true); f.cleanup.registerObject({ tenantId, bucket: "staging", objectKey: key, objectVersionId: versionId }); await f.cleanup.cleanup();
   assert.equal(f.fileLookups.includes(null), false);
   assert.deepEqual(f.storageRemovals, [{ bucket: "staging", key, versionId }]);
   assert.equal(f.storageRows.size, 0);
 });
 test("registered File-backed storage requires the exact File identity before deletion", async () => {
   const f = createFixture();
-  const key = `tenant/${tenantId}/proof/file-backed`;
+  const key = `tenant-${tenantId}/documents/file-backed.pdf`;
   f.add("file", { id: "proof-file-1", tenantId, bucket: "staging", objectKey: key, objectVersionId: "different-version" });
   f.cleanup.registerObject({ tenantId, bucket: "staging", objectKey: key, objectVersionId: versionId, fileId: "proof-file-1" });
   f.storageRows.set(`staging\0${key}\0${versionId}`, true);
@@ -208,6 +225,26 @@ test("failure after Payment creation removes exact dependent rows", async () => 
 });
 test("receipt-generated Document/File are discovered from the exact Payment", async () => {
   const f = createFixture(); addBaseResources(f, { withReceipt: true }); await f.cleanup.cleanup(); assert.equal(f.delegates.document.values.size, 0); assert.equal(f.delegates.file.values.size, 0); assert.equal(f.storageRows.size, 0);
+  assert.deepEqual(f.storageRemovals, [{ bucket: "staging", key: `tenant-${tenantId}/payment-proofs/run-1.pdf`, versionId }, { bucket: "staging", key: `tenant/${tenantId}/payments/payment-1/receipts/R-GOLDEN-2026-000011.pdf`, versionId: "receipt-version" }]);
+});
+test("receipt cleanup rejects a key not derived from the exact Payment receipt identity", async () => {
+  const f = createFixture(); addBaseResources(f, { withReceipt: true });
+  const file = f.delegates.file.values.get("receipt-file-1");
+  file.objectKey = `tenant/${tenantId}/payments/payment-1/receipts/other.pdf`;
+  await assert.rejects(f.cleanup.cleanup(), /does not match the exact Payment receipt/);
+  assert.equal(f.storageRemovals.some(({ key }) => key === file.objectKey), false);
+  assert.equal(f.storageRows.has(`staging\0tenant/${tenantId}/payments/payment-1/receipts/R-GOLDEN-2026-000011.pdf\0receipt-version`), true);
+});
+test("receipt cleanup fails closed on Document building or File tenant mismatch", async () => {
+  for (const mutate of [
+    (f) => { f.delegates.document.values.get("receipt-doc-1").buildingId = "other-building"; },
+    (f) => { f.delegates.document.values.get("receipt-doc-1").fileId = "proof-file-1"; },
+    (f) => { f.delegates.file.values.get("receipt-file-1").tenantId = "other-tenant"; },
+  ]) {
+    const f = createFixture(); addBaseResources(f, { withReceipt: true }); mutate(f);
+    await assert.rejects(f.cleanup.cleanup());
+    assert.equal(f.storageRemovals.some(({ key }) => key.includes("/payments/payment-1/receipts/")), false);
+  }
 });
 test("run-owned final receipt number restores its exact shared sequence preimage", async () => {
   const f = createFixture(); addBaseResources(f, { withReceipt: true }); await f.cleanup.cleanup();
