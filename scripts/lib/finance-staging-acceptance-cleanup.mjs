@@ -293,9 +293,11 @@ export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tena
     }
 
     for (const object of objects.values()) await attempt(async () => {
-      const file = await prisma.file.findFirst({ where: { id: object.fileId } });
-      if (file && (file.tenantId !== tenantId || file.bucket !== object.bucket || file.objectKey !== object.objectKey || file.objectVersionId !== object.objectVersionId || (object.fileId && file.id !== object.fileId))) {
-        throw new Error("storage identity no longer matches its registered File");
+      if (object.fileId !== null) {
+        const file = await prisma.file.findFirst({ where: { id: object.fileId } });
+        if (file && (file.id !== object.fileId || file.tenantId !== tenantId || file.bucket !== object.bucket || file.objectKey !== object.objectKey || file.objectVersionId !== object.objectVersionId)) {
+          throw new Error("storage identity no longer matches its registered File");
+        }
       }
       await storage.removeObject(object.bucket, object.objectKey, { versionId: object.objectVersionId });
       try {

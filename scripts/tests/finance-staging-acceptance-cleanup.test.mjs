@@ -68,8 +68,16 @@ function createFixture() {
     authSession: makeDelegate(), membership: makeDelegate(), user: makeDelegate(), auditLog: makeDelegate(), receiptSequence: makeDelegate(),
   };
   const storageRows = new Map();
+  const storageRemovals = [];
+  const fileLookups = [];
+  const findFile = delegates.file.findFirst.bind(delegates.file);
+  delegates.file.findFirst = async ({ where }) => {
+    fileLookups.push(where.id);
+    if (where.id === null) throw new Error("Prisma File id cannot be null");
+    return findFile({ where });
+  };
   const storage = {
-    async removeObject(bucket, key, options) { storageRows.delete(`${bucket}\0${key}\0${options.versionId}`); },
+    async removeObject(bucket, key, options) { storageRemovals.push({ bucket, key, versionId: options.versionId }); storageRows.delete(`${bucket}\0${key}\0${options.versionId}`); },
     async getObject(bucket, key, options) {
       if (storageRows.has(`${bucket}\0${key}\0${options.versionId}`)) return new PassThrough();
       const error = new Error("version absent"); error.code = "NoSuchVersion"; throw error;
@@ -79,6 +87,8 @@ function createFixture() {
   return {
     delegates,
     storageRows,
+    storageRemovals,
+    fileLookups,
     storage,
     cleanup: createAcceptanceCleanup({ prisma: delegates, storage, runId: "test-run", baseline: { receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" } } }, qaUserId, onPass() {} }),
     add(kind, row) { delegates[kind].values.set(row.id, structuredClone(row)); },
@@ -175,7 +185,20 @@ test("failure after Income cleans its exact registered row", async () => {
   const f = createFixture(); const row = { id: "income-fail", tenantId, buildingId }; f.add("income", row); f.cleanup.register("income", row); await f.cleanup.cleanup(); assert.equal(f.delegates.income.values.size, 0);
 });
 test("failure after storage upload cleans exact version before a File exists", async () => {
-  const f = createFixture(); const key = `tenant/${tenantId}/proof/orphan`; f.storageRows.set(`staging\0${key}\0${versionId}`, true); f.cleanup.registerObject({ tenantId, bucket: "staging", objectKey: key, objectVersionId: versionId }); await f.cleanup.cleanup(); assert.equal(f.storageRows.size, 0);
+  const f = createFixture(); const key = `tenant/${tenantId}/proof/orphan`; f.storageRows.set(`staging\0${key}\0${versionId}`, true); f.cleanup.registerObject({ tenantId, bucket: "staging", objectKey: key, objectVersionId: versionId }); await f.cleanup.cleanup();
+  assert.equal(f.fileLookups.includes(null), false);
+  assert.deepEqual(f.storageRemovals, [{ bucket: "staging", key, versionId }]);
+  assert.equal(f.storageRows.size, 0);
+});
+test("registered File-backed storage requires the exact File identity before deletion", async () => {
+  const f = createFixture();
+  const key = `tenant/${tenantId}/proof/file-backed`;
+  f.add("file", { id: "proof-file-1", tenantId, bucket: "staging", objectKey: key, objectVersionId: "different-version" });
+  f.cleanup.registerObject({ tenantId, bucket: "staging", objectKey: key, objectVersionId: versionId, fileId: "proof-file-1" });
+  f.storageRows.set(`staging\0${key}\0${versionId}`, true);
+  await assert.rejects(f.cleanup.cleanup(), /storage identity no longer matches its registered File/);
+  assert.deepEqual(f.storageRemovals, []);
+  assert.equal(f.storageRows.size, 1);
 });
 test("failure after Document/File creation cleans exact rows", async () => {
   const f = createFixture(); addBaseResources(f); await f.cleanup.cleanup(); assert.equal(f.delegates.document.values.size, 0); assert.equal(f.delegates.file.values.size, 0);
