@@ -17,7 +17,7 @@ assert_absent() { if [[ "$2" != *"$3"* ]]; then pass "$1"; else fail_test "$1"; 
 assert_failure_without_output() {
   local label="$1"; shift
   local output='' rc=0
-  output="$($@ 2>/dev/null)" || rc=$?
+  output="$("$@" 2>/dev/null)" || rc=$?
   if (( rc != 0 )) && [[ -z "$output" ]]; then pass "$label"; else fail_test "$label"; fi
 }
 
