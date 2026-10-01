@@ -1,0 +1,71 @@
+name: Production backup tooling identity
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-operations
+  cancel-in-progress: false
+
+jobs:
+  tooling-identity:
+    name: Read installed backup tooling identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
+      SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PRODUCTION_SSH_KNOWN_HOSTS }}
+      SSH_PORT: ${{ vars.PRODUCTION_SSH_PORT || '22' }}
+    steps:
+      - name: Checkout identity reader
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Stream and validate installed manifest identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +x
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { printf 'IDENTITY_STATUS=FAIL\n' >&2; exit 1; }
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          install -d -m 700 "$HOME/.ssh"
+          key_file="$(mktemp "$HOME/.ssh/production-tooling-identity-key.XXXXXX")"
+          known_hosts_file="$(mktemp "$HOME/.ssh/production-tooling-identity-known-hosts.XXXXXX")"
+          cleanup() { rm -f "$key_file" "$known_hosts_file"; }
+          trap cleanup EXIT
+          chmod 600 "$key_file" "$known_hosts_file"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key_file"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$known_hosts_file"
+          unset SSH_PRIVATE_KEY SSH_KNOWN_HOSTS
+
+          ssh_opts=(
+            -F /dev/null
+            -i "$key_file"
+            -o UserKnownHostsFile="$known_hosts_file"
+            -o StrictHostKeyChecking=yes
+            -o BatchMode=yes
+            -o ServerAliveInterval=30
+            -o ServerAliveCountMax=6
+            -p "$SSH_PORT"
+          )
+          if ! remote_output="$(ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" 'bash -s -- --remote-identity' \
+            < scripts/lib/production-backup-tooling-identity.sh 2>/dev/null)"; then
+            printf 'IDENTITY_STATUS=FAIL\n' >&2
+            exit 1
+          fi
+          if ! identity_output="$(printf '%s\n' "$remote_output" \
+            | bash scripts/lib/production-backup-tooling-identity.sh --validate-identity 2>/dev/null)"; then
+            printf 'IDENTITY_STATUS=FAIL\n' >&2
+            exit 1
+          fi
+          printf '%s\n' "$identity_output"
