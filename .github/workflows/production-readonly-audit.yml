@@ -57,7 +57,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           verifier_output="$(bash scripts/verify-production-migration-manifest.sh verify-files)"
-          manifest_target_applied="$(printf '%s\n' "$verifier_output" | awk -F '\t' '$NF ~ /^target=[0-9]+$/ { sub(/^target=/, "", $NF); print $NF; count++ } END { if (count != 1) exit 1 }')"
+          manifest_target_applied="$(printf '%s\n' "$verifier_output" | bash scripts/lib/production-migration-target.sh)"
           if grep -F 'MIGRATION_COUNT" == "$MIGRATION_TARGET_APPLIED"' scripts/deploy-production.sh >/dev/null; then
             deploy_migration_count="$manifest_target_applied"
           else
