@@ -1,5 +1,18 @@
 # BuildingOS — AI Agent Instructions
 
+## Roadmap Governance — Mandatory Phase Review
+
+For any task that starts a new development phase, closes a phase, decides what comes next, or materially changes roadmap priority:
+
+1. Read `docs/BUILDINGOS_MASTER_DEVELOPMENT_PLAN.md`.
+2. Load `.agents/skills/buildingos-roadmap-governance/SKILL.md`.
+3. At phase START, verify the previous phase is proven closed, confirm entry gates, scope, dependencies, first local slice, and next phase.
+4. At phase CLOSE, re-read the master plan, verify exit gates with evidence, record delivered/deferred/blocking work, update roadmap state, and identify the next approved phase.
+5. Never mark a phase `CLOSED` only because implementation code exists.
+6. Do not begin the next phase automatically after closing one; perform the roadmap review first.
+7. ODD is the planning methodology for this roadmap. Do not introduce SDD/OpenSpec unless the project owner explicitly requests it.
+
+
 ## Operational Guardrails
 - Timebox: max 45 minutes per task. If not done, report progress and stop.
 - Silence: never exceed 10 minutes without user update on active tasks.
