@@ -90,11 +90,14 @@ describe('PaymentReceiptService', () => {
   const notificationsService = {
     createNotification: jest.fn(),
   };
+  let barrierOpen = true;
+  const writeBarrier = { isOpen: jest.fn(() => barrierOpen) };
 
   const service = new PaymentReceiptService(
     prisma as never,
     minio as never,
     notificationsService as never,
+    { isOpen: () => true },
   );
 
   function extractPdfTextLines(buffer: Buffer): string[] {
@@ -214,9 +217,16 @@ describe('PaymentReceiptService', () => {
     }
   }
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   beforeEach(() => {
     jest.restoreAllMocks();
     jest.clearAllMocks();
+    barrierOpen = true;
+    writeBarrier.isOpen.mockImplementation(() => barrierOpen);
+    Reflect.set(service, 'writeBarrier', writeBarrier);
     insideTransaction = false;
     minio.getDefaultBucket.mockReturnValue(DEFAULT_BUCKET);
     minio.uploadBuffer.mockImplementation(async () => {
@@ -409,6 +419,247 @@ describe('PaymentReceiptService', () => {
     );
     prisma.paymentAuditLog.findFirst.mockResolvedValue({ id: 'audit-1' } as never);
   }
+
+  it('does not renew a receipt lease after the write barrier closes', async () => {
+    jest.useFakeTimers();
+    let releaseUpload!: () => void;
+    let uploadStarted!: () => void;
+    const started = new Promise<void>((resolve) => { uploadStarted = resolve; });
+    const uploadGate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    minio.uploadBuffer.mockImplementationOnce(async () => {
+      uploadStarted();
+      await uploadGate;
+    });
+
+    const generation = service.ensureReceiptForPayment('tenant-1', 'payment-1');
+    await started;
+    const paymentUpdatesBeforeClose = prisma.payment.update.mock.calls.length;
+    const sequenceMutationsBeforeClose = prisma.receiptSequence.create.mock.calls.length +
+      prisma.receiptSequence.update.mock.calls.length;
+    barrierOpen = false;
+    await jest.advanceTimersByTimeAsync(100_000);
+    releaseUpload();
+    await generation;
+
+    expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+    expect(prisma.payment.update).toHaveBeenCalledTimes(paymentUpdatesBeforeClose);
+    expect(prisma.receiptSequence.create.mock.calls.length +
+      prisma.receiptSequence.update.mock.calls.length).toBe(sequenceMutationsBeforeClose);
+    jest.useRealTimers();
+  });
+
+  it('aborts before receipt finalization when the barrier closes during storage upload', async () => {
+    let releaseUpload!: () => void;
+    let uploadStarted!: () => void;
+    const started = new Promise<void>((resolve) => { uploadStarted = resolve; });
+    const uploadGate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    minio.uploadBuffer.mockImplementationOnce(async () => {
+      uploadStarted();
+      await uploadGate;
+    });
+
+    const generation = service.ensureReceiptForPayment('tenant-1', 'payment-1');
+    await started;
+    const filesCreatedBeforeClose = prisma.file.create.mock.calls.length;
+    const documentsCreatedBeforeClose = prisma.document.create.mock.calls.length;
+    const auditsCreatedBeforeClose = prisma.paymentAuditLog.create.mock.calls.length;
+    const paymentsUpdatedBeforeClose = prisma.payment.update.mock.calls.length;
+    const uploadsBeforeClose = minio.uploadBufferIfAbsentWithMetadata.mock.calls.length;
+    barrierOpen = false;
+    releaseUpload();
+    await generation;
+
+    expect(prisma.file.create).toHaveBeenCalledTimes(filesCreatedBeforeClose);
+    expect(prisma.document.create).toHaveBeenCalledTimes(documentsCreatedBeforeClose);
+    expect(prisma.paymentAuditLog.create).toHaveBeenCalledTimes(auditsCreatedBeforeClose);
+    expect(prisma.payment.update).toHaveBeenCalledTimes(paymentsUpdatedBeforeClose);
+    expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsentWithMetadata).toHaveBeenCalledTimes(uploadsBeforeClose);
+    expect(notificationsService.createNotification).not.toHaveBeenCalled();
+  });
+
+  it('leaves a closed-barrier PUT orphan for same-key receipt finalization on retry', async () => {
+    let releaseUpload!: () => void;
+    let uploadStarted!: () => void;
+    let openAtFinalCheck = false;
+    let writesAtUploadInvocation: Record<string, number> | undefined;
+    let storedObject: {
+      bucket: string;
+      key: string;
+      content: Buffer;
+      etag: string;
+      versionId: string;
+      lastModified: Date;
+    } | null = null;
+    const started = new Promise<void>((resolve) => { uploadStarted = resolve; });
+    const uploadGate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    const lastModified = new Date('2026-08-31T00:00:00.000Z');
+
+    minio.objectExists.mockImplementationOnce(async () => {
+      writeBarrier.isOpen.mockImplementationOnce(() => {
+        openAtFinalCheck = barrierOpen;
+        barrierOpen = false;
+        return openAtFinalCheck;
+      });
+      return false;
+    });
+    minio.uploadBuffer.mockImplementationOnce(async (bucket, key, content) => {
+      storedObject = {
+        bucket,
+        key,
+        content: Buffer.from(content),
+        etag: 'receipt-etag',
+        versionId: 'receipt-version-1',
+        lastModified,
+      };
+    });
+    minio.uploadBufferIfAbsentWithMetadata.mockImplementationOnce(async (...args: unknown[]) => {
+      writesAtUploadInvocation = {
+        fileCreate: prisma.file.create.mock.calls.length,
+        fileUpdateMany: prisma.file.updateMany.mock.calls.length,
+        documentCreate: prisma.document.create.mock.calls.length,
+        paymentUpdate: prisma.payment.update.mock.calls.length,
+        paymentUpdateMany: prisma.payment.updateMany.mock.calls.length,
+        paymentAuditLogCreate: prisma.paymentAuditLog.create.mock.calls.length,
+        receiptSequenceCreate: prisma.receiptSequence.create.mock.calls.length,
+        receiptSequenceUpdate: prisma.receiptSequence.update.mock.calls.length,
+        transactions: prisma.$transaction.mock.calls.length,
+        lockQueries: transactionQueryRawMock.mock.calls.length,
+        notifications: notificationsService.createNotification.mock.calls.length,
+      };
+      expect(barrierOpen).toBe(false);
+      uploadStarted();
+      await uploadGate;
+      await minio.uploadBuffer(...args);
+      return { etag: 'receipt-etag', versionId: 'receipt-version-1' };
+    });
+
+    const generation = service.ensureReceiptForPayment('tenant-1', 'payment-1');
+    await started;
+    expect(openAtFinalCheck).toBe(true);
+    expect(barrierOpen).toBe(false);
+    expect(writesAtUploadInvocation).toBeDefined();
+    releaseUpload();
+    const firstResult = await generation;
+
+    // A conditional PUT can win the filesystem-check/network-start TOCTOU, but its result must remain an unreferenced, non-authoritative orphan.
+    expect(firstResult).toBeNull();
+    expect(storedObject).not.toBeNull();
+    const orphan = storedObject!;
+    const receiptIdentity = defaultPaymentState.receiptNumber;
+    const pdfHash = createHash('sha256').update(orphan.content).digest('hex');
+    const writesAfterClosedAttempt = {
+      fileCreate: prisma.file.create.mock.calls.length,
+      fileUpdateMany: prisma.file.updateMany.mock.calls.length,
+      documentCreate: prisma.document.create.mock.calls.length,
+      paymentUpdate: prisma.payment.update.mock.calls.length,
+      paymentUpdateMany: prisma.payment.updateMany.mock.calls.length,
+      paymentAuditLogCreate: prisma.paymentAuditLog.create.mock.calls.length,
+      receiptSequenceCreate: prisma.receiptSequence.create.mock.calls.length,
+      receiptSequenceUpdate: prisma.receiptSequence.update.mock.calls.length,
+      transactions: prisma.$transaction.mock.calls.length,
+      lockQueries: transactionQueryRawMock.mock.calls.length,
+      notifications: notificationsService.createNotification.mock.calls.length,
+    };
+    expect(writesAtUploadInvocation).toEqual(writesAfterClosedAttempt);
+    expect(prisma.file.create).not.toHaveBeenCalled();
+    expect(prisma.document.create).not.toHaveBeenCalled();
+    expect(prisma.payment.update.mock.calls).not.toContainEqual(
+      expect.objectContaining({ data: expect.objectContaining({ receiptStatus: ReceiptStatus.FAILED }) }),
+    );
+    expect(prisma.payment.updateMany.mock.calls).not.toContainEqual(
+      expect.objectContaining({ data: expect.objectContaining({ receiptStatus: ReceiptStatus.FAILED }) }),
+    );
+    expect(minio.deleteObject).not.toHaveBeenCalled();
+
+    barrierOpen = true;
+    transactionQueryRawMock.mockResolvedValue([
+      { now: new Date('2026-08-31T00:10:00.000Z') },
+    ]);
+    minio.objectExists.mockImplementationOnce(async (bucket, key) =>
+      storedObject?.bucket === bucket && storedObject.key === key,
+    );
+    minio.statObject.mockImplementationOnce(async (bucket, key) => {
+      expect(storedObject).not.toBeNull();
+      expect(bucket).toBe(orphan.bucket);
+      expect(key).toBe(orphan.key);
+      return {
+        size: orphan.content.length,
+        etag: orphan.etag,
+        versionId: orphan.versionId,
+        lastModified: orphan.lastModified,
+        metaData: { 'content-type': 'application/pdf' },
+      };
+    });
+
+    const retryResult = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+    const retryPdf = await minio.getObjectBuffer(orphan.bucket, orphan.key, orphan.versionId);
+    const fileCreate = prisma.file.create.mock.calls[0][0].data;
+
+    expect(retryResult).toEqual(expect.objectContaining({
+      receiptNumber: receiptIdentity,
+      documentId: 'document-1',
+      fileKey: orphan.key,
+      bucket: orphan.bucket,
+    }));
+    expect(defaultPaymentState.receiptNumber).toBe(receiptIdentity);
+    expect(defaultPaymentState.receiptDocumentId).toBe('document-1');
+    expect(orphan.key).toBe(`tenant/tenant-1/payments/payment-1/receipts/${receiptIdentity}.pdf`);
+    expect(minio.objectExists).toHaveBeenNthCalledWith(2, orphan.bucket, orphan.key);
+    expect(minio.statObject).toHaveBeenCalledWith(orphan.bucket, orphan.key);
+    expect(minio.getObjectBuffer).toHaveBeenCalledWith(orphan.bucket, orphan.key, orphan.versionId);
+    expect(retryPdf).toEqual(orphan.content);
+    expect(createHash('sha256').update(retryPdf).digest('hex')).toBe(pdfHash);
+    expect(fileCreate).toEqual(expect.objectContaining({
+      bucket: orphan.bucket,
+      objectKey: orphan.key,
+      mimeType: 'application/pdf',
+      size: orphan.content.length,
+      checksum: pdfHash,
+      objectVersionId: orphan.versionId,
+    }));
+    expect(defaultPaymentState.receiptStatus).toBe(ReceiptStatus.READY);
+    expect(prisma.file.create).toHaveBeenCalledTimes(1);
+    expect(prisma.document.create).toHaveBeenCalledTimes(1);
+    expect(prisma.paymentAuditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.receiptSequence.create).toHaveBeenCalledTimes(1);
+    expect(prisma.receiptSequence.update).toHaveBeenCalledTimes(1);
+    expect(prisma.receiptSequence.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ lastNumber: 1 }),
+    }));
+    expect(minio.uploadBufferIfAbsentWithMetadata).toHaveBeenCalledTimes(1);
+    expect(notificationsService.createNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed without database or storage writes when the barrier query throws', async () => {
+    writeBarrier.isOpen.mockImplementation(() => { throw new Error('barrier state unavailable'); });
+
+    await expect(service.ensureReceiptForPayment('tenant-1', 'payment-1')).resolves.toBeNull();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsentWithMetadata).not.toHaveBeenCalled();
+  });
+
+  it('fails closed without receipt writes when barrier authority is missing', async () => {
+    Reflect.set(service, 'writeBarrier', undefined);
+
+    await expect(service.ensureReceiptForPayment('tenant-1', 'payment-1')).resolves.toBeNull();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(minio.uploadBufferIfAbsentWithMetadata).not.toHaveBeenCalled();
+  });
+
+  it('keeps existing receipt generation behavior when the barrier is disabled', async () => {
+    Reflect.set(service, 'writeBarrier', writeBarrier);
+    const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+    expect(result?.receiptNumber).toBe('R-COMPLE-2026-000001');
+    expect(prisma.file.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps receipt generation available while the write barrier is open', async () => {
+    barrierOpen = true;
+    const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');
+    expect(result?.receiptNumber).toBe('R-COMPLE-2026-000001');
+    expect(prisma.file.create).toHaveBeenCalledTimes(1);
+  });
 
   it('uses the configured bucket when generating a new receipt', async () => {
     const result = await service.ensureReceiptForPayment('tenant-1', 'payment-1');

@@ -1,10 +1,12 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException, ForbiddenException, UnprocessableEntityException } from '@nestjs/common';
+import { Injectable, Inject, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException, ForbiddenException, UnprocessableEntityException } from '@nestjs/common';
 import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus, ScopeType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import type { CreateNotificationInput } from '../notifications/notifications.types';
 import { FinanzasValidators } from './finanzas.validators';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
+import { ReleaseAWriteBarrierService } from '../tenancy/release-a-write-barrier.service';
 import type { AuthenticatedMembership, PortalContext } from '../common/types/request.types';
 import { resolveNotificationPortalContext } from '../common/portal-context';
 import { ExpensesService } from './expenses.service';
@@ -185,7 +187,17 @@ export class FinanzasService {
     private readonly receiptService: PaymentReceiptService,
     private readonly expensesService: ExpensesService,
     private readonly currencyConversionService: CurrencyConversionService,
+    @Inject(ReleaseAWriteBarrierService)
+    private readonly writeBarrier: Pick<ReleaseAWriteBarrierService, 'isOpen'> | undefined = undefined,
   ) {}
+
+  private isWriteBarrierOpen(): boolean {
+    try {
+      return this.writeBarrier?.isOpen() ?? false;
+    } catch {
+      return false;
+    }
+  }
 
   private toConversionDate(date: Date): string {
     const year = date.getUTCFullYear();
@@ -1102,27 +1114,34 @@ export class FinanzasService {
     });
 
     // Global audit remains best-effort; the financial PaymentAuditLog above is strict.
-    void this.auditService.createLog({
-      tenantId,
-      actorUserId,
-      actorMembershipId: membershipId,
-      action: AuditAction.PAYMENT_APPROVE,
-      entityType: 'Payment',
-      entityId: paymentId,
-      metadata: {
-        amount: result.amount,
-        paidAt: result.paidAt?.toISOString() ?? null,
-        fifoAllocated: result.unitId ? true : false,
-      },
-    });
+    const writeAllowed = (): boolean => this.isWriteBarrierOpen();
+    if (writeAllowed()) {
+      void this.auditService.createLog({
+        tenantId,
+        actorUserId,
+        actorMembershipId: membershipId,
+        action: AuditAction.PAYMENT_APPROVE,
+        entityType: 'Payment',
+        entityId: paymentId,
+        metadata: {
+          amount: result.amount,
+          paidAt: result.paidAt?.toISOString() ?? null,
+          fifoAllocated: result.unitId ? true : false,
+        },
+      }, writeAllowed);
+    }
 
     // [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
-    void this.sendPaymentReceivedNotification(tenantId, result, actorUserId);
+    if (writeAllowed()) {
+      void this.sendPaymentReceivedNotification(tenantId, result, actorUserId, writeAllowed);
+    }
 
     // Generate receipt for approved payment (async, non-blocking)
-    void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
-      this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
-    });
+    if (writeAllowed()) {
+      void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
+        this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
+      });
+    }
 
     return this.sanitizePaymentForResponse(result);
   }
@@ -3282,13 +3301,16 @@ export class FinanzasService {
     });
 
     // Send notification to resident about approval (outside transaction, using returned payment)
-    if (approvedPaymentResult) {
-      void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult, actorUserId);
-      
+    const writeAllowed = (): boolean => this.isWriteBarrierOpen();
+    if (approvedPaymentResult && writeAllowed()) {
+      void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult, actorUserId, writeAllowed);
+
       // Generate receipt for approved payment (async, non-blocking)
-      void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
-        this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
-      });
+      if (writeAllowed()) {
+        void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
+          this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
+        });
+      }
     }
 
     return this.sanitizePaymentForResponse(approvedPaymentResult!);
@@ -3616,10 +3638,11 @@ export class FinanzasService {
     tenantId: string,
     payment: Payment,
     excludeUserId?: string,
+    writeAllowed?: () => boolean,
   ): Promise<void> {
     try {
       // Load unit occupants if this payment is unit-scoped
-      if (!payment.unitId) return;
+      if (!payment.unitId || (writeAllowed && !this.isWriteBarrierOpen())) return;
 
       const unit = await this.prisma.unit.findUnique({
         where: { id: payment.unitId },
@@ -3643,8 +3666,9 @@ export class FinanzasService {
 
       // Send to all active residents
       for (const userId of recipientIds) {
+        if (writeAllowed && !this.isWriteBarrierOpen()) return;
         const amount = (payment.amount / 100).toFixed(2);
-        await this.notificationsService.createNotification({
+        const notification: CreateNotificationInput = {
           tenantId,
           userId,
           type: 'PAYMENT_RECEIVED',
@@ -3658,7 +3682,12 @@ export class FinanzasService {
             paidAt: payment.paidAt?.toISOString(),
           },
           deliveryMethods: ['IN_APP', 'EMAIL'],
-        });
+        };
+        if (writeAllowed) {
+          await this.notificationsService.createNotification(notification, writeAllowed);
+        } else {
+          await this.notificationsService.createNotification(notification);
+        }
       }
     } catch (error) {
       // Fire-and-forget: log but never fail

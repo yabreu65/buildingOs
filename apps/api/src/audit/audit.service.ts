@@ -73,9 +73,13 @@ export class AuditService {
    * do not change the caller's outcome; financial mutations must use
    * createLogRequired instead.
    */
-  async createLog(input: AuditLogInput): Promise<void> {
+  async createLog(
+    input: AuditLogInput,
+    writeAllowed?: () => boolean,
+  ): Promise<void> {
     try {
-      await this.createLogRequired(input, this.prisma);
+      if (writeAllowed && !this.isWriteAllowed(writeAllowed)) return;
+      await this.createLogRequired(input, this.prisma, writeAllowed);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error('[AuditService] Failed to write audit log', {
@@ -99,7 +103,11 @@ export class AuditService {
     }
   }
 
-  async createLogRequired(input: AuditLogInput, tx: AuditWriteClient): Promise<void> {
+  async createLogRequired(
+    input: AuditLogInput,
+    tx: AuditWriteClient,
+    writeAllowed?: () => boolean,
+  ): Promise<void> {
     const tenantId = this.normalizeTenantId(input.tenantId);
     await this.writeLog(
       {
@@ -112,6 +120,7 @@ export class AuditService {
         metadata: input.metadata,
       },
       tx,
+      writeAllowed,
     );
   }
 
@@ -247,11 +256,13 @@ export class AuditService {
       metadata?: unknown;
     },
     tx: AuditWriteClient,
+    writeAllowed?: () => boolean,
   ): Promise<void> {
     const metadata = this.normalizeMetadata(
       input.metadata === undefined ? {} : input.metadata,
     );
 
+    if (writeAllowed && !this.isWriteAllowed(writeAllowed)) return;
     await tx.auditLog.create({
       data: {
         tenantId: input.tenantId,
@@ -263,6 +274,14 @@ export class AuditService {
         metadata,
       },
     });
+  }
+
+  private isWriteAllowed(writeAllowed: () => boolean): boolean {
+    try {
+      return writeAllowed();
+    } catch {
+      return false;
+    }
   }
 
   private assertValidDate(value: Date | undefined, field: 'dateFrom' | 'dateTo'): void {

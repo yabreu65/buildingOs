@@ -31,6 +31,7 @@ import { MovementAllocationService } from './movement-allocation.service';
 import { UnitGroupService } from './unit-group.service';
 import { AdjustmentsService } from './adjustments.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { TenancyModule } from '../tenancy/tenancy.module';
 import { ResidentAccessModule } from '../resident-access/resident-access.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -69,7 +70,7 @@ const { provider: paymentProvider, options: paymentOptions } = resolvePaymentGat
 
 @Module({
   imports: [
-    PrismaModule, ResidentAccessModule,
+    PrismaModule, ResidentAccessModule, TenancyModule,
     EmailModule,
     NotificationsModule,
     StorageModule,

@@ -1,3 +1,8 @@
+jest.mock('fs', () => {
+  const actual = jest.requireActual<typeof import('fs')>('fs');
+  return { ...actual, accessSync: jest.fn(actual.accessSync) };
+});
+
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -10,11 +15,16 @@ describe('ReleaseAWriteBarrierService', () => {
   let sentinelPath: string;
 
   const buildService = (
-    nodeEnv: 'development' | 'production',
+    nodeEnv: 'development' | 'staging' | 'production' | 'test',
+    enabled = false,
     configuredSentinelPath?: string,
   ): ReleaseAWriteBarrierService =>
     new ReleaseAWriteBarrierService({
-      get: () => ({ nodeEnv, releaseAWriteBarrierPath: configuredSentinelPath }),
+      get: () => ({
+        nodeEnv,
+        releaseAWriteBarrierEnabled: enabled,
+        releaseAWriteBarrierPath: configuredSentinelPath,
+      }),
     } as ConfigService);
 
   beforeEach(() => {
@@ -28,22 +38,36 @@ describe('ReleaseAWriteBarrierService', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('keeps non-production local behavior open when no path is configured', () => {
-    expect(buildService('development').isOpen()).toBe(true);
+  it.each([
+    ['staging-like', 'production'],
+    ['release-staging-like', 'production'],
+    ['staging NODE_ENV', 'staging'],
+  ] as const)(
+    'keeps %s writes open when the feature is disabled',
+    (_context, nodeEnv) => {
+      expect(buildService(nodeEnv).isOpen()).toBe(true);
+    },
+  );
+
+  it.each(['development', 'test'] as const)(
+    'keeps %s writes open when the feature is disabled',
+    (nodeEnv) => {
+      expect(buildService(nodeEnv).isOpen()).toBe(true);
+    },
+  );
+
+  it('fails closed when enabled in production without a sentinel path', () => {
+    expect(buildService('production', true).isOpen()).toBe(false);
   });
 
-  it('fails closed in production when the sentinel path is not configured', () => {
-    expect(buildService('production').isOpen()).toBe(false);
-  });
-
-  it('opens only when the configured accessible directory has no sentinel', () => {
-    expect(buildService('production', sentinelPath).isOpen()).toBe(true);
+  it('opens when enabled and the accessible control directory has no sentinel', () => {
+    expect(buildService('production', true, sentinelPath).isOpen()).toBe(true);
   });
 
   it('closes when the sentinel is present', () => {
     fs.writeFileSync(sentinelPath, 'closed');
 
-    expect(buildService('production', sentinelPath).isOpen()).toBe(false);
+    expect(buildService('production', true, sentinelPath).isOpen()).toBe(false);
   });
 
   it.each(['file', 'symlink'] as const)(
@@ -55,13 +79,23 @@ describe('ReleaseAWriteBarrierService', () => {
         fs.symlinkSync(path.join(root, 'missing-target'), sentinelPath);
       }
 
-      expect(buildService('production', sentinelPath).isOpen()).toBe(false);
+      expect(buildService('production', true, sentinelPath).isOpen()).toBe(false);
     },
   );
 
+  it('fails closed when the control directory is unreadable', () => {
+    const access = jest.mocked(fs.accessSync);
+    access.mockImplementationOnce(() => {
+      throw new Error('permission denied');
+    });
+
+    expect(buildService('production', true, sentinelPath).isOpen()).toBe(false);
+    access.mockRestore();
+  });
+
   it('fails closed when the configured control directory is missing', () => {
     expect(
-      buildService('production', path.join(root, 'missing', 'CLOSED')).isOpen(),
+      buildService('production', true, path.join(root, 'missing', 'CLOSED')).isOpen(),
     ).toBe(false);
   });
 
@@ -69,7 +103,7 @@ describe('ReleaseAWriteBarrierService', () => {
     fs.rmdirSync(controlDirectory);
     fs.writeFileSync(controlDirectory, 'not a directory');
 
-    expect(buildService('production', sentinelPath).isOpen()).toBe(false);
+    expect(buildService('production', true, sentinelPath).isOpen()).toBe(false);
   });
 
   it('fails closed when the sentinel parent path traverses through a file', () => {
@@ -77,6 +111,6 @@ describe('ReleaseAWriteBarrierService', () => {
     fs.rmdirSync(controlDirectory);
     fs.writeFileSync(controlDirectory, 'not a directory');
 
-    expect(buildService('production', sentinelBehindFile).isOpen()).toBe(false);
+    expect(buildService('production', true, sentinelBehindFile).isOpen()).toBe(false);
   });
 });

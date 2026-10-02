@@ -237,6 +237,7 @@ describePostgres('Payment receipt PostgreSQL concurrency', () => {
       prisma,
       storage as never,
       { createNotification: jest.fn().mockResolvedValue(undefined) } as never,
+      { isOpen: () => true },
     );
   }
 

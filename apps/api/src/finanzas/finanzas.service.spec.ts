@@ -14,6 +14,7 @@ import { Prisma } from '@prisma/client';
 import { CurrencyConversionService } from './currency-conversion.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
+import { ReleaseAWriteBarrierService } from '../tenancy/release-a-write-barrier.service';
 import {
   BuildingDelinquencyQueryDto,
   CreateChargeDto,
@@ -41,12 +42,18 @@ describe('FinanzasService', () => {
   let notificationsService: { createNotification: jest.Mock };
   let expensesService: ExpensesService;
   let receiptService: PaymentReceiptService;
+  let writeBarrierOpen = true;
 
   // ========== SETUP ==========
   beforeEach(async () => {
+    writeBarrierOpen = true;
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         FinanzasService,
+        {
+          provide: ReleaseAWriteBarrierService,
+          useValue: { isOpen: jest.fn(() => writeBarrierOpen) },
+        },
         {
           provide: PrismaService,
           useValue: {
@@ -1329,6 +1336,44 @@ describe('FinanzasService', () => {
       jest.spyOn(prismaService.charge, 'update').mockResolvedValue({} as any);
     });
 
+    it('skips approval follow-up audit, notification and receipt calls when the barrier closes at commit', async () => {
+      jest.spyOn(prismaService, '$transaction').mockImplementation(async (callback: (tx: never) => Promise<unknown>) => {
+        const result = await callback(prismaService as never);
+        writeBarrierOpen = false;
+        return result;
+      });
+
+      await service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { paidAt: '2026-07-24T12:00:00.000Z' },
+      );
+
+      expect(auditService.createLog).not.toHaveBeenCalled();
+      expect(notificationsService.createNotification).not.toHaveBeenCalled();
+      expect(receiptService.ensureReceiptForPayment).not.toHaveBeenCalled();
+    });
+
+    it('skips approval follow-ups when barrier authority is missing', async () => {
+      Reflect.set(service, 'writeBarrier', undefined);
+
+      await service.approvePayment(
+        tenantId,
+        buildingId,
+        paymentId,
+        ['TENANT_ADMIN'],
+        membershipId,
+        { paidAt: '2026-07-24T12:00:00.000Z' },
+      );
+
+      expect(auditService.createLog).not.toHaveBeenCalled();
+      expect(notificationsService.createNotification).not.toHaveBeenCalled();
+      expect(receiptService.ensureReceiptForPayment).not.toHaveBeenCalled();
+    });
+
     it('keeps a resident-selected payment on a single charge without FIFO allocation', async () => {
       const result = await service.approvePayment(
         tenantId,
@@ -1367,7 +1412,7 @@ describe('FinanzasService', () => {
         metadata: expect.objectContaining({
           paidAt: '2026-07-24T12:00:00.000Z',
         }),
-      }));
+      }), expect.any(Function));
     });
 
     it('does not complete approval when the financial audit event fails', async () => {

@@ -78,6 +78,56 @@ describe('NotificationsService', () => {
       });
     });
 
+    it('skips notification creation when the optional flow guard is closed', async () => {
+      const allowWrite = jest.fn(() => false);
+      await Reflect.apply(service.createNotification, service, [{
+        tenantId,
+        userId,
+        type: 'PAYMENT_RECEIVED',
+        title: 'Title',
+        body: 'Body',
+      }, allowWrite]);
+
+      expect(prismaService.notification.create).not.toHaveBeenCalled();
+      expect(auditService.createLog).not.toHaveBeenCalled();
+      expect(emailService.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('rechecks the optional flow guard after notification creation before audit', async () => {
+      const allowWrite = jest.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+      await Reflect.apply(service.createNotification, service, [{
+        tenantId,
+        userId,
+        type: 'PAYMENT_RECEIVED',
+        title: 'Title',
+        body: 'Body',
+        deliveryMethods: ['EMAIL'],
+      }, allowWrite]);
+
+      expect(prismaService.notification.create).toHaveBeenCalledTimes(1);
+      expect(auditService.createLog).not.toHaveBeenCalled();
+      expect(emailService.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('rechecks the optional flow guard after audit before email', async () => {
+      const allowWrite = jest.fn()
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(false);
+      await Reflect.apply(service.createNotification, service, [{
+        tenantId,
+        userId,
+        type: 'PAYMENT_RECEIVED',
+        title: 'Payment',
+        body: 'Body',
+        deliveryMethods: ['EMAIL'],
+      }, allowWrite]);
+
+      expect(prismaService.notification.create).toHaveBeenCalledTimes(1);
+      expect(auditService.createLog).toHaveBeenCalledTimes(1);
+      expect(emailService.sendEmail).not.toHaveBeenCalled();
+    });
+
     it('does not throw on failure (fire-and-forget)', async () => {
       prismaService.notification.create.mockRejectedValue(new Error('DB error'));
 

@@ -10,10 +10,13 @@ export class ReleaseAWriteBarrierService {
   /** Returns whether local writes are currently allowed by the release sentinel. */
   isOpen(): boolean {
     const config = this.configService.get();
-    const sentinelPath = config.releaseAWriteBarrierPath;
+    if (!config.releaseAWriteBarrierEnabled) {
+      return true;
+    }
 
+    const sentinelPath = config.releaseAWriteBarrierPath;
     if (!sentinelPath) {
-      return config.nodeEnv === 'development' || config.nodeEnv === 'test';
+      return false;
     }
 
     try {

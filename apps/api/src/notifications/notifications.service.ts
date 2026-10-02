@@ -39,12 +39,16 @@ export class NotificationsService {
    *
    * @param input Notification input
    */
-  async createNotification(input: CreateNotificationInput): Promise<void> {
+  async createNotification(
+    input: CreateNotificationInput,
+    writeAllowed?: () => boolean,
+  ): Promise<void> {
     try {
       // Determine delivery methods
       const deliveryMethods = input.deliveryMethods ?? ['IN_APP'];
 
       // Create notification in database
+      if (writeAllowed && !this.isWriteAllowed(writeAllowed)) return;
       const notification = await this.prisma.notification.create({
         data: {
           tenantId: input.tenantId,
@@ -58,18 +62,24 @@ export class NotificationsService {
       });
 
       // Audit log (also fire-and-forget)
-      await this.auditService.createLog({
+      if (writeAllowed && !this.isWriteAllowed(writeAllowed)) return;
+      const auditInput = {
         tenantId: input.tenantId,
-        action: 'NOTIFICATION_CREATED',
+        action: 'NOTIFICATION_CREATED' as const,
         entityType: 'Notification',
         entityId: notification.id,
         actorUserId: undefined, // System action, no actor
         metadata: { type: input.type },
-      });
+      };
+      if (writeAllowed) {
+        await this.auditService.createLog(auditInput, writeAllowed);
+      } else {
+        await this.auditService.createLog(auditInput);
+      }
 
       // Send email if configured and requested
-      if (deliveryMethods.includes('EMAIL')) {
-        await this.sendEmailIfConfigured(input);
+      if (deliveryMethods.includes('EMAIL') && (!writeAllowed || this.isWriteAllowed(writeAllowed))) {
+        await this.sendEmailIfConfigured(input, writeAllowed);
       }
     } catch (err) {
       // RULE: Never fail main operation on notification failure
@@ -242,8 +252,12 @@ export class NotificationsService {
   /**
    * Private: Send email if notification type is configured for email
    */
-  private async sendEmailIfConfigured(input: CreateNotificationInput): Promise<void> {
+  private async sendEmailIfConfigured(
+    input: CreateNotificationInput,
+    writeAllowed?: () => boolean,
+  ): Promise<void> {
     try {
+      if (writeAllowed && !this.isWriteAllowed(writeAllowed)) return;
       const config = DEFAULT_NOTIFICATION_CONFIG;
 
       // Check if this notification type should trigger an email
@@ -275,6 +289,7 @@ export class NotificationsService {
 
       // Send email (fire-and-forget, EmailService handles failures)
       // Use PAYMENT_SUBMITTED as a generic notification type (we can extend this later)
+      if (writeAllowed && !this.isWriteAllowed(writeAllowed)) return;
       await this.emailService.sendEmail(
         {
           to: user.email,
@@ -291,6 +306,14 @@ export class NotificationsService {
         error: err instanceof Error ? err.message : String(err),
         type: input.type,
       });
+    }
+  }
+
+  private isWriteAllowed(writeAllowed: () => boolean): boolean {
+    try {
+      return writeAllowed();
+    } catch {
+      return false;
     }
   }
 

@@ -68,4 +68,60 @@ grep -Fx $'target\t107\t0' "$release_a_manifest" >/dev/null \
   || fail_test 'future migration 108 exists'
 pass_test 'Release A inventory targets exactly 107 and has no follow-up migration 108'
 
-printf '1..6\n'
+PRODUCTION_COMPOSE="$ROOT_DIR/infra/docker/docker-compose.production.yml"
+STAGING_COMPOSE="$ROOT_DIR/infra/docker/docker-compose.staging.yml"
+RELEASE_STAGING_COMPOSE="$ROOT_DIR/infra/docker/docker-compose.release-staging.yml"
+grep -F 'RELEASE_A_WRITE_BARRIER_ENABLED: "true"' "$PRODUCTION_COMPOSE" >/dev/null \
+  || fail_test 'production API does not explicitly enable the write barrier'
+grep -F 'RELEASE_A_WRITE_BARRIER_PATH: /run/buildingos-release-control/CLOSED' "$PRODUCTION_COMPOSE" >/dev/null \
+  || fail_test 'production API does not configure the CLOSED sentinel path'
+grep -F '/opt/pawtech/apps/buildingos/release-control:/run/buildingos-release-control:ro' "$PRODUCTION_COMPOSE" >/dev/null \
+  || fail_test 'production API control directory is not mounted read-only'
+pass_test 'production API enables the barrier with the CLOSED sentinel and read-only control mount'
+
+staging_api="$(awk '/^  buildingos-api:/{capture=1} capture{print} capture && /^  [^ ]/{if ($1 != "buildingos-api:") exit}' "$STAGING_COMPOSE")"
+release_staging_api="$(awk '/^  buildingos-api:/{capture=1} capture{print} capture && /^  [^ ]/{if ($1 != "buildingos-api:") exit}' "$RELEASE_STAGING_COMPOSE")"
+grep -F 'RELEASE_A_WRITE_BARRIER_ENABLED: "false"' <<< "$staging_api" >/dev/null \
+  || fail_test 'staging API does not explicitly disable the write barrier'
+grep -F 'RELEASE_A_WRITE_BARRIER_ENABLED: "false"' <<< "$release_staging_api" >/dev/null \
+  || fail_test 'release-staging API does not explicitly disable the write barrier'
+if printf '%s\n%s\n' "$staging_api" "$release_staging_api" | grep -F 'RELEASE_A_WRITE_BARRIER_PATH:' >/dev/null; then
+  fail_test 'staging API unexpectedly configures a write-barrier path'
+fi
+pass_test 'staging APIs explicitly disable the barrier and configure no sentinel path'
+
+FULL_COMPOSE="$ROOT_DIR/infra/docker/docker-compose.full.yml"
+full_api="$(awk '/^  buildingos-api:/{capture=1} capture{print} capture && /^  [^ ]/{if ($1 != "buildingos-api:") exit}' "$FULL_COMPOSE")"
+assert_api_waits_for_bucket_initializer() {
+  local api_block="$1" label="$2"
+  if ! awk '
+    /^    depends_on:$/ { in_dependencies=1; next }
+    in_dependencies && /^    [^ ]/ { in_dependencies=0 }
+    in_dependencies && /^      createbuckets:$/ { in_initializer=1; next }
+    in_initializer && /^        condition: service_completed_successfully$/ { found=1 }
+    in_initializer && /^      [^ ]/ { in_initializer=0 }
+    END { exit !found }
+  ' <<< "$api_block"; then
+    fail_test "$label API does not wait for successful bucket initialization"
+  fi
+}
+assert_api_waits_for_bucket_initializer "$full_api" 'local'
+assert_api_waits_for_bucket_initializer "$release_staging_api" 'release-staging'
+pass_test 'local and release-staging APIs wait for successful bucket initialization'
+
+LOCAL_COMPOSE="$ROOT_DIR/infra/docker/docker-compose.yml"
+for compose_file in "$LOCAL_COMPOSE" "$RELEASE_STAGING_COMPOSE"; do
+  create_line="$(line_number 'mc mb --ignore-existing myminio/${S3_BUCKET:?S3_BUCKET is required}' "$compose_file")"
+  version_line="$(line_number 'mc version enable myminio/${S3_BUCKET:?S3_BUCKET is required}' "$compose_file")"
+  private_line="$(line_number 'mc anonymous set private myminio/${S3_BUCKET:?S3_BUCKET is required}' "$compose_file")"
+  [[ -n "$create_line" && -n "$version_line" && -n "$private_line" ]] \
+    || fail_test "bucket initializer in $compose_file is missing its create, versioning, or private-policy step"
+  (( create_line < version_line && version_line < private_line )) \
+    || fail_test "bucket initializer in $compose_file must enforce private access after create and versioning"
+  if grep -E 'mc anonymous set (download|upload|public)|mc policy set (download|upload|public)' "$compose_file" >/dev/null; then
+    fail_test "bucket initializer in $compose_file grants public/download/upload access"
+  fi
+done
+pass_test 'local and release-staging bucket initializers enforce private anonymous access without public grants'
+
+printf '1..10\n'

@@ -371,16 +371,25 @@ pass 'pinned previous production API retains nullable legacy write and V3 public
 compatibility_migration="$ROOT_DIR/apps/api/prisma/migrations/20260919000000_release_a_dual_liquidation_compatibility/migration.sql"
 [[ -f "$compatibility_migration" ]] || fail_test 'migration 107 compatibility SQL is missing'
 compatibility_sql="$(<"$compatibility_migration")"
-[[ "$compatibility_sql" == *'The pre-v1 runtime intentionally omits publicationIntegrityVersion on new'* \
-  && "$compatibility_sql" == *'NEW."publicationIntegrityVersion" = 1'* \
-  && "$compatibility_sql" == *'NEW."publicationSnapshot" -> '\''version'\'') IS DISTINCT FROM '\''3'\''::jsonb'* \
-  && "$compatibility_sql" == *'NEW."publicationSnapshot" ->> '\''version'\'' IS DISTINCT FROM '\''4'\'''* \
+[[ "$compatibility_sql" == *'Release A compatibility is a surgical transition over the hardened DB106'* \
+  && "$compatibility_sql" == *'hardened DB106 V4 publication contract markers are missing'* \
+  && "$compatibility_sql" == *'expected DB106 legacy V1/V2 publication-version clause was not found exactly once'* \
+  && "$compatibility_sql" == *'expected DB106 new-NULL-insert rejection was not found exactly once'* \
+  && "$compatibility_sql" == *'expenseSourceEvidence'* \
+  && "$compatibility_sql" == *'publicationExpenseEvidence'* \
+  && "$compatibility_sql" == *'allocationChargeEvidence'* \
+  && "$compatibility_sql" == *'distributionAllocationEvidence'* \
+  && "$compatibility_sql" == *'publicationAllocationEvidence'* \
+  && "$compatibility_sql" == *'generatedChargeEvidence'* \
+  && "$compatibility_sql" == *'modern liquidation publication requires complete matching V4 evidence'* \
+  && "$compatibility_sql" == *"AND (NEW.\"publicationSnapshot\" -> 'version') IS DISTINCT FROM '3'::jsonb THEN"* \
   && "$compatibility_sql" == *'modern liquidation distribution recipients must belong to the liquidation tenant and building'* \
   && "$compatibility_sql" == *'validate_liquidation_distribution_snapshot('* \
+  && "$compatibility_sql" != *'CREATE OR REPLACE FUNCTION enforce_liquidation_publication_integrity('* \
   && "$compatibility_sql" != *'UPDATE "Liquidation"'* \
   && "$compatibility_sql" != *'SET "publicationIntegrityVersion"'* ]] \
-  || fail_test 'migration 107 does not preserve legacy and modern publication contracts'
-pass 'migration 107 allows legacy null/V3 writes without rewriting historical rows and retains modern v1 validation'
+  || fail_test 'migration 107 does not preserve legacy and modern publication contracts via guarded rewrites'
+pass 'migration 107 surgically adds legacy V3/NULL compatibility while preserving DB106 V4 validation'
 
 origin_trigger="$(git show "$PR_CANDIDATE_SHA:apps/api/prisma/migrations/20260918000000_enforce_modern_distribution_unit_ownership/migration.sql")"
 [[ "$origin_trigger" == *'IF TG_OP = '\''INSERT'\'' AND NEW."publicationIntegrityVersion" IS NULL THEN'* \

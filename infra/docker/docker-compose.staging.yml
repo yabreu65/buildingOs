@@ -149,6 +149,7 @@ services:
     environment:
       APP_ENV: staging
       NODE_ENV: ${NODE_ENV:?NODE_ENV is required}
+      RELEASE_A_WRITE_BARRIER_ENABLED: "false"
       DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
       REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
       WEB_ORIGIN: ${WEB_ORIGIN:?WEB_ORIGIN is required}

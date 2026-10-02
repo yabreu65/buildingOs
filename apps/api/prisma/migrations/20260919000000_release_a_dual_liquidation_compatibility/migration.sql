@@ -1,186 +1,92 @@
--- Release A compatibility: preserve historical NULL integrity rows and accept
--- the pinned pre-v1 writer's V3 publication snapshot without weakening v1.
-CREATE OR REPLACE FUNCTION enforce_liquidation_publication_integrity()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+-- Release A compatibility is a surgical transition over the hardened DB106
+-- functions. Keep every publication and distribution invariant already present
+-- in the database; widen only the legacy V1/V2 allowlist to include V3 and
+-- permit new NULL-integrity drafts without changing V1 ownership validation.
+DO $$
 DECLARE
-  modern boolean;
+  function_definition text;
+  rewritten_definition text;
+  old_clause constant text := $old$
+          OR (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '1'::jsonb
+             AND (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '2'::jsonb THEN$old$;
+  new_clause constant text := $new$
+          OR (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '1'::jsonb
+             AND (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '2'::jsonb
+             AND (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '3'::jsonb THEN$new$;
 BEGIN
-  IF TG_OP = 'DELETE' THEN
-    IF OLD."status" = 'PUBLISHED' THEN
-      RAISE EXCEPTION 'published liquidations cannot be deleted';
-    END IF;
-    RETURN OLD;
+  SELECT pg_get_functiondef(p.oid)
+  INTO function_definition
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = current_schema()
+    AND p.proname = 'enforce_liquidation_publication_integrity'
+    AND pg_get_function_identity_arguments(p.oid) = '';
+
+  IF function_definition IS NULL THEN
+    RAISE EXCEPTION 'liquidation publication trigger function is missing';
   END IF;
 
-  IF NEW."publicationIntegrityVersion" IS NOT NULL
-     AND NEW."publicationIntegrityVersion" <> 1 THEN
-    RAISE EXCEPTION 'liquidation publicationIntegrityVersion is invalid';
+  -- Guard against running against the wrong function generation or a partial
+  -- DB106 definition. These markers represent the modern V4 metadata contract.
+  IF position('NEW."publicationSnapshot" -> ''version'' IS DISTINCT FROM ''4''::jsonb' IN function_definition) = 0
+     OR position('NEW."publicationSnapshot" ->> ''period'' IS DISTINCT FROM NEW."period"' IN function_definition) = 0
+     OR position('NEW."publicationSnapshot" ->> ''chargePeriod'' IS DISTINCT FROM NEW."chargePeriod"' IN function_definition) = 0
+     OR position('NEW."publicationSnapshot" -> ''publicationIntegrityVersion'' IS DISTINCT FROM ''1''::jsonb' IN function_definition) = 0
+     OR position('publishing a liquidation requires publication metadata' IN function_definition) = 0
+     OR position('modern liquidation identity and evidence are immutable' IN function_definition) = 0
+     OR position('expenseSourceEvidence' IN function_definition) = 0
+     OR position('publicationExpenseEvidence' IN function_definition) = 0
+     OR position('allocationChargeEvidence' IN function_definition) = 0
+     OR position('distributionAllocationEvidence' IN function_definition) = 0
+     OR position('publicationAllocationEvidence' IN function_definition) = 0
+     OR position('generatedChargeEvidence' IN function_definition) = 0
+     OR position('modern liquidation publication requires complete matching V4 evidence' IN function_definition) = 0 THEN
+    RAISE EXCEPTION 'hardened DB106 V4 publication contract markers are missing';
   END IF;
 
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."status" <> 'DRAFT' THEN
-      RAISE EXCEPTION 'new liquidations must start in DRAFT';
-    END IF;
-
-    IF NEW."publicationIntegrityVersion" = 1 AND (
-      NEW."period" !~ '^\d{4}-(0[1-9]|1[0-2])$'
-      OR NEW."chargePeriod" IS NULL
-      OR NEW."chargePeriod" !~ '^\d{4}-(0[1-9]|1[0-2])$'
-      OR NEW."chargePeriod" <> to_char((NEW."period" || '-01')::date + INTERVAL '1 month', 'YYYY-MM')
-      OR NEW."valuationMode" IS NULL
-      OR NEW."distributionSnapshot" IS NULL
-    ) THEN
-      RAISE EXCEPTION 'publication integrity v1 drafts require next chargePeriod, frozen distribution and valuation evidence';
-    END IF;
-    RETURN NEW;
+  IF length(function_definition) - length(replace(function_definition, old_clause, ''))
+       <> length(old_clause) THEN
+    RAISE EXCEPTION 'expected DB106 legacy V1/V2 publication-version clause was not found exactly once';
   END IF;
 
-  IF NEW."publicationIntegrityVersion" IS DISTINCT FROM OLD."publicationIntegrityVersion" THEN
-    RAISE EXCEPTION 'liquidation publicationIntegrityVersion is immutable after insert';
-  END IF;
-
-  IF OLD."status" = 'PUBLISHED' THEN
-    RAISE EXCEPTION 'published liquidations cannot be updated';
-  END IF;
-
-  modern := COALESCE(OLD."publicationIntegrityVersion" = 1, false);
-  IF modern AND (
-    NEW."id" IS DISTINCT FROM OLD."id" OR NEW."tenantId" IS DISTINCT FROM OLD."tenantId"
-    OR NEW."buildingId" IS DISTINCT FROM OLD."buildingId" OR NEW."period" IS DISTINCT FROM OLD."period"
-    OR NEW."chargePeriod" IS DISTINCT FROM OLD."chargePeriod"
-    OR NEW."valuationMode" IS DISTINCT FROM OLD."valuationMode"
-    OR NEW."baseCurrency" IS DISTINCT FROM OLD."baseCurrency"
-    OR NEW."totalAmountMinor" IS DISTINCT FROM OLD."totalAmountMinor"
-    OR NEW."totalsByCurrency" IS DISTINCT FROM OLD."totalsByCurrency"
-    OR NEW."expenseSnapshot" IS DISTINCT FROM OLD."expenseSnapshot"
-    OR NEW."distributionSnapshot" IS DISTINCT FROM OLD."distributionSnapshot"
-    OR NEW."unitCount" IS DISTINCT FROM OLD."unitCount"
-    OR NEW."generatedByMembershipId" IS DISTINCT FROM OLD."generatedByMembershipId"
-    OR NEW."generatedAt" IS DISTINCT FROM OLD."generatedAt"
-    OR NEW."grossExpenseAmountMinor" IS DISTINCT FROM OLD."grossExpenseAmountMinor"
-    OR NEW."adjustmentAmountMinor" IS DISTINCT FROM OLD."adjustmentAmountMinor"
-    OR NEW."preIncomeAmountMinor" IS DISTINCT FROM OLD."preIncomeAmountMinor"
-    OR NEW."incomeOffsetAmountMinor" IS DISTINCT FROM OLD."incomeOffsetAmountMinor"
-    OR NEW."netDistributableAmountMinor" IS DISTINCT FROM OLD."netDistributableAmountMinor"
-    OR NEW."incomeOffsetSnapshot" IS DISTINCT FROM OLD."incomeOffsetSnapshot"
-    OR NEW."incomeOffsetsByCurrency" IS DISTINCT FROM OLD."incomeOffsetsByCurrency"
-    OR NEW."createdAt" IS DISTINCT FROM OLD."createdAt"
-  ) THEN
-    RAISE EXCEPTION 'modern liquidation identity and evidence are immutable';
-  END IF;
-
-  IF modern AND (
-    NEW."period" !~ '^\d{4}-(0[1-9]|1[0-2])$'
-    OR NEW."chargePeriod" IS NULL
-    OR NEW."chargePeriod" !~ '^\d{4}-(0[1-9]|1[0-2])$'
-    OR NEW."chargePeriod" <> to_char((NEW."period" || '-01')::date + INTERVAL '1 month', 'YYYY-MM')
-  ) THEN
-    RAISE EXCEPTION 'modern liquidation chargePeriod must equal period plus one month';
-  END IF;
-
-  IF NEW."status" IS DISTINCT FROM OLD."status" THEN
-    IF OLD."status" = 'DRAFT' AND NEW."status" IN ('REVIEWED', 'CANCELED') THEN
-      NULL;
-    ELSIF OLD."status" = 'REVIEWED' AND NEW."status" IN ('PUBLISHED', 'CANCELED') THEN
-      NULL;
-    ELSE
-      RAISE EXCEPTION 'invalid liquidation status transition';
-    END IF;
-  END IF;
-
-  IF NEW."status" = 'PUBLISHED' THEN
-    IF NOT modern THEN
-      IF NEW."publicationSnapshot" IS NULL
-         OR (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '1'::jsonb
-            AND (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '2'::jsonb
-            AND (NEW."publicationSnapshot" -> 'version') IS DISTINCT FROM '3'::jsonb THEN
-        RAISE EXCEPTION 'legacy liquidation drafts cannot be published';
-      END IF;
-      RETURN NEW;
-    END IF;
-    IF NEW."publicationSnapshot" IS NULL OR NEW."publishedAt" IS NULL
-       OR NEW."publishedByMembershipId" IS NULL THEN
-      RAISE EXCEPTION 'publishing a liquidation requires publication metadata';
-    END IF;
-    IF NEW."publicationSnapshot" ->> 'version' IS DISTINCT FROM '4'
-       OR NEW."publicationSnapshot" ->> 'liquidationId' IS DISTINCT FROM NEW."id"
-       OR NEW."publicationSnapshot" ->> 'tenantId' IS DISTINCT FROM NEW."tenantId"
-       OR NEW."publicationSnapshot" ->> 'buildingId' IS DISTINCT FROM NEW."buildingId"
-       OR NEW."publicationSnapshot" ->> 'period' IS DISTINCT FROM NEW."period"
-       OR NEW."publicationSnapshot" ->> 'chargePeriod' IS DISTINCT FROM NEW."chargePeriod"
-       OR NEW."publicationSnapshot" ->> 'publicationIntegrityVersion' IS DISTINCT FROM '1' THEN
-      RAISE EXCEPTION 'modern liquidation publication requires matching V4 integrity evidence';
-    END IF;
-  END IF;
-
-  RETURN NEW;
+  rewritten_definition := replace(function_definition, old_clause, new_clause);
+  EXECUTE rewritten_definition;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS "Liquidation_publication_integrity" ON "Liquidation";
-CREATE TRIGGER "Liquidation_publication_integrity"
-BEFORE INSERT OR UPDATE OR DELETE ON "Liquidation"
-FOR EACH ROW EXECUTE FUNCTION enforce_liquidation_publication_integrity();
-
--- The pre-v1 runtime intentionally omits publicationIntegrityVersion on new
--- drafts. Keep v1 recipient ownership and distribution validation unchanged.
-CREATE OR REPLACE FUNCTION enforce_liquidation_publication_integrity_origin()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+DO $$
+DECLARE
+  function_definition text;
+  rewritten_definition text;
+  old_clause constant text := $old$
+  IF TG_OP = 'INSERT' AND NEW."publicationIntegrityVersion" IS NULL THEN
+    RAISE EXCEPTION 'new liquidations require publication integrity v1';
+  END IF;
+$old$;
 BEGIN
-  IF TG_OP = 'INSERT' AND NEW."publicationIntegrityVersion" = 1
-     AND EXISTS (
-       SELECT 1
-       FROM jsonb_array_elements(COALESCE(NEW."distributionSnapshot" -> 'allocations', '[]'::jsonb)) AS item(value)
-       WHERE NOT EXISTS (
-         SELECT 1
-         FROM "Unit" unit
-         WHERE unit."id" = item.value ->> 'unitId'
-           AND unit."tenantId" = NEW."tenantId"
-           AND unit."buildingId" = NEW."buildingId"
-       )
-     )
-  THEN
-    RAISE EXCEPTION 'modern liquidation distribution recipients must belong to the liquidation tenant and building';
-  ELSIF TG_OP = 'UPDATE'
-     AND NEW."publicationIntegrityVersion" = 1
-     AND (
-       NEW."distributionSnapshot" IS DISTINCT FROM OLD."distributionSnapshot"
-       OR NEW."tenantId" IS DISTINCT FROM OLD."tenantId"
-       OR NEW."buildingId" IS DISTINCT FROM OLD."buildingId"
-     )
-     AND EXISTS (
-       SELECT 1
-       FROM jsonb_array_elements(COALESCE(NEW."distributionSnapshot" -> 'allocations', '[]'::jsonb)) AS item(value)
-       WHERE NOT EXISTS (
-         SELECT 1
-         FROM "Unit" unit
-         WHERE unit."id" = item.value ->> 'unitId'
-           AND unit."tenantId" = NEW."tenantId"
-           AND unit."buildingId" = NEW."buildingId"
-       )
-     )
-  THEN
-    RAISE EXCEPTION 'modern liquidation distribution recipients must belong to the liquidation tenant and building';
+  SELECT pg_get_functiondef(p.oid)
+  INTO function_definition
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = current_schema()
+    AND p.proname = 'enforce_liquidation_publication_integrity_origin'
+    AND pg_get_function_identity_arguments(p.oid) = '';
+
+  IF function_definition IS NULL THEN
+    RAISE EXCEPTION 'liquidation publication origin trigger function is missing';
   END IF;
 
-  IF TG_OP <> 'DELETE' AND NEW."publicationIntegrityVersion" = 1 THEN
-    PERFORM validate_liquidation_distribution_snapshot(
-      NEW."distributionSnapshot",
-      NEW."tenantId",
-      NEW."buildingId",
-      NEW."totalAmountMinor"
-    );
+  IF position('modern liquidation distribution recipients must belong to the liquidation tenant and building' IN function_definition) = 0
+     OR position('validate_liquidation_distribution_snapshot(' IN function_definition) = 0 THEN
+    RAISE EXCEPTION 'hardened DB106 origin ownership or distribution validation markers are missing';
   END IF;
 
-  RETURN COALESCE(NEW, OLD);
+  IF length(function_definition) - length(replace(function_definition, old_clause, ''))
+       <> length(old_clause) THEN
+    RAISE EXCEPTION 'expected DB106 new-NULL-insert rejection was not found exactly once';
+  END IF;
+
+  rewritten_definition := replace(function_definition, old_clause, '');
+  EXECUTE rewritten_definition;
 END;
 $$;
-
-DROP TRIGGER IF EXISTS "Liquidation_publication_integrity_origin" ON "Liquidation";
-CREATE TRIGGER "Liquidation_publication_integrity_origin"
-BEFORE INSERT OR UPDATE ON "Liquidation"
-FOR EACH ROW EXECUTE FUNCTION enforce_liquidation_publication_integrity_origin();

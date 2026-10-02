@@ -60,6 +60,10 @@ export const createConfigSchema = (_nodeEnv: string) => {
   return z.object({
     // Server (always required)
     NODE_ENV: z.enum(['development', 'staging', 'production', 'test']),
+    RELEASE_A_WRITE_BARRIER_ENABLED: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((value) => value === 'true'),
     RELEASE_A_WRITE_BARRIER_PATH: z.preprocess(
       emptyStringToUndefined,
       z.string().trim().min(1).optional(),
@@ -429,6 +433,7 @@ export function loadConfigOrThrow(): AppConfig {
     const config: AppConfig = {
       // Server
       nodeEnv,
+      releaseAWriteBarrierEnabled: parsed.RELEASE_A_WRITE_BARRIER_ENABLED,
       releaseAWriteBarrierPath: parsed.RELEASE_A_WRITE_BARRIER_PATH,
       port: parsed.PORT,
       logLevel: parsed.LOG_LEVEL,
