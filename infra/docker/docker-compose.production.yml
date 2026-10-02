@@ -20,6 +20,10 @@ services:
     restart: unless-stopped
     env_file:
       - ${API_ENV_FILE:-/opt/pawtech/env/buildingos.env}
+    environment:
+      RELEASE_A_WRITE_BARRIER_PATH: /run/buildingos-release-control/CLOSED
+    volumes:
+      - /opt/pawtech/apps/buildingos/release-control:/run/buildingos-release-control:ro
     networks:
       - pawtech_public
       - pawtech_internal

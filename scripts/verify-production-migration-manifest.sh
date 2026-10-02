@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
-readonly MANIFEST_FILE="${MANIFEST_FILE:-$SCRIPT_DIR/manifests/production-migrations-81-to-106.tsv}"
+readonly MANIFEST_FILE="${MANIFEST_FILE:-$SCRIPT_DIR/manifests/production-migrations-81-to-107.tsv}"
 readonly METADATA_EXCEPTION_FILE="${METADATA_EXCEPTION_FILE:-$SCRIPT_DIR/manifests/production-migration-metadata-exceptions.tsv}"
 readonly MIGRATIONS_DIR="${MIGRATIONS_DIR:-$REPO_ROOT/apps/api/prisma/migrations}"
 readonly POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-pawtech-postgres}"
@@ -57,6 +57,7 @@ EXPECTED_NAMES=(
   '20260916000000_harden_phase3d2_distribution_integrity'
   '20260917000000_harden_phase3d2_nullable_publication_validation'
   '20260918000000_enforce_modern_distribution_unit_ownership'
+  '20260919000000_release_a_dual_liquidation_compatibility'
 )
 
 EXPECTED_CHECKSUMS=(
@@ -85,6 +86,7 @@ EXPECTED_CHECKSUMS=(
   'fcd9d2b86ad38ad40e2f6c30ccab201d612433a42f3656e5287d7b5167eb677d'
   'aa926621eb544bb6d243e1c6c6d76dcf13a1c8e8b7c541b1030982984b8b4b83'
   '5932afb02d9a47bab3ff779bad155b293acf4a31d7a4da91ef17b7501fe1dfa1'
+  '06fb5a5f746b45b97c6701133bc6ff678b76b98f4a615c74d94b7e7dce6a87bd'
 )
 
 readonly EXPECTED_PENDING="${#EXPECTED_NAMES[@]}"
@@ -220,6 +222,8 @@ validate_local_migrations() {
     [[ ! -L "$path" ]] || fail 'migration_directory_symlink'
     name="${path##*/}"
     [[ "$name" =~ ^[0-9]{8,14}_[a-z0-9_]+$ ]] || fail 'migration_name_invalid'
+    [[ "$name" < "${EXPECTED_NAMES[$((EXPECTED_PENDING - 1))]}" || "$name" == "${EXPECTED_NAMES[$((EXPECTED_PENDING - 1))]}" ]] \
+      || fail 'migration_after_target_present'
     sql_file="$path/migration.sql"
     [[ -f "$sql_file" && ! -L "$sql_file" ]] || fail 'migration_sql_invalid'
     LOCAL_NAMES[${#LOCAL_NAMES[@]}]="$name"

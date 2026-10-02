@@ -562,12 +562,33 @@ validate_application_rollback_compatibility() {
   local database_name="${2:-buildingos_db}"
   local previous_sha="${3:-}"
   local target_sha="${4:-}"
-  local result
+  local result migration_validation
 
   [[ "$#" -eq 4 ]] || security_fail 'Application rollback compatibility requires previous and target SHAs'
   ROLLBACK_COMPATIBILITY_BASIS=''
   ROLLBACK_COMPATIBILITY_PREVIOUS_SHA=''
   ROLLBACK_COMPATIBILITY_TARGET_SHA=''
+
+  if [[ "${MIGRATION_TARGET_APPLIED:-0}" == 107 ]]; then
+    [[ "$previous_sha" == 'db82d3d37fc6184a6d4063709b9a15b923371695' || "$previous_sha" == "$target_sha" ]] \
+      || security_fail 'DB107 compatibility is restricted to the pinned old runtime or the Release A candidate itself'
+    [[ "$(git rev-parse HEAD 2>/dev/null)" == "$target_sha" ]] \
+      || security_fail 'DB107 compatibility target is not the checked-out candidate'
+    [[ -f "$SCRIPT_DIR/verify-production-migration-manifest.sh" && ! -L "$SCRIPT_DIR/verify-production-migration-manifest.sh" ]] \
+      || security_fail 'Trusted DB107 manifest verifier is missing or invalid'
+    bash "$SCRIPT_DIR/verify-production-migration-manifest.sh" verify-files \
+      || security_fail 'DB107 migration manifest verification failed'
+    migration_validation="$(env POSTGRES_CONTAINER="$postgres_container" DATABASE_NAME="$database_name" \
+      bash "$SCRIPT_DIR/verify-production-migration-manifest.sh" verify-db post 2>&1)" \
+      || security_fail 'DB107 database migration verification failed'
+    [[ "$migration_validation" == *$'target=107'* ]] \
+      || security_fail 'DB107 database migration verifier did not prove target 107'
+    ROLLBACK_COMPATIBILITY_BASIS='DB107_PINNED_RUNTIME'
+    ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$previous_sha"
+    ROLLBACK_COMPATIBILITY_TARGET_SHA="$target_sha"
+    printf 'Application rollback compatibility verified: SAFE (basis=DB107_PINNED_RUNTIME)\n'
+    return 0
+  fi
 
   if target_requires_modern_liquidation_insert "$target_sha"; then
     previous_application_supports_modern_liquidation_insert "$previous_sha" \
@@ -621,7 +642,8 @@ generate_rollback_compatibility_receipt() {
     || security_fail 'Receipt generation requires immutable image digests'
   [[ "${MIGRATION_TARGET_APPLIED:-}" =~ ^[0-9]+$ && "$migration_count" == "$MIGRATION_TARGET_APPLIED" ]] \
     || security_fail 'Receipt generation requires the exact verified migration target'
-  [[ "$ROLLBACK_COMPATIBILITY_BASIS" == 'SAME_DB_CONTRACT' || "$ROLLBACK_COMPATIBILITY_BASIS" == 'DATA_COMPATIBILITY' ]] \
+  [[ "$ROLLBACK_COMPATIBILITY_BASIS" == 'SAME_DB_CONTRACT' || "$ROLLBACK_COMPATIBILITY_BASIS" == 'DATA_COMPATIBILITY' \
+    || "$ROLLBACK_COMPATIBILITY_BASIS" == 'DB107_PINNED_RUNTIME' ]] \
     || security_fail 'Receipt generation requires validated rollback compatibility'
   [[ "$ROLLBACK_COMPATIBILITY_TARGET_SHA" == "$target_sha" && "$ROLLBACK_COMPATIBILITY_PREVIOUS_SHA" == "$previous_sha" ]] \
     || security_fail 'Receipt generation inputs differ from validated rollback compatibility'

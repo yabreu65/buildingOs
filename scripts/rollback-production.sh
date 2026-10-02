@@ -19,9 +19,13 @@ fail() {
 ROLLBACK_API_WAS_RUNNING=false
 ROLLBACK_API_QUIESCED=false
 ROLLBACK_RECREATE_STARTED=false
+ROLLBACK_BARRIER_ACTIVE=false
+ROLLBACK_CONTROL_DIR='/opt/pawtech/apps/buildingos/release-control'
+ROLLBACK_SENTINEL="$ROLLBACK_CONTROL_DIR/CLOSED"
+ROLLBACK_RECORD_SUCCESS=false
+PHASE='preflight'
 ROLLBACK_FROM_API_DIGEST=''
 ROLLBACK_FROM_WEB_DIGEST=''
-ROLLBACK_RECORD_SUCCESS=false
 ROLLBACK_RECOVERY_POINT_ID='NOT_EVALUATED'
 ROLLBACK_RECOVERY_POINT_RECEIPT_PATH='NOT_EVALUATED'
 ROLLBACK_RECOVERY_POINT_BUNDLE_PATH='NOT_EVALUATED'
@@ -29,20 +33,55 @@ ROLLBACK_RECOVERY_POINT_RECEIPT_SHA256='NOT_EVALUATED'
 ROLLBACK_RECOVERY_POINT_SOURCE_SHA='NOT_EVALUATED'
 ROLLBACK_RECOVERY_POINT_REMOTE_ROOT='NOT_EVALUATED'
 
-restore_quiesced_api_on_exit() {
+ensure_rollback_barrier() {
+  local temporary_sentinel
+  ROLLBACK_BARRIER_ACTIVE=true
+  [[ -d /opt/pawtech/apps/buildingos && ! -L /opt/pawtech/apps/buildingos ]] || return 1
+  if [[ -e "$ROLLBACK_CONTROL_DIR" || -L "$ROLLBACK_CONTROL_DIR" ]]; then
+    [[ -d "$ROLLBACK_CONTROL_DIR" && ! -L "$ROLLBACK_CONTROL_DIR" ]] || return 1
+  else
+    install -d -m 700 "$ROLLBACK_CONTROL_DIR" || return 1
+  fi
+  chmod 700 "$ROLLBACK_CONTROL_DIR" || return 1
+  if [[ -e "$ROLLBACK_SENTINEL" || -L "$ROLLBACK_SENTINEL" ]]; then
+    [[ -f "$ROLLBACK_SENTINEL" && ! -L "$ROLLBACK_SENTINEL" ]] || return 1
+  else
+    temporary_sentinel="$(mktemp "$ROLLBACK_CONTROL_DIR/.CLOSED.XXXXXX")" || return 1
+    chmod 600 "$temporary_sentinel" || return 1
+    mv -n -- "$temporary_sentinel" "$ROLLBACK_SENTINEL" || return 1
+  fi
+  [[ -f "$ROLLBACK_SENTINEL" && ! -L "$ROLLBACK_SENTINEL" ]] || return 1
+  chmod 600 "$ROLLBACK_SENTINEL" || return 1
+  ROLLBACK_BARRIER_ACTIVE=true
+}
+
+remove_release_a_barrier() {
+  [[ "$ROLLBACK_BARRIER_ACTIVE" == true && -f "$ROLLBACK_SENTINEL" && ! -L "$ROLLBACK_SENTINEL" ]] || return 1
+  rm -f -- "$ROLLBACK_SENTINEL" || return 1
+  [[ ! -e "$ROLLBACK_SENTINEL" && ! -L "$ROLLBACK_SENTINEL" ]] || return 1
+}
+
+rollback_fail_closed() {
+  ensure_rollback_barrier || printf 'ERROR: rollback write barrier could not be proven closed.\n' >&2
+  docker stop --timeout 30 buildingos-api buildingos-web >/dev/null 2>&1 || true
+  if [[ "$(docker inspect --format '{{.State.Running}}' buildingos-api 2>/dev/null || true)" != false \
+    || "$(docker inspect --format '{{.State.Running}}' buildingos-web 2>/dev/null || true)" != false ]]; then
+    printf 'ERROR: rollback application stop state is uncertain; operator intervention is required.\n' >&2
+  fi
+}
+
+rollback_exit() {
   local rc=$?
   trap - EXIT
-  if [[ "$ROLLBACK_API_WAS_RUNNING" == true && "$ROLLBACK_API_QUIESCED" == true && "$ROLLBACK_RECREATE_STARTED" == false ]]; then
-    if docker start buildingos-api >/dev/null 2>&1; then
-      ROLLBACK_API_QUIESCED=false
-    else
-      printf 'ERROR: Unable to restore the current API after rollback validation stopped\n' >&2
-      rc=1
+  if [[ "$ROLLBACK_BARRIER_ACTIVE" == true && "$ROLLBACK_RECORD_SUCCESS" != true ]]; then
+    rollback_fail_closed || true
+    if [[ "$ROLLBACK_API_QUIESCED" == true ]]; then
+      write_rollback_record FAILED || true
     fi
   fi
   exit "$rc"
 }
-trap restore_quiesced_api_on_exit EXIT
+trap rollback_exit EXIT
 
 publish_current_successful_selector() {
   local deployments_dir="$1" record="$2" target_sha="$3" selector="$4" temporary_selector
@@ -232,6 +271,8 @@ validate_rollback_receipt \
   "$PREVIOUS_API_DIGEST" \
   "$PREVIOUS_WEB_DIGEST"
 readonly migration_count="$VALIDATED_ROLLBACK_MIGRATION_COUNT"
+[[ "$migration_count" == 107 ]] || fail 'Application rollback requires the verified DB107 compatibility contract'
+MIGRATION_TARGET_APPLIED="$migration_count"
 
 cd "$APP_DIR"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Production checkout is not clean"
@@ -250,14 +291,19 @@ ROLLBACK_FROM_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)
   || fail 'Unable to capture the current Web image before rollback'
 [[ "$ROLLBACK_FROM_API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$ROLLBACK_FROM_WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
   || fail 'Current rollback source images are not immutable'
+ensure_rollback_barrier || fail 'Unable to establish the Release A CLOSED write barrier'
 ROLLBACK_API_QUIESCED=true
-"${compose[@]}" stop --timeout 30 buildingos-api
-[[ "$(docker inspect --format '{{.State.Running}}' buildingos-api)" != 'true' ]] \
+"${compose[@]}" stop --timeout 30 buildingos-api buildingos-web
+[[ "$(docker inspect --format '{{.State.Running}}' buildingos-api)" == false ]] \
   || fail 'Current API remained running during rollback compatibility validation'
+[[ "$(docker inspect --format '{{.State.Running}}' buildingos-web)" == false ]] \
+  || fail 'Current Web remained running during rollback compatibility validation'
 
 current_migration_count="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
 [[ "$current_migration_count" == "$migration_count" ]] || fail "Database migration count changed after compatibility review"
 validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$EXPECTED_CURRENT_SHA"
+[[ "$ROLLBACK_COMPATIBILITY_BASIS" == 'DB107_PINNED_RUNTIME' ]] \
+  || fail 'Rollback pair did not receive the exact DB107 compatibility PASS'
 
 docker image inspect "$PREVIOUS_API_DIGEST" >/dev/null
 docker image inspect "$PREVIOUS_WEB_DIGEST" >/dev/null
@@ -269,6 +315,7 @@ export IMAGE_TAG="$rollback_tag"
 export BUILD_REVISION="$EXPECTED_CURRENT_SHA"
 PHASE='application-recreate'
 write_rollback_record IN_PROGRESS
+remove_release_a_barrier || fail 'Unable to securely release the write barrier for validated old-runtime rollback'
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
 ROLLBACK_RECREATE_STARTED=true
 
@@ -294,6 +341,7 @@ active_web_digest="$(docker inspect --format '{{.Image}}' buildingos-web)"
 bind_unique_prior_success_recovery_point "$DEPLOYMENTS_DIR" || true
 write_rollback_record SUCCESS
 ROLLBACK_RECORD_SUCCESS=true
+ROLLBACK_BARRIER_ACTIVE=false
 if ! publish_current_successful_selector "$DEPLOYMENTS_DIR" "$RECORD" "$PREVIOUS_SHA" "$CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR"; then
   printf 'ERROR: rollback record succeeded but the current-successful selector was not published; the prior selector is stale and operator intervention is required\n' >&2
   exit 1

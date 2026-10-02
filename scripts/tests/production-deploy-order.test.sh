@@ -139,11 +139,52 @@ assert_child_environment() {
 assert_child_environment
 grep -F 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Current API remained running during rollback compatibility validation' "$ROLLBACK_SCRIPT" >/dev/null
-grep -F 'docker start buildingos-api' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'Current Web remained running during rollback compatibility validation' "$ROLLBACK_SCRIPT" >/dev/null
+if grep -F 'docker start buildingos-api' "$ROLLBACK_SCRIPT" >/dev/null; then exit 1; fi
+if grep -F 'docker start buildingos-web' "$ROLLBACK_SCRIPT" >/dev/null; then exit 1; fi
 grep -F 'Interrupted rollback state does not match the running predecessor or source images' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'RETRY_PREVIOUS_SHA="$from_sha"' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'write_rollback_record SUCCESS' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'target_sha=%s' "$ROLLBACK_SCRIPT" >/dev/null
+
+old_api_stop_line="$(line_number 'stop_release_a_apps || fail' "$DEPLOY_SCRIPT")"
+barrier_closed_line="$(line_number 'ensure_release_a_barrier || fail' "$DEPLOY_SCRIPT")"
+barrier_open_line="$(line_number 'remove_release_a_barrier || fail' "$DEPLOY_SCRIPT")"
+manifest_pass_line="$(line_number 'verify-production-migration-manifest.sh verify-db post' "$DEPLOY_SCRIPT")"
+compatibility_pass_line="$(line_number 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$DEPLOY_SCRIPT")"
+candidate_start_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$DEPLOY_SCRIPT")"
+api_container_health_line="$(line_number_after "$candidate_start_line" 'wait_for_container_health buildingos-api' "$DEPLOY_SCRIPT")"
+web_container_health_line="$(line_number_after "$candidate_start_line" 'wait_for_container_health buildingos-web' "$DEPLOY_SCRIPT")"
+api_health_line="$(line_number_after "$candidate_start_line" 'check_http api-health' "$DEPLOY_SCRIPT")"
+readyz_line="$(line_number_after "$api_health_line" 'check_http api-readyz' "$DEPLOY_SCRIPT")"
+web_login_line="$(line_number_after "$readyz_line" 'check_http web-login' "$DEPLOY_SCRIPT")"
+post_release_api_line="$(line_number_after "$barrier_open_line" 'check_http api-health' "$DEPLOY_SCRIPT")"
+post_release_readyz_line="$(line_number_after "$post_release_api_line" 'check_http api-readyz' "$DEPLOY_SCRIPT")"
+post_release_login_line="$(line_number_after "$post_release_readyz_line" 'check_http web-login' "$DEPLOY_SCRIPT")"
+observability_line="$(line_number "PHASE='observability'" "$DEPLOY_SCRIPT")"
+success_line="$(line_number 'write_record SUCCESS' "$DEPLOY_SCRIPT")"
+selector_line="$(line_number 'if ! publish_current_successful_selector; then' "$DEPLOY_SCRIPT")"
+[[ -n "$old_api_stop_line" && -n "$barrier_closed_line" && -n "$barrier_open_line" && -n "$manifest_pass_line" && -n "$compatibility_pass_line" ]] \
+  || { printf 'FAIL: Release A stop/barrier/manifest/compatibility gates are missing\n' >&2; exit 1; }
+[[ -n "$candidate_start_line" && -n "$api_container_health_line" && -n "$web_container_health_line" ]] \
+  || { printf 'FAIL: candidate API and Web container health gates are missing\n' >&2; exit 1; }
+[[ -n "$api_health_line" && -n "$readyz_line" && -n "$web_login_line" \
+  && -n "$post_release_api_line" && -n "$post_release_readyz_line" && -n "$post_release_login_line" ]] \
+  || { printf 'FAIL: candidate API, readyz, and Web login gates are missing before or after release\n' >&2; exit 1; }
+[[ -n "$observability_line" && -n "$success_line" && -n "$selector_line" ]] \
+  || { printf 'FAIL: observability SUCCESS and selector gates are missing\n' >&2; exit 1; }
+(( backup_phase_line < old_api_stop_line && build_phase_line < old_api_stop_line ))
+(( old_api_stop_line < barrier_closed_line && barrier_closed_line < migrations_phase_line ))
+(( migrations_phase_line < manifest_pass_line && manifest_pass_line < compatibility_pass_line ))
+(( compatibility_pass_line < candidate_start_line && candidate_start_line < api_container_health_line ))
+(( api_container_health_line < web_container_health_line && web_container_health_line < api_health_line ))
+(( api_health_line < readyz_line && readyz_line < web_login_line ))
+(( web_login_line < barrier_open_line && barrier_open_line < post_release_api_line ))
+(( post_release_api_line < post_release_readyz_line && post_release_readyz_line < post_release_login_line ))
+(( post_release_login_line < observability_line ))
+(( observability_line < success_line && success_line < selector_line ))
+grep -F 'recovery_point_resume_api' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'RELEASE_A_BARRIER_ACTIVE' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'Rollback runtime image IDs do not match the requested previous digests' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Rollback API revision does not match the requested previous SHA' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Rollback Web revision does not match the requested previous SHA' "$ROLLBACK_SCRIPT" >/dev/null
@@ -161,7 +202,12 @@ grep -F 'previous_web_digest="$(read_deployment_record_value "$record" web_diges
 grep -F 'migration_count" == "$MIGRATION_TARGET_APPLIED" || "$migration_count" == '\''99'\'' || "$migration_count" == '\''98'\'' || "$migration_count" == '\''97'\''' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'is_retryable_migration_count "$migration_count" || continue' "$DEPLOY_SCRIPT" >/dev/null
 grep -F '(( 10#$actual >= 98 && 10#$actual <= 10#$MIGRATION_TARGET_APPLIED ))' "$DEPLOY_SCRIPT" >/dev/null
-grep -F 'scripts/manifests/production-migrations-81-to-106.tsv' "$WORKFLOW" >/dev/null
+grep -F 'test -f scripts/manifests/production-migrations-81-to-107.tsv && test ! -L scripts/manifests/production-migrations-81-to-107.tsv' "$WORKFLOW" >/dev/null
+grep -F 'scripts/manifests/production-migrations-81-to-107.tsv' "$WORKFLOW" >/dev/null
+if grep -F 'scripts/manifests/production-migrations-81-to-106.tsv' "$WORKFLOW" >/dev/null; then
+  printf 'FAIL: workflow still requires the historical 106 manifest\n' >&2
+  exit 1
+fi
 if grep -F 'scripts/manifests/production-migrations-81-to-98.tsv' "$WORKFLOW" >/dev/null; then
   exit 1
 fi

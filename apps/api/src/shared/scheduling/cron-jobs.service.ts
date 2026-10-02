@@ -5,6 +5,7 @@ import { FinanzasService } from '../../finanzas/finanzas.service';
 import { TicketsService } from '../../tickets/tickets.service';
 import { RecurringExpenseService } from '../../finanzas/recurring-expense.service';
 import { FinanceSummaryService } from '../../finanzas/finance-summary.service';
+import { ReleaseAWriteBarrierService } from '../../tenancy/release-a-write-barrier.service';
 
 interface CronJobResult<T> {
   readonly success: boolean;
@@ -22,6 +23,7 @@ export class CronJobsService {
     private readonly ticketsService: TicketsService,
     private readonly recurringExpenseService: RecurringExpenseService,
     private readonly financeSummaryService: FinanceSummaryService,
+    private readonly writeBarrier: ReleaseAWriteBarrierService,
   ) {}
 
   /**
@@ -63,6 +65,7 @@ export class CronJobsService {
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async dispatchScheduledCommunications(): Promise<CronJobResult<{ dispatchedCount: number }>> {
+    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('dispatchScheduledCommunications', async () => {
       const count = await this.communicationsService.dispatchScheduledCommunications();
       return { dispatchedCount: count };
@@ -74,6 +77,7 @@ export class CronJobsService {
    */
   @Cron('0 8 1 * *')
   async autoCreateMonthlyExpensePeriods(): Promise<CronJobResult<{ created: number }>> {
+    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('autoCreateMonthlyExpensePeriods', async () => {
       return await this.finanzasService.autoCreateMonthlyExpensePeriods();
     });
@@ -84,6 +88,7 @@ export class CronJobsService {
    */
   @Cron('0 10 * * *')
   async sendPaymentReminders(): Promise<CronJobResult<{ count: number }>> {
+    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('sendPaymentReminders', async () => {
       return await this.finanzasService.sendPaymentReminders();
     });
@@ -96,6 +101,7 @@ export class CronJobsService {
    */
   @Cron('0 * * * *') // Every hour at :00
   async escalateUrgentTickets(): Promise<CronJobResult<{ escalatedCount: number }>> {
+    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('escalateUrgentTickets', async () => {
       return await this.ticketsService.escalateUrgentTickets();
     });
@@ -107,6 +113,7 @@ export class CronJobsService {
    */
   @Cron('0 6 * * *')
   async processRecurringExpenses(): Promise<CronJobResult<{ createdCount: number }>> {
+    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('processRecurringExpenses', async () => {
       return await this.recurringExpenseService.processRecurringExpenses();
     });
@@ -118,6 +125,7 @@ export class CronJobsService {
    */
   @Cron('0 1 1 * *')
   async sendMonthlyFinanceSummaries(): Promise<CronJobResult<{ sentCount: number }>> {
+    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('sendMonthlyFinanceSummaries', async () => {
       return await this.financeSummaryService.sendMonthlyFinanceSummaries();
     });

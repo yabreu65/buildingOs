@@ -9,6 +9,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { TenancyService } from '../tenancy/tenancy.service';
+import { ReleaseAWriteBarrierService } from '../tenancy/release-a-write-barrier.service';
 import { AuditService } from '../audit/audit.service';
 import { AuthService, AuthResponse as SessionAuthResponse } from '../auth/auth.service';
 import { PlanEntitlementsService } from '../billing/plan-entitlements.service';
@@ -44,6 +45,7 @@ export class InvitationsService {
     private readonly auditService: AuditService,
     private readonly planEntitlements: PlanEntitlementsService,
     private readonly authService: AuthService,
+    private readonly writeBarrier: ReleaseAWriteBarrierService,
   ) {}
 
   /**
@@ -164,11 +166,6 @@ export class InvitationsService {
 
     // Expired
     if (invitation.expiresAt < new Date()) {
-      // Auto-mark as expired
-      await this.prisma.invitation.update({
-        where: { id: invitation.id },
-        data: { status: InvitationStatus.EXPIRED },
-      });
       throw new NotFoundException('Invitación inválida o expirada');
     }
 
@@ -547,6 +544,10 @@ export class InvitationsService {
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async markExpiredInvitations(): Promise<number> {
+    if (!this.writeBarrier.isOpen()) {
+      return 0;
+    }
+
     const now = new Date();
 
     // Find all PENDING invitations that have expired

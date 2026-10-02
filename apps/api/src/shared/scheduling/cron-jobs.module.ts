@@ -4,6 +4,7 @@ import { FinanzasModule } from '../../finanzas/finanzas.module';
 import { TicketsModule } from '../../tickets/tickets.module';
 import { AppConfigModule } from '../../config/config.module';
 import { PrismaModule } from '../../prisma/prisma.module';
+import { TenancyModule } from '../../tenancy/tenancy.module';
 import { CronJobsService } from './cron-jobs.service';
 import { CronJobsTriggerController } from './cron-jobs-trigger.controller';
 
@@ -15,6 +16,7 @@ import { CronJobsTriggerController } from './cron-jobs-trigger.controller';
     CommunicationsModule,
     FinanzasModule,
     TicketsModule,
+    TenancyModule,
   ],
   controllers: [CronJobsTriggerController],
   providers: [CronJobsService],

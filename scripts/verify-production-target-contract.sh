@@ -15,9 +15,9 @@ target_tree="$1"
 [[ -d "$target_tree" && ! -L "$target_tree" ]] || fail 'target tree is not a regular directory'
 [[ -f "$TRUSTED_VERIFIER" && ! -L "$TRUSTED_VERIFIER" ]] || fail 'trusted verifier is missing or invalid'
 
-manifest_file="$target_tree/scripts/manifests/production-migrations-81-to-106.tsv"
+manifest_file="$target_tree/scripts/manifests/production-migrations-81-to-107.tsv"
 migrations_dir="$target_tree/apps/api/prisma/migrations"
-[[ -f "$manifest_file" && ! -L "$manifest_file" ]] || fail 'target 81-to-106 manifest is missing or invalid'
+[[ -f "$manifest_file" && ! -L "$manifest_file" ]] || fail 'target 81-to-107 manifest is missing or invalid'
 [[ -d "$migrations_dir" && ! -L "$migrations_dir" ]] || fail 'target migrations directory is missing or invalid'
 
 MANIFEST_FILE="$manifest_file" MIGRATIONS_DIR="$migrations_dir" \
