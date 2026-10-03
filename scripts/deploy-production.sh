@@ -107,6 +107,9 @@ RECOVERY_POINT_OBJECT_BACKUP_DESTINATION=''
 RECOVERY_POINT_REMOTE_ROOT=''
 RECOVERY_POINT_ID=''
 RECORD_SUCCESS=false
+RELEASE_A_BARRIER_ACTIVE=false
+RELEASE_A_CONTROL_DIR="$PRODUCTION_ROOT/release-control"
+RELEASE_A_SENTINEL="$RELEASE_A_CONTROL_DIR/CLOSED"
 
 cleanup_target_tree() {
   if [[ "$TARGET_TREE_ACTIVE" == true ]]; then
@@ -358,6 +361,9 @@ publish_current_successful_selector() {
 on_error() {
   local rc=$?
   trap - ERR
+  if [[ "$RELEASE_A_BARRIER_ACTIVE" == true ]]; then
+    fail_closed_release_a || true
+  fi
   recovery_point_restore_and_resume || true
   [[ "$RECORD_SUCCESS" == true ]] || write_record FAILED || true
   printf 'Production deployment stopped in phase %s (exit %s). No automatic rollback or database restore was attempted.\n' "$PHASE" "$rc" >&2
@@ -368,6 +374,9 @@ on_signal() {
   local signal="$1" rc=1
   case "$signal" in INT) rc=130 ;; TERM) rc=143 ;; esac
   trap - ERR INT TERM
+  if [[ "$RELEASE_A_BARRIER_ACTIVE" == true ]]; then
+    fail_closed_release_a || true
+  fi
   recovery_point_restore_and_resume || true
   [[ "$RECORD_SUCCESS" == true ]] || write_record FAILED || true
   printf 'Production deployment interrupted in phase %s; recovery-point policy restoration was attempted before exit.\n' "$PHASE" >&2
@@ -567,11 +576,79 @@ recovery_point_resume_api() {
   [[ "$RECOVERY_POINT_API_QUIESCED" == true ]] || return 0
   # This callback is reached only after the fence library proved original policy readback.
   RECOVERY_POINT_POLICY_RESTORED=true
-  if [[ "$RECOVERY_POINT_API_WAS_RUNNING" == true ]]; then
+  if [[ "$RELEASE_A_BARRIER_ACTIVE" != true && "$RECOVERY_POINT_API_WAS_RUNNING" == true ]]; then
     docker start buildingos-api >/dev/null
     wait_for_container_health buildingos-api
   fi
   RECOVERY_POINT_API_QUIESCED=false
+}
+
+ensure_release_a_barrier() {
+  local temporary_sentinel
+  RELEASE_A_BARRIER_ACTIVE=true
+  [[ ! -L "$PRODUCTION_ROOT" && -d "$PRODUCTION_ROOT" ]] || return 1
+  if [[ -e "$RELEASE_A_CONTROL_DIR" || -L "$RELEASE_A_CONTROL_DIR" ]]; then
+    [[ -d "$RELEASE_A_CONTROL_DIR" && ! -L "$RELEASE_A_CONTROL_DIR" ]] || return 1
+  else
+    install -d -m 711 "$RELEASE_A_CONTROL_DIR" || return 1
+  fi
+  chmod 711 "$RELEASE_A_CONTROL_DIR" || return 1
+  [[ "$(recovery_point_portable_stat_mode "$RELEASE_A_CONTROL_DIR")" == 711 ]] || return 1
+  if [[ -e "$RELEASE_A_SENTINEL" || -L "$RELEASE_A_SENTINEL" ]]; then
+    [[ -f "$RELEASE_A_SENTINEL" && ! -L "$RELEASE_A_SENTINEL" ]] || return 1
+  else
+    temporary_sentinel="$(mktemp "$RELEASE_A_CONTROL_DIR/.CLOSED.XXXXXX")" || return 1
+    chmod 600 "$temporary_sentinel" || return 1
+    mv -n -- "$temporary_sentinel" "$RELEASE_A_SENTINEL" || return 1
+  fi
+  [[ -f "$RELEASE_A_SENTINEL" && ! -L "$RELEASE_A_SENTINEL" ]] || return 1
+  chmod 600 "$RELEASE_A_SENTINEL" || return 1
+  [[ "$(recovery_point_portable_stat_mode "$RELEASE_A_SENTINEL")" == 600 ]] || return 1
+  RELEASE_A_BARRIER_ACTIVE=true
+}
+
+stop_release_a_apps() {
+  docker stop --timeout 30 buildingos-api buildingos-web >/dev/null
+  [[ "$(docker inspect --format '{{.State.Running}}' buildingos-api)" == false ]] || return 1
+  [[ "$(docker inspect --format '{{.State.Running}}' buildingos-web)" == false ]] || return 1
+}
+
+fail_closed_release_a() {
+  ensure_release_a_barrier || printf 'ERROR: unable to prove Release A barrier sentinel; operator intervention is required.\n' >&2
+  docker stop --timeout 30 buildingos-api buildingos-web >/dev/null 2>&1 || true
+  if [[ "$(docker inspect --format '{{.State.Running}}' buildingos-api 2>/dev/null || true)" != false \
+    || "$(docker inspect --format '{{.State.Running}}' buildingos-web 2>/dev/null || true)" != false ]]; then
+    printf 'ERROR: application stop state is uncertain; operator intervention is required.\n' >&2
+  fi
+}
+
+remove_release_a_barrier() {
+  [[ "$RELEASE_A_BARRIER_ACTIVE" == true && -f "$RELEASE_A_SENTINEL" && ! -L "$RELEASE_A_SENTINEL" ]] || return 1
+  [[ "$(recovery_point_portable_stat_mode "$RELEASE_A_CONTROL_DIR")" == 711 ]] || return 1
+  [[ "$(recovery_point_portable_stat_mode "$RELEASE_A_SENTINEL")" == 600 ]] || return 1
+  rm -f -- "$RELEASE_A_SENTINEL" || return 1
+  [[ ! -e "$RELEASE_A_SENTINEL" && ! -L "$RELEASE_A_SENTINEL" ]] || return 1
+}
+
+probe_release_a_runtime_barrier() {
+  local expected_state="$1"
+  docker exec --user 1001:1001 buildingos-api node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const fail = (message) => { console.error(message); process.exit(1); };
+const sentinel = process.env.RELEASE_A_WRITE_BARRIER_PATH;
+if (process.env.RELEASE_A_WRITE_BARRIER_ENABLED !== "true") fail("barrier is not enabled");
+if (process.getuid() !== 1001 || process.getgid() !== 1001) fail("unexpected API UID/GID");
+if (!sentinel) fail("barrier sentinel path is missing");
+const parent = path.dirname(sentinel);
+const parentStat = fs.lstatSync(parent);
+if (!parentStat.isDirectory()) fail("barrier parent is not a directory");
+fs.accessSync(parent, fs.constants.X_OK);
+let state;
+try { fs.lstatSync(sentinel); state = "CLOSED"; }
+catch (error) { if (error && error.code === "ENOENT") state = "OPEN"; else throw error; }
+if (state !== process.argv[1]) fail(`expected ${process.argv[1]}, observed ${state}`);
+' "$expected_state"
 }
 
 recovery_point_capture_under_fence() {
@@ -780,6 +857,11 @@ if [[ "$RETRY_RECOVERY_ACTIVE" == false ]]; then
   esac
 fi
 
+PHASE='migration-quiescence'
+RELEASE_A_BARRIER_ACTIVE=true
+stop_release_a_apps || fail 'Old API and Web services could not be proven stopped before migrations'
+ensure_release_a_barrier || fail 'Unable to establish the Release A CLOSED write barrier before migrations'
+
 PHASE='migrations'
 if [[ "$MIGRATION_RETRY" == false ]]; then
   "${compose[@]}" --profile migrate run --rm --no-deps -T buildingos-migrate < /dev/null
@@ -797,6 +879,22 @@ ROLLBACK_RECEIPT="$(generate_rollback_compatibility_receipt \
 
 PHASE='application-recreate'
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
+wait_for_container_health buildingos-api
+wait_for_container_health buildingos-web
+if ! probe_release_a_runtime_barrier CLOSED; then
+  fail_closed_release_a || true
+  fail 'API runtime could not prove the Release A barrier CLOSED'
+fi
+check_http api-health "$API_HEALTH_URL"
+check_http api-readyz "$API_READYZ_URL"
+check_http web-login "$WEB_LOGIN_URL"
+
+PHASE='barrier-release'
+remove_release_a_barrier || fail 'Unable to securely release the Release A write barrier'
+if ! probe_release_a_runtime_barrier OPEN; then
+  fail_closed_release_a || true
+  fail 'API runtime could not prove the Release A barrier OPEN'
+fi
 wait_for_container_health buildingos-api
 wait_for_container_health buildingos-web
 check_http api-health "$API_HEALTH_URL"
@@ -821,6 +919,7 @@ done
 PHASE='complete'
 write_record SUCCESS
 RECORD_SUCCESS=true
+RELEASE_A_BARRIER_ACTIVE=false
 if ! publish_current_successful_selector; then
   trap - ERR INT TERM
   printf 'ERROR: deployment record succeeded but the current-successful selector was not published; the prior selector remains authoritative\n' >&2

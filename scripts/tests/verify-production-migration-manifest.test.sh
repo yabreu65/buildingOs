@@ -8,7 +8,7 @@ readonly TEST_DIR
 REPO_ROOT="$(cd "$TEST_DIR/../.." && pwd)"
 readonly REPO_ROOT
 readonly VERIFIER="$REPO_ROOT/scripts/verify-production-migration-manifest.sh"
-readonly MANIFEST="$REPO_ROOT/scripts/manifests/production-migrations-81-to-106.tsv"
+readonly MANIFEST="$REPO_ROOT/scripts/manifests/production-migrations-81-to-107.tsv"
 readonly MIGRATIONS="$REPO_ROOT/apps/api/prisma/migrations"
 readonly TAB=$'\t'
 
@@ -122,7 +122,7 @@ awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $5 = 
 if ! run_fixture "$TMP_DIR/pre-target.tsv" pre "$TMP_DIR/output.tsv"; then
   fail_test "already-at-target pre state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 fi
-grep -F $'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=1\tapplied=97\tfailed=0\tpending=9\ttarget=106' \
+grep -F $'status=ok\tmode=verify-db\tphase=pre\tmanifest_version=1\tapplied=97\tfailed=0\tpending=10\ttarget=107' \
   "$TMP_DIR/output.tsv" >/dev/null || fail_test "already-at-target pre state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
   pass_test 'verified 97-migration pre state with target pending passes'
 
@@ -150,15 +150,15 @@ awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $4 = 
 assert_failure_code 'historical exception rolled-back state is rejected' \
   "$TMP_DIR/historical-rolled-back.tsv" pre 'database_rolled_back_row'
 
-write_fixture "$TMP_DIR/post.tsv" 106
+write_fixture "$TMP_DIR/post.tsv" 107
 if ! run_fixture "$TMP_DIR/post.tsv" post "$TMP_DIR/output.tsv"; then
   fail_test "exact post state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 fi
-grep -F $'status=ok\tmode=verify-db\tphase=post\tmanifest_version=1\tapplied=106\tfailed=0\tpending=0\ttarget=106' \
+grep -F $'status=ok\tmode=verify-db\tphase=post\tmanifest_version=1\tapplied=107\tfailed=0\tpending=0\ttarget=107' \
   "$TMP_DIR/output.tsv" >/dev/null || fail_test "exact post state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 pass_test 'exact post state passes'
 
-write_fixture "$TMP_DIR/historical-post-base.tsv" 106
+write_fixture "$TMP_DIR/historical-post-base.tsv" 107
 awk -F "$TAB" -v OFS="$TAB" '$1 == "20260719000000_add_receipt_sequence" { $5 = 0 } { print }' \
   "$TMP_DIR/historical-post-base.tsv" > "$TMP_DIR/historical-post-exception.tsv"
 if ! run_fixture "$TMP_DIR/historical-post-exception.tsv" post "$TMP_DIR/output.tsv"; then
@@ -181,9 +181,9 @@ assert_failure_code '99 applied migrations are rejected in pre state' \
 if ! run_fixture "$TMP_DIR/post.tsv" retry "$TMP_DIR/output.tsv"; then
   fail_test "validated retry state failed: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
 fi
-grep -F $'status=ok\tmode=verify-db\tphase=retry\tmanifest_version=1\tapplied=106\tfailed=0\tpending=0\ttarget=106' \
+grep -F $'status=ok\tmode=verify-db\tphase=retry\tmanifest_version=1\tapplied=107\tfailed=0\tpending=0\ttarget=107' \
   "$TMP_DIR/output.tsv" >/dev/null || fail_test "validated retry state output mismatch: $(tr '\n' ' ' < "$TMP_DIR/output.tsv")"
-pass_test 'validated 106-migration retry state passes'
+pass_test 'validated 107-migration retry state passes'
 
 assert_failure_code '97 state is rejected in retry phase' \
   "$TMP_DIR/pre-target.tsv" retry 'database_missing_row'
@@ -307,20 +307,20 @@ assert_files_failure 'malformed migration count is rejected' \
   "$TMP_DIR/malformed-count.tsv" "$MIGRATIONS" 'manifest_target_mismatch'
 
 cp -R "$MIGRATIONS" "$TMP_DIR/migrations-missing-target"
-rm -rf "$TMP_DIR/migrations-missing-target/20260918000000_enforce_modern_distribution_unit_ownership"
+rm -rf "$TMP_DIR/migrations-missing-target/20260919000000_release_a_dual_liquidation_compatibility"
 assert_files_failure 'missing migration directory is rejected' \
   "$MANIFEST" "$TMP_DIR/migrations-missing-target" 'local_migration_count_mismatch'
 
 cp -R "$MIGRATIONS" "$TMP_DIR/migrations-extra-target"
 mkdir "$TMP_DIR/migrations-extra-target/20990101000000_unexpected"
-cp "$MIGRATIONS/20260918000000_enforce_modern_distribution_unit_ownership/migration.sql" \
+cp "$MIGRATIONS/20260919000000_release_a_dual_liquidation_compatibility/migration.sql" \
   "$TMP_DIR/migrations-extra-target/20990101000000_unexpected/migration.sql"
 assert_files_failure 'extra migration directory is rejected' \
-  "$MANIFEST" "$TMP_DIR/migrations-extra-target" 'local_migration_count_mismatch'
+  "$MANIFEST" "$TMP_DIR/migrations-extra-target" 'migration_after_target_present'
 
 cp -R "$MIGRATIONS" "$TMP_DIR/migrations-inconsistent-target"
-mv "$TMP_DIR/migrations-inconsistent-target/20260918000000_enforce_modern_distribution_unit_ownership" \
-  "$TMP_DIR/migrations-inconsistent-target/20260918000000_unapproved_contract_entry"
+mv "$TMP_DIR/migrations-inconsistent-target/20260919000000_release_a_dual_liquidation_compatibility" \
+  "$TMP_DIR/migrations-inconsistent-target/20260919000000_aaa_unapproved_contract_entry"
 assert_files_failure 'same-count but unpinned migration entry is rejected' \
   "$MANIFEST" "$TMP_DIR/migrations-inconsistent-target" 'local_pending_name_mismatch'
 
@@ -332,16 +332,27 @@ write_fixture "$TMP_DIR/post-98.tsv" 98
 assert_failure_code '98 applied migrations are not accepted as the completed new deployment' \
   "$TMP_DIR/post-98.tsv" post 'database_missing_row'
 
-grep -F $'migration\t20260905000000_add_object_version_identity\t3161d9f1ece049e80d4e8cd14f301a73f86605e4405059777b8ea1ab6b9324c5' \
-  "$MANIFEST" >/dev/null || fail_test 'new migration manifest row is missing or has the wrong checksum'
-pass_test 'latest production migration name and checksum are present in the manifest'
+grep -F $'migration\t20260919000000_release_a_dual_liquidation_compatibility\t' \
+  "$MANIFEST" >/dev/null || fail_test 'migration 107 manifest row is missing'
+pass_test 'migration 107 name is present in the manifest'
+
+[[ ! -e "$MIGRATIONS/20260920000000_release_a_followup" && ! -e "$MIGRATIONS/20260920000000_release_a_followup/migration.sql" ]] \
+  || fail_test 'future migration 108 exists'
+pass_test 'no future migration 108 directory or SQL file exists'
+
+cp -R "$MIGRATIONS" "$TMP_DIR/migrations-with-108"
+mkdir "$TMP_DIR/migrations-with-108/20260920000000_release_a_followup"
+cp "$MIGRATIONS/20260919000000_release_a_dual_liquidation_compatibility/migration.sql" \
+  "$TMP_DIR/migrations-with-108/20260920000000_release_a_followup/migration.sql"
+assert_files_failure 'migration 108 directory and SQL are explicitly rejected' \
+  "$MANIFEST" "$TMP_DIR/migrations-with-108" 'migration_after_target_present'
 
 if ! run_files_fixture "$MANIFEST" "$MIGRATIONS" "$TMP_DIR/current-files.tsv"; then
   fail_test "current canonical migration inventory failed: $(tr '\n' ' ' < "$TMP_DIR/current-files.tsv")"
 fi
-grep -F $'status=ok\tmode=verify-files\tmanifest_version=1\tlocal=106\tbaseline=81\ttarget=106\tpending=25' \
+grep -F $'status=ok\tmode=verify-files\tmanifest_version=1\tlocal=107\tbaseline=81\ttarget=107\tpending=26' \
   "$TMP_DIR/current-files.tsv" >/dev/null || fail_test 'current canonical inventory output mismatch'
-pass_test 'current canonical 106-migration inventory passes the production file verifier'
+pass_test 'current canonical 107-migration inventory passes the production file verifier'
 
 cp -R "$MIGRATIONS" "$TMP_DIR/migrations-malformed-name"
 mkdir "$TMP_DIR/migrations-malformed-name/not-a-migration"
@@ -349,7 +360,7 @@ assert_files_failure 'malformed local migration name is rejected' \
   "$MANIFEST" "$TMP_DIR/migrations-malformed-name" 'migration_name_invalid'
 
 cp -R "$MIGRATIONS" "$TMP_DIR/migrations-missing-sql"
-rm "$TMP_DIR/migrations-missing-sql/20260918000000_enforce_modern_distribution_unit_ownership/migration.sql"
+rm "$TMP_DIR/migrations-missing-sql/20260919000000_release_a_dual_liquidation_compatibility/migration.sql"
 assert_files_failure 'missing local migration SQL is rejected' \
   "$MANIFEST" "$TMP_DIR/migrations-missing-sql" 'migration_sql_invalid'
 
@@ -360,7 +371,7 @@ assert_files_failure 'duplicate manifest inventory entry is rejected' \
 
 cp -R "$MIGRATIONS" "$TMP_DIR/migrations-latest-checksum-mismatch"
 printf '\n-- test mutation\n' >> \
-  "$TMP_DIR/migrations-latest-checksum-mismatch/20260918000000_enforce_modern_distribution_unit_ownership/migration.sql"
+  "$TMP_DIR/migrations-latest-checksum-mismatch/20260919000000_release_a_dual_liquidation_compatibility/migration.sql"
 assert_files_failure 'latest migration checksum mismatch is rejected' \
   "$MANIFEST" "$TMP_DIR/migrations-latest-checksum-mismatch" 'local_pending_checksum_mismatch'
 

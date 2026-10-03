@@ -52,7 +52,7 @@ export class FinanceSummaryService {
    * [PHASE 4 HARD #15 CRONJOB] Send monthly finance summaries
    * Runs 1st of each month at 1am: generates reports for last month, emails to admins
    */
-  async sendMonthlyFinanceSummaries(): Promise<{ sentCount: number }> {
+  async sendMonthlyFinanceSummaries(writeAllowed?: () => boolean): Promise<{ sentCount: number }> {
     const lastMonth = this.getLastMonth();
     let sentCount = 0;
 
@@ -101,17 +101,20 @@ export class FinanceSummaryService {
 
         // Send to all TENANT_ADMINs
         for (const admin of admins) {
+          if (!this.isWriteAllowed(writeAllowed)) break;
           if (admin.email) {
             try {
-              await this.emailService.sendEmail(
-                {
-                  to: admin.email,
-                  subject: `${tenantName} - Resumen Financiero ${this.formatMonth(lastMonth)}`,
-                  htmlBody: html,
-                  tenantId,
-                },
-                EmailType.FINANCE_SUMMARY,
-              );
+              const emailOptions = {
+                to: admin.email,
+                subject: `${tenantName} - Resumen Financiero ${this.formatMonth(lastMonth)}`,
+                htmlBody: html,
+                tenantId,
+              };
+              if (writeAllowed) {
+                await this.emailService.sendEmail(emailOptions, EmailType.FINANCE_SUMMARY, writeAllowed);
+              } else {
+                await this.emailService.sendEmail(emailOptions, EmailType.FINANCE_SUMMARY);
+              }
               sentCount++;
             } catch (emailError) {
               this.logger.error(
@@ -134,6 +137,15 @@ export class FinanceSummaryService {
     }
 
     return { sentCount };
+  }
+
+  private isWriteAllowed(writeAllowed?: () => boolean): boolean {
+    if (!writeAllowed) return true;
+    try {
+      return writeAllowed();
+    } catch {
+      return false;
+    }
   }
 
   /**

@@ -3,9 +3,11 @@ import {
   CanActivate,
   ExecutionContext,
   ForbiddenException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
+import { ReleaseAWriteBarrierService } from './release-a-write-barrier.service';
 
 /**
  * DemoTenantGuard: blocks write operations on demo tenants.
@@ -22,7 +24,10 @@ import { PrismaService } from '../prisma/prisma.service';
  */
 @Injectable()
 export class DemoTenantGuard implements CanActivate {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly writeBarrier: ReleaseAWriteBarrierService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request & { tenantId?: string }>();
@@ -31,6 +36,12 @@ export class DemoTenantGuard implements CanActivate {
     // Read-only methods are always allowed
     if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
       return true;
+    }
+
+    if (!this.writeBarrier.isOpen()) {
+      throw new ServiceUnavailableException(
+        'The service is in maintenance mode while Release A writes are disabled.',
+      );
     }
 
     if (this.isAllowedDemoAssistantMutation(request)) {

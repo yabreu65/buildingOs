@@ -36,6 +36,18 @@ describe('AuditService', () => {
     service = module.get(AuditService);
   });
 
+  it('skips a best-effort audit write when its optional flow guard is closed', async () => {
+    const allowWrite = jest.fn(() => false);
+    await Reflect.apply(service.createLog, service, [{
+      tenantId: 'tenant-a',
+      action: AuditAction.PAYMENT_APPROVE,
+      entityType: 'Payment',
+      entityId: 'payment-1',
+    }, allowWrite]);
+
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
   it('requires a tenantId for tenant-scoped queries', async () => {
     await expect(service.queryLogs('')).rejects.toThrow(BadRequestException);
   });

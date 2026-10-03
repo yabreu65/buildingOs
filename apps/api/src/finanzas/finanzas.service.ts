@@ -1,10 +1,12 @@
-import { Injectable, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException, ForbiddenException, UnprocessableEntityException } from '@nestjs/common';
+import { Injectable, Inject, ConflictException, NotFoundException, BadRequestException, Logger, PayloadTooLargeException, ForbiddenException, UnprocessableEntityException } from '@nestjs/common';
 import { Charge, Payment, PaymentAllocation, Prisma, ChargeStatus, PaymentStatus, PaymentMethod, AuditAction, PaymentAuditAction, RejectionReason, ReceiptStatus, ScopeType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import type { CreateNotificationInput } from '../notifications/notifications.types';
 import { FinanzasValidators } from './finanzas.validators';
 import { PaymentReceiptService } from '../receipts/payment-receipt.service';
+import { ReleaseAWriteBarrierService } from '../tenancy/release-a-write-barrier.service';
 import type { AuthenticatedMembership, PortalContext } from '../common/types/request.types';
 import { resolveNotificationPortalContext } from '../common/portal-context';
 import { ExpensesService } from './expenses.service';
@@ -185,7 +187,26 @@ export class FinanzasService {
     private readonly receiptService: PaymentReceiptService,
     private readonly expensesService: ExpensesService,
     private readonly currencyConversionService: CurrencyConversionService,
+    @Inject(ReleaseAWriteBarrierService)
+    private readonly writeBarrier: Pick<ReleaseAWriteBarrierService, 'isOpen'> | undefined = undefined,
   ) {}
+
+  private isWriteAllowed(writeAllowed?: () => boolean): boolean {
+    if (!writeAllowed) return true;
+    try {
+      return writeAllowed();
+    } catch {
+      return false;
+    }
+  }
+
+  private isWriteBarrierOpen(): boolean {
+    try {
+      return this.writeBarrier?.isOpen() ?? false;
+    } catch {
+      return false;
+    }
+  }
 
   private toConversionDate(date: Date): string {
     const year = date.getUTCFullYear();
@@ -1102,27 +1123,34 @@ export class FinanzasService {
     });
 
     // Global audit remains best-effort; the financial PaymentAuditLog above is strict.
-    void this.auditService.createLog({
-      tenantId,
-      actorUserId,
-      actorMembershipId: membershipId,
-      action: AuditAction.PAYMENT_APPROVE,
-      entityType: 'Payment',
-      entityId: paymentId,
-      metadata: {
-        amount: result.amount,
-        paidAt: result.paidAt?.toISOString() ?? null,
-        fifoAllocated: result.unitId ? true : false,
-      },
-    });
+    const writeAllowed = (): boolean => this.isWriteBarrierOpen();
+    if (writeAllowed()) {
+      void this.auditService.createLog({
+        tenantId,
+        actorUserId,
+        actorMembershipId: membershipId,
+        action: AuditAction.PAYMENT_APPROVE,
+        entityType: 'Payment',
+        entityId: paymentId,
+        metadata: {
+          amount: result.amount,
+          paidAt: result.paidAt?.toISOString() ?? null,
+          fifoAllocated: result.unitId ? true : false,
+        },
+      }, writeAllowed);
+    }
 
     // [PHASE 2 QUICK #3] Send PAYMENT_RECEIVED notification
-    void this.sendPaymentReceivedNotification(tenantId, result, actorUserId);
+    if (writeAllowed()) {
+      void this.sendPaymentReceivedNotification(tenantId, result, actorUserId, writeAllowed);
+    }
 
     // Generate receipt for approved payment (async, non-blocking)
-    void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
-      this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
-    });
+    if (writeAllowed()) {
+      void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
+        this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
+      });
+    }
 
     return this.sanitizePaymentForResponse(result);
   }
@@ -3282,13 +3310,16 @@ export class FinanzasService {
     });
 
     // Send notification to resident about approval (outside transaction, using returned payment)
-    if (approvedPaymentResult) {
-      void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult, actorUserId);
-      
+    const writeAllowed = (): boolean => this.isWriteBarrierOpen();
+    if (approvedPaymentResult && writeAllowed()) {
+      void this.sendPaymentReceivedNotification(tenantId, approvedPaymentResult, actorUserId, writeAllowed);
+
       // Generate receipt for approved payment (async, non-blocking)
-      void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
-        this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
-      });
+      if (writeAllowed()) {
+        void this.receiptService.ensureReceiptForPayment(tenantId, paymentId, actorUserId).catch((err) => {
+          this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${err.message}`);
+        });
+      }
     }
 
     return this.sanitizePaymentForResponse(approvedPaymentResult!);
@@ -3616,10 +3647,11 @@ export class FinanzasService {
     tenantId: string,
     payment: Payment,
     excludeUserId?: string,
+    writeAllowed?: () => boolean,
   ): Promise<void> {
     try {
       // Load unit occupants if this payment is unit-scoped
-      if (!payment.unitId) return;
+      if (!payment.unitId || (writeAllowed && !this.isWriteBarrierOpen())) return;
 
       const unit = await this.prisma.unit.findUnique({
         where: { id: payment.unitId },
@@ -3643,8 +3675,9 @@ export class FinanzasService {
 
       // Send to all active residents
       for (const userId of recipientIds) {
+        if (writeAllowed && !this.isWriteBarrierOpen()) return;
         const amount = (payment.amount / 100).toFixed(2);
-        await this.notificationsService.createNotification({
+        const notification: CreateNotificationInput = {
           tenantId,
           userId,
           type: 'PAYMENT_RECEIVED',
@@ -3658,7 +3691,12 @@ export class FinanzasService {
             paidAt: payment.paidAt?.toISOString(),
           },
           deliveryMethods: ['IN_APP', 'EMAIL'],
-        });
+        };
+        if (writeAllowed) {
+          await this.notificationsService.createNotification(notification, writeAllowed);
+        } else {
+          await this.notificationsService.createNotification(notification);
+        }
       }
     } catch (error) {
       // Fire-and-forget: log but never fail
@@ -3914,7 +3952,7 @@ export class FinanzasService {
    * [PHASE 3 MEDIUM #9] Auto-create monthly expense periods
    * Runs on 1st of each month at 8am - creates next month's period for buildings
    */
-  async autoCreateMonthlyExpensePeriods(): Promise<{ created: number }> {
+  async autoCreateMonthlyExpensePeriods(writeAllowed?: () => boolean): Promise<{ created: number }> {
     const now = new Date();
     const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1);
     const year = nextMonthDate.getFullYear();
@@ -3933,6 +3971,7 @@ export class FinanzasService {
     let createdCount = 0;
 
     for (const building of buildings) {
+      if (!this.isWriteAllowed(writeAllowed)) break;
       // Skip if period already exists for next month
       if (building.expensePeriods.length > 0) {
         continue;
@@ -3950,6 +3989,7 @@ export class FinanzasService {
       // Create new period (due 15th of next month)
       const dueDate = new Date(year, month - 1, 15);
 
+      if (!this.isWriteAllowed(writeAllowed)) break;
       const period = await this.prisma.expensePeriod.create({
         data: {
           tenantId: building.tenantId,
@@ -3977,7 +4017,7 @@ export class FinanzasService {
    * [PHASE 3 MEDIUM #10] Send payment reminders for charges due in 3 days
    * Runs daily at 10am - notifies residents of upcoming due dates
    */
-  async sendPaymentReminders(): Promise<{ count: number }> {
+  async sendPaymentReminders(writeAllowed?: () => boolean): Promise<{ count: number }> {
     const now = new Date();
     const inThreeDays = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
     const startOfDay = new Date(inThreeDays.getFullYear(), inThreeDays.getMonth(), inThreeDays.getDate());
@@ -3987,11 +4027,13 @@ export class FinanzasService {
     let reminderCount = 0;
 
     for (const tenant of tenantIds) {
+      if (!this.isWriteAllowed(writeAllowed)) break;
       reminderCount += await this.sendPaymentRemindersForTenant(
         tenant.id,
         now,
         startOfDay,
         endOfDay,
+        writeAllowed,
       );
     }
 
@@ -4003,6 +4045,7 @@ export class FinanzasService {
     now: Date,
     startOfDay: Date,
     endOfDay: Date,
+    writeAllowed?: () => boolean,
   ): Promise<number> {
     const remindableCharges = await this.prisma.charge.findMany({
       where: {
@@ -4031,7 +4074,9 @@ export class FinanzasService {
     let reminderCount = 0;
 
     for (const charge of remindableCharges) {
+      if (!this.isWriteAllowed(writeAllowed)) break;
       // Mark reminder as sent
+      if (!this.isWriteAllowed(writeAllowed)) break;
       await this.prisma.charge.update({
         where: { id: charge.id },
         data: { reminderSentAt: now },
@@ -4041,8 +4086,9 @@ export class FinanzasService {
       const dueStr = charge.dueDate.toLocaleDateString('es-AR');
       const amount = (charge.amount / 100).toFixed(2);
       for (const occupant of charge.unit.unitOccupants) {
+        if (!this.isWriteAllowed(writeAllowed)) break;
         if (occupant.member?.user?.id) {
-          await this.notificationsService.createNotification({
+          const notificationInput: CreateNotificationInput = {
             tenantId: charge.tenantId,
             userId: occupant.member.user.id,
             type: 'PAYMENT_REMINDER',
@@ -4055,7 +4101,12 @@ export class FinanzasService {
               dueDate: charge.dueDate.toISOString(),
             },
             deliveryMethods: ['IN_APP', 'EMAIL'],
-          });
+          };
+          if (writeAllowed) {
+            await this.notificationsService.createNotification(notificationInput, writeAllowed);
+          } else {
+            await this.notificationsService.createNotification(notificationInput);
+          }
           reminderCount++;
         }
       }

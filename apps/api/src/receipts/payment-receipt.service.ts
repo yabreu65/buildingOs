@@ -1,6 +1,7 @@
-import { ConflictException, Injectable, Logger } from "@nestjs/common";
+import { ConflictException, Inject, Injectable, Logger } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
+import { ReleaseAWriteBarrierService } from "../tenancy/release-a-write-barrier.service";
 import { MinioObjectStat, MinioService } from "../storage/minio.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import {
@@ -171,6 +172,7 @@ interface ReceiptGenerationHeartbeat {
 class ReceiptConsistencyError extends Error {}
 class ReceiptLeaseLostError extends Error {}
 class ReceiptGenerationInProgressError extends Error {}
+class ReceiptWriteBarrierClosedError extends Error {}
 
 interface ReceiptPdfLine {
   text: string;
@@ -222,6 +224,8 @@ export class PaymentReceiptService {
     private readonly prisma: PrismaService,
     private readonly minio: MinioService,
     private readonly notificationsService: NotificationsService,
+    @Inject(ReleaseAWriteBarrierService)
+    private readonly writeBarrier: Pick<ReleaseAWriteBarrierService, "isOpen">,
   ) {
     this.bucket = this.minio.getDefaultBucket();
   }
@@ -229,7 +233,7 @@ export class PaymentReceiptService {
   /**
    * Ensure a receipt exists for the given payment.
    * Idempotent: if receipt already exists, return it.
-   * If generation fails before confirmation, sets receiptStatus = FAILED with error message.
+   * If generation fails before confirmation while writes remain open, sets receiptStatus = FAILED with error message.
    */
   async ensureReceiptForPayment(
     tenantId: string,
@@ -238,6 +242,7 @@ export class PaymentReceiptService {
   ): Promise<ReceiptData | null> {
     let preparedReceipt: PreparedReceiptGeneration | null = null;
     try {
+      this.assertWriteBarrierOpen();
       const preparation = await this.prepareReceiptGeneration(
         tenantId,
         paymentId,
@@ -368,7 +373,7 @@ export class PaymentReceiptService {
         finalizedReceipt.objectVersionId,
       );
 
-      if (finalizedReceipt.shouldNotify) {
+      if (finalizedReceipt.shouldNotify && this.isWriteBarrierOpen()) {
         // Receipt persistence is authoritative; delivery remains best-effort outside the transaction.
         await this.notifyResidentReceiptReady(
           finalizedReceipt.payment,
@@ -376,6 +381,7 @@ export class PaymentReceiptService {
           url,
           finalizedReceipt.snapshot!.approvedByUserName,
           excludeUserId,
+          () => this.isWriteBarrierOpen(),
         );
 
         this.logger.log(
@@ -391,7 +397,11 @@ export class PaymentReceiptService {
         url,
       };
     } catch (error) {
+      if (error instanceof ReceiptWriteBarrierClosedError) {
+        return null;
+      }
       if (error instanceof ReceiptGenerationInProgressError) {
+        if (!this.isWriteBarrierOpen()) return null;
         const completedReceipt = await this.waitForReceiptGeneration(
           tenantId,
           paymentId,
@@ -406,12 +416,14 @@ export class PaymentReceiptService {
       const rawMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to generate receipt for payment ${paymentId}: ${rawMessage}`);
 
-      await this.markReceiptGenerationFailedIfNeeded(
-        tenantId,
+      if (this.isWriteBarrierOpen()) {
+        await this.markReceiptGenerationFailedIfNeeded(
+          tenantId,
         paymentId,
         RECEIPT_GENERATION_SAFE_ERROR,
-        preparedReceipt?.generationToken,
-      );
+          preparedReceipt?.generationToken,
+        );
+      }
 
       if (error instanceof ReceiptConsistencyError) {
         throw new ConflictException(rawMessage);
@@ -609,6 +621,7 @@ export class PaymentReceiptService {
       const generationToken = randomUUID();
       const leaseUntil = this.addLeaseDuration(databaseNow);
 
+      this.assertWriteBarrierOpen();
       await tx.payment.update({
         where: { id: paymentId, tenantId },
         data: {
@@ -624,6 +637,7 @@ export class PaymentReceiptService {
           receiptGenerationLeaseUntil: leaseUntil,
         },
       });
+      this.assertWriteBarrierOpen();
       return this.buildPreparedReceipt(
         payment,
         newSnapshot,
@@ -728,6 +742,7 @@ export class PaymentReceiptService {
       }
 
       const generationToken = randomUUID();
+      this.assertWriteBarrierOpen();
       const updated = await tx.payment.updateMany({
         where: {
           id: paymentId,
@@ -747,6 +762,7 @@ export class PaymentReceiptService {
           receiptGenerationLeaseUntil: this.addLeaseDuration(databaseNow),
         },
       });
+      this.assertWriteBarrierOpen();
       if (updated.count !== 1) {
         throw new ReceiptGenerationInProgressError(
           `Legacy receipt ${candidate.receiptNumber} changed before orphan recovery claim`,
@@ -904,6 +920,7 @@ export class PaymentReceiptService {
         databaseNow,
       );
       const generationToken = randomUUID();
+      this.assertWriteBarrierOpen();
       const updated = await tx.payment.updateMany({
         where: {
           id: paymentId,
@@ -926,6 +943,7 @@ export class PaymentReceiptService {
           receiptGenerationLeaseUntil: this.addLeaseDuration(databaseNow),
         },
       });
+      this.assertWriteBarrierOpen();
       if (updated.count !== 1) {
         throw new ReceiptConsistencyError(
           `Legacy receipt ${candidate.receiptNumber} changed before snapshot creation`,
@@ -968,6 +986,7 @@ export class PaymentReceiptService {
 
     const generationToken = randomUUID();
     const leaseUntil = this.addLeaseDuration(now);
+    this.assertWriteBarrierOpen();
     await tx.payment.update({
       where: { id: payment.id, tenantId },
       data: {
@@ -982,6 +1001,7 @@ export class PaymentReceiptService {
             }),
       },
     });
+    this.assertWriteBarrierOpen();
 
     return this.buildPreparedReceipt(
       payment,
@@ -1068,6 +1088,7 @@ export class PaymentReceiptService {
         );
       }
 
+      this.assertWriteBarrierOpen();
       const file = await tx.file.create({
         data: {
           tenantId: currentPayment.tenantId,
@@ -1082,6 +1103,7 @@ export class PaymentReceiptService {
             : {}),
         },
       });
+      this.assertWriteBarrierOpen();
       const document = await tx.document.create({
         data: {
           tenantId: currentPayment.tenantId,
@@ -1093,6 +1115,7 @@ export class PaymentReceiptService {
           unitId: currentPayment.unitId,
         },
       });
+      this.assertWriteBarrierOpen();
       const finalizedPayment = await tx.payment.updateMany({
         where: {
           id: currentPayment.id,
@@ -1112,6 +1135,7 @@ export class PaymentReceiptService {
           receiptGenerationLeaseUntil: null,
         },
       });
+      this.assertWriteBarrierOpen();
       if (finalizedPayment.count !== 1) {
         throw new ReceiptLeaseLostError(
           `Legacy receipt ${preparedReceipt.receiptNumber} recovery claim is no longer owned`,
@@ -1119,6 +1143,7 @@ export class PaymentReceiptService {
       }
 
       if (!preparedReceipt.auditExists) {
+        this.assertWriteBarrierOpen();
         await tx.paymentAuditLog.create({
           data: {
             tenantId: currentPayment.tenantId,
@@ -1137,6 +1162,7 @@ export class PaymentReceiptService {
         });
       }
 
+      this.assertWriteBarrierOpen();
       return {
         ...preparedReceipt,
         payment: currentPayment,
@@ -1263,6 +1289,7 @@ export class PaymentReceiptService {
             `Receipt storage key ${this.bucket}/${fileKey} already has an unrelated database File`,
           );
         }
+        this.assertWriteBarrierOpen();
         const file = await tx.file.create({
           data: {
             tenantId: currentPayment.tenantId,
@@ -1279,6 +1306,7 @@ export class PaymentReceiptService {
         });
         fileId = file.id;
 
+        this.assertWriteBarrierOpen();
         const document = await tx.document.create({
           data: {
             tenantId: currentPayment.tenantId,
@@ -1304,6 +1332,7 @@ export class PaymentReceiptService {
         tenantId,
         currentPayment.id,
       );
+      this.assertWriteBarrierOpen();
       const finalizedPayment = await tx.payment.updateMany({
         where: {
           id: currentPayment.id,
@@ -1320,12 +1349,14 @@ export class PaymentReceiptService {
           receiptGenerationLeaseUntil: null,
         },
       });
+      this.assertWriteBarrierOpen();
       if (finalizedPayment.count !== 1) {
         throw new ReceiptLeaseLostError(
           `Receipt generation claim is no longer owned for payment ${currentPayment.id}`,
         );
       }
       if (!auditExists) {
+        this.assertWriteBarrierOpen();
         await tx.paymentAuditLog.create({
           data: {
             tenantId: currentPayment.tenantId,
@@ -1342,6 +1373,7 @@ export class PaymentReceiptService {
         });
       }
 
+      this.assertWriteBarrierOpen();
       return {
         ...preparedReceipt,
         payment: currentPayment,
@@ -1674,7 +1706,7 @@ export class PaymentReceiptService {
     let renewal: Promise<void> | null = null;
 
     const renew = async (): Promise<void> => {
-      if (stopped || lost || renewal) return;
+      if (stopped || lost || renewal || !this.isWriteBarrierOpen()) return;
       renewal = this.renewReceiptGenerationLease(
         tenantId,
         paymentId,
@@ -1698,6 +1730,7 @@ export class PaymentReceiptService {
 
     return {
       assertOwned: () => {
+        this.assertWriteBarrierOpen();
         if (lost) {
           throw new ReceiptLeaseLostError(
             `Receipt generation claim is no longer owned for payment ${paymentId}`,
@@ -1717,9 +1750,11 @@ export class PaymentReceiptService {
     paymentId: string,
     generationToken: string,
   ): Promise<void> {
+    this.assertWriteBarrierOpen();
     await this.prisma.$transaction(async (tx) => {
       await acquirePaymentReceiptLock(tx, paymentId);
       const databaseNow = await this.getDatabaseNow(tx);
+      this.assertWriteBarrierOpen();
       const renewed = await tx.payment.updateMany({
         where: {
           id: paymentId,
@@ -1747,10 +1782,12 @@ export class PaymentReceiptService {
     const deadline = Date.now() + RECEIPT_GENERATION_WAIT_TIMEOUT_MS;
 
     while (Date.now() < deadline) {
+      if (!this.isWriteBarrierOpen()) return null;
       await new Promise<void>((resolve) => {
         setTimeout(resolve, RECEIPT_GENERATION_WAIT_INTERVAL_MS);
       });
 
+      if (!this.isWriteBarrierOpen()) return null;
       const payment = await this.prisma.payment.findFirst({
         where: { id: paymentId, tenantId },
         select: {
@@ -1923,6 +1960,7 @@ export class PaymentReceiptService {
               receiptGenerationToken: null,
               receiptGenerationLeaseUntil: null,
             };
+      this.assertWriteBarrierOpen();
       await failureTx.payment.updateMany({
         where: {
           id: paymentId,
@@ -2040,6 +2078,7 @@ export class PaymentReceiptService {
     pdfContent: Buffer,
     expectedVersionId?: string | null,
   ): Promise<ReceiptStorageMetadata> {
+    this.assertWriteBarrierOpen();
     if (!this.isPdfContent(pdfContent) || pdfContent.length > MAX_RECEIPT_OBJECT_BYTES) {
       throw new Error(`Generated receipt PDF exceeds the supported storage contract`);
     }
@@ -2047,6 +2086,7 @@ export class PaymentReceiptService {
     let versionId: string | undefined;
     let createdByCurrentProcess = false;
     if (!(await this.minio.objectExists(bucket, fileKey))) {
+      this.assertWriteBarrierOpen();
       // Conditional creation prevents a racing worker from replacing a
       // canonical receipt object after it has been written.
       const uploadResult = await this.minio.uploadBufferIfAbsentWithMetadata(
@@ -2127,6 +2167,7 @@ export class PaymentReceiptService {
     metadata: ReceiptStorageMetadata,
     existingVersionId?: string | null,
   ): Promise<void> {
+    this.assertWriteBarrierOpen();
     const result = await tx.file.updateMany({
       where: { id: fileId, tenantId },
       data: {
@@ -2144,6 +2185,20 @@ export class PaymentReceiptService {
       throw new ReceiptConsistencyError(
         `Receipt File ${fileId} is missing or belongs to another tenant`,
       );
+    }
+  }
+
+  private isWriteBarrierOpen(): boolean {
+    try {
+      return this.writeBarrier.isOpen();
+    } catch {
+      return false;
+    }
+  }
+
+  private assertWriteBarrierOpen(): void {
+    if (!this.isWriteBarrierOpen()) {
+      throw new ReceiptWriteBarrierClosedError('Receipt generation stopped because writes are closed');
     }
   }
 
@@ -2210,6 +2265,7 @@ export class PaymentReceiptService {
 
     if (!sequence) {
       // Create new sequence
+      this.assertWriteBarrierOpen();
       sequence = await tx.receiptSequence.create({
         data: {
           tenantId,
@@ -2221,6 +2277,7 @@ export class PaymentReceiptService {
 
     // Increment
     const newNumber = sequence.lastNumber + 1;
+    this.assertWriteBarrierOpen();
     await tx.receiptSequence.update({
       where: { id: sequence.id },
       data: { lastNumber: newNumber, updatedAt: new Date() },
@@ -2703,11 +2760,13 @@ export class PaymentReceiptService {
     receiptUrl: string,
     approvedByUserName: string,
     excludeUserId?: string,
+    writeAllowed?: () => boolean,
   ) {
     try {
       if (excludeUserId && payment.createdByUserId === excludeUserId) {
         return;
       }
+      if (!this.isWriteBarrierOpen()) return;
 
       await this.notificationsService.createNotification({
         tenantId: payment.tenantId,
@@ -2725,7 +2784,7 @@ export class PaymentReceiptService {
           approvedBy: approvedByUserName,
         },
         deliveryMethods: ['IN_APP', 'EMAIL'],
-      });
+      }, writeAllowed);
     } catch (error) {
       this.logger.warn(`Failed to notify resident about receipt: ${error}`);
     }

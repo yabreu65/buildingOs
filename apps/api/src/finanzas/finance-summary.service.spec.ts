@@ -537,6 +537,22 @@ describe('FinanceSummaryService', () => {
       expect(result.sentCount).toBe(1);
     });
 
+    it('stops sending to recipients when the live guard closes', async () => {
+      mockAdmins([
+        { tenantId: 't-1', tenantName: 'Tenant A', email: 'one@a.com' },
+        { tenantId: 't-1', tenantName: 'Tenant A', email: 'two@a.com' },
+      ]);
+      mockCharges([charge({ amount: 10000 })]);
+      let checks = 0;
+      const writeAllowed = () => ++checks < 2;
+
+      const result = await service.sendMonthlyFinanceSummaries(writeAllowed);
+
+      expect(result.sentCount).toBe(1);
+      expect(sendEmail).toHaveBeenCalledTimes(1);
+      expect(sendEmail.mock.calls[0][2]).toBe(writeAllowed);
+    });
+
     it('M9: recipient query requires scopeType TENANT', async () => {
       mockAdminsWithRoles([
         { tenantId: 't-1', tenantName: 'Tenant A', email: 'admin@a.com', roles: [{ role: 'TENANT_ADMIN', scopeType: 'TENANT' }] },

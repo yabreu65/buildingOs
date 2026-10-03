@@ -59,6 +59,7 @@ class MinioReceiptStorage implements ReceiptStorage {
   private readonly client: Minio.Client;
   readonly putCalls: string[] = [];
   readonly versionedGetCalls: string[] = [];
+  beforeConditionalPut?: (bucket: string, objectKey: string) => Promise<void>;
 
   constructor(
     private readonly bucket: string,
@@ -154,6 +155,7 @@ class MinioReceiptStorage implements ReceiptStorage {
     contentType: string,
   ): Promise<{ etag: string; versionId: string | null } | null> {
     this.putCalls.push(`${bucket}/${objectKey}`);
+    await this.beforeConditionalPut?.(bucket, objectKey);
     try {
       const result = await this.client.putObject(
         bucket,
@@ -210,8 +212,8 @@ class MinioReceiptStorage implements ReceiptStorage {
       : this.client.presignedGetObject(bucket, objectKey, expirySeconds);
   }
 
-  async deleteObject(bucket: string, objectKey: string): Promise<void> {
-    await this.client.removeObject(bucket, objectKey);
+  async deleteObject(bucket: string, objectKey: string, versionId?: string): Promise<void> {
+    await this.client.removeObject(bucket, objectKey, versionId ? { versionId } : undefined);
   }
 
   async listObjects(bucket: string, prefix: string): Promise<string[]> {
@@ -235,6 +237,7 @@ function receiptService(
     prisma,
     storage as unknown as never,
     { createNotification: jest.fn().mockResolvedValue(undefined) } as never,
+    { isOpen: () => true },
   );
 }
 
@@ -591,6 +594,7 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
       failingPrisma as unknown as PrismaService,
       storage as unknown as never,
       { createNotification: jest.fn().mockResolvedValue(undefined) } as never,
+      { isOpen: () => true },
     );
 
     await expect(
@@ -649,6 +653,7 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
       secondPrisma,
       freshStorage as unknown as never,
       { createNotification: jest.fn().mockResolvedValue(undefined) } as never,
+      { isOpen: () => true },
     );
     const result = await freshService.ensureReceiptForPayment(tenantId, payment.id);
 
@@ -683,6 +688,229 @@ describeMinioRecovery('Payment receipt PostgreSQL/MinIO recovery', () => {
     );
     expect(await freshStorage.countObjectVersions(objectKey)).toBe(versionsBeforeRetry);
   }, 30000);
+
+  it('leaves a private unpublished PUT orphan across a closed barrier and finalizes it once after reopening', async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tenant = await observer.tenant.create({
+      data: {
+        name: `Receipt barrier race ${suffix}`,
+        type: TenantType.ADMINISTRADORA,
+        functionalCurrency: 'ARS',
+      },
+    });
+    let userIdForCleanup: string | undefined;
+    let racedObjectBucket: string | undefined;
+    let racedObjectKey: string | undefined;
+    let releasePendingPut: () => void = () => undefined;
+    try {
+      const user = await observer.user.create({
+        data: {
+          email: `receipt-barrier-race-${suffix}@buildingos.local`,
+          name: 'Receipt barrier race resident',
+          passwordHash: 'test',
+        },
+      });
+      userIdForCleanup = user.id;
+      const building = await observer.building.create({
+        data: {
+          tenantId: tenant.id,
+          name: `Receipt barrier building ${suffix}`,
+          alias: `RB-${suffix}`,
+          address: 'Test',
+        },
+      });
+      const unit = await observer.unit.create({
+        data: {
+          tenantId: tenant.id,
+          buildingId: building.id,
+          code: '1',
+          label: '1',
+          unitType: 'APARTAMENTO',
+          occupancyStatus: 'OCCUPIED',
+          isBillable: true,
+        },
+      });
+      const payment = await observer.payment.create({
+        data: {
+          tenantId: tenant.id,
+          buildingId: building.id,
+          unitId: unit.id,
+          amount: 10000,
+          currency: 'ARS',
+          method: PaymentMethod.TRANSFER,
+          status: PaymentStatus.APPROVED,
+          createdByUserId: user.id,
+          approvedByUserId: user.id,
+          approvedAt: new Date('2026-08-10T00:00:00.000Z'),
+        },
+      });
+
+      let barrierOpen = true;
+      let signalPutStarted!: () => void;
+      const putStarted = new Promise<void>((resolve) => { signalPutStarted = resolve; });
+      let releasePut!: () => void;
+      const putRelease = new Promise<void>((resolve) => { releasePut = resolve; });
+      releasePendingPut = releasePut;
+      storage.beforeConditionalPut = async (bucket, objectKey) => {
+        racedObjectBucket = bucket;
+        racedObjectKey = objectKey;
+        signalPutStarted();
+        await putRelease;
+      };
+      const notifications = { createNotification: jest.fn().mockResolvedValue(undefined) };
+      const makeService = (prisma: PrismaService) => new PaymentReceiptService(
+        prisma,
+        storage as unknown as never,
+        notifications as never,
+        { isOpen: () => barrierOpen },
+      );
+      const closedRace = makeService(firstPrisma).ensureReceiptForPayment(tenant.id, payment.id);
+      await putStarted;
+      barrierOpen = false;
+      const paymentWhileClosed = await observer.payment.findUniqueOrThrow({
+        where: { id: payment.id },
+        select: {
+          receiptNumber: true,
+          receiptStatus: true,
+          receiptSnapshot: true,
+          receiptGenerationToken: true,
+          receiptGenerationLeaseUntil: true,
+          receiptGeneratedAt: true,
+          receiptDocumentId: true,
+          updatedAt: true,
+        },
+      });
+      const sequenceWhileClosed = await observer.receiptSequence.findUnique({
+        where: { tenantId_year: { tenantId: tenant.id, year: 2026 } },
+      });
+      const capturedBucket = racedObjectBucket;
+      const capturedObjectKey = racedObjectKey;
+      if (!capturedBucket || !capturedObjectKey) {
+        throw new Error('Conditional PUT hook did not capture its target before signaling');
+      }
+      expect(capturedBucket).toBe(storage.getDefaultBucket());
+      expect(capturedObjectKey).toBe(
+        `tenant/${tenant.id}/payments/${payment.id}/receipts/${paymentWhileClosed.receiptNumber}.pdf`,
+      );
+      releasePut();
+      await expect(closedRace).resolves.toBeNull();
+      storage.beforeConditionalPut = undefined;
+
+      const [closedPayment, closedFiles, closedDocuments, closedAudits, closedSequence] = await Promise.all([
+        observer.payment.findUniqueOrThrow({
+          where: { id: payment.id },
+          select: {
+            receiptNumber: true,
+            receiptStatus: true,
+            receiptSnapshot: true,
+            receiptGenerationToken: true,
+            receiptGenerationLeaseUntil: true,
+            receiptGeneratedAt: true,
+            receiptDocumentId: true,
+            updatedAt: true,
+          },
+        }),
+        observer.file.findMany({ where: { tenantId: tenant.id } }),
+        observer.document.findMany({ where: { tenantId: tenant.id } }),
+        observer.paymentAuditLog.findMany({
+          where: { tenantId: tenant.id, paymentId: payment.id, action: 'RECEIPT_GENERATED' },
+        }),
+        observer.receiptSequence.findUnique({
+          where: { tenantId_year: { tenantId: tenant.id, year: 2026 } },
+        }),
+      ]);
+      expect(await storage.objectExists(capturedBucket, capturedObjectKey)).toBe(true);
+      expect(await storage.countObjectVersions(capturedObjectKey)).toBe(1);
+      const orphanBytesWhileClosed = await storage.getObjectBuffer(
+        capturedBucket,
+        capturedObjectKey,
+      );
+      expect(closedPayment).toEqual(paymentWhileClosed);
+      expect(closedSequence).toEqual(sequenceWhileClosed);
+      expect(closedFiles).toHaveLength(0);
+      expect(closedDocuments).toHaveLength(0);
+      expect(closedAudits).toHaveLength(0);
+      expect(notifications.createNotification).not.toHaveBeenCalled();
+      const anonymousObjectUrl = `${process.env.MINIO_ENDPOINT!.replace(/\/$/, '')}/${capturedBucket}/${capturedObjectKey}`;
+      for (const [method, url] of [
+        ['GET', `${process.env.MINIO_ENDPOINT!.replace(/\/$/, '')}/${capturedBucket}?list-type=2`],
+        ['GET', anonymousObjectUrl],
+        ['HEAD', anonymousObjectUrl],
+      ] as const) {
+        const response = await fetch(url, { method });
+        expect(response.status).toBe(403);
+        await response.body?.cancel();
+      }
+
+      barrierOpen = true;
+      await observer.payment.update({
+        where: { id: payment.id },
+        data: { receiptGenerationLeaseUntil: new Date('2020-01-01T00:00:00.000Z') },
+      });
+      const retries = await Promise.allSettled([
+        makeService(firstPrisma).ensureReceiptForPayment(tenant.id, payment.id),
+        makeService(secondPrisma).ensureReceiptForPayment(tenant.id, payment.id),
+      ]);
+      const completed = retries.find(
+        (result): result is PromiseFulfilledResult<{ url: string; fileKey: string; receiptNumber: string } | null> =>
+          result.status === 'fulfilled' && result.value !== null,
+      );
+      expect(completed).toBeDefined();
+      for (const retry of retries) {
+        if (retry.status === 'fulfilled' && retry.value) {
+          expect(retry.value.fileKey).toBe(racedObjectKey);
+          expect(retry.value.receiptNumber).toBe(paymentWhileClosed.receiptNumber);
+        }
+        if (retry.status === 'rejected') {
+          expect(retry.reason).toEqual(
+            expect.objectContaining({ response: { message: 'RECEIPT_GENERATION_IN_PROGRESS' } }),
+          );
+        }
+      }
+      const [finalPayment, files, documents, audits] = await Promise.all([
+        observer.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+        observer.file.findMany({ where: { tenantId: tenant.id } }),
+        observer.document.findMany({ where: { tenantId: tenant.id } }),
+        observer.paymentAuditLog.findMany({
+          where: { tenantId: tenant.id, paymentId: payment.id, action: 'RECEIPT_GENERATED' },
+        }),
+      ]);
+      const objectStat = await storage.statObject(capturedBucket, capturedObjectKey);
+      expect(finalPayment.receiptStatus).toBe('READY');
+      expect(finalPayment.receiptNumber).toBe(paymentWhileClosed.receiptNumber);
+      expect(finalPayment.receiptGenerationToken).toBeNull();
+      expect(finalPayment.receiptGenerationLeaseUntil).toBeNull();
+      expect(files).toHaveLength(1);
+      expect(files[0].objectKey).toBe(capturedObjectKey);
+      expect(files[0].objectVersionId).toBe(objectStat.versionId);
+      expect(documents).toHaveLength(1);
+      expect(audits).toHaveLength(1);
+      expect(notifications.createNotification).toHaveBeenCalledTimes(1);
+      expect(storage.putCalls.filter((call) => call.endsWith(`/${capturedObjectKey}`))).toHaveLength(1);
+      expect(await storage.countObjectVersions(capturedObjectKey)).toBe(1);
+      await expect(storage.getObjectBuffer(capturedBucket, capturedObjectKey))
+        .resolves.toEqual(orphanBytesWhileClosed);
+      expect(completed.value?.fileKey).toBe(capturedObjectKey);
+      const signedReceipt = await fetch(completed.value!.url);
+      expect(signedReceipt.status).toBe(200);
+      expect((await signedReceipt.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    } finally {
+      releasePendingPut();
+      storage.beforeConditionalPut = undefined;
+      if (racedObjectBucket && racedObjectKey) {
+        const orphanStat = await storage.statObject(racedObjectBucket, racedObjectKey).catch(() => undefined);
+        await storage.deleteObject(
+          racedObjectBucket,
+          racedObjectKey,
+          orphanStat?.versionId ?? undefined,
+        ).catch(() => undefined);
+      }
+      await observer.tenant.delete({ where: { id: tenant.id } });
+      if (userIdForCleanup) {
+        await observer.user.delete({ where: { id: userIdForCleanup } });
+      }
+    }
+  }, 60000);
 
   it('adopts a legacy orphan concurrently without creating a new MinIO version', async () => {
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;

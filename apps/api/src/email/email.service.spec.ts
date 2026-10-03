@@ -45,6 +45,86 @@ describe('EmailService', () => {
     expect(prismaService.emailLog.create).not.toHaveBeenCalled();
   });
 
+  it('does not invoke the provider when the live guard closes before send', async () => {
+    const transporter = { sendMail: jest.fn() };
+    mockedCreateTransport.mockReturnValue(transporter as unknown as nodemailer.Transporter);
+    const emailLog = { create: jest.fn() };
+    const service = new EmailService(
+      {
+        getValue: jest.fn().mockReturnValue('smtp'),
+        get: jest.fn().mockReturnValue({ mailProvider: 'smtp', smtpHost: '127.0.0.1', smtpPort: 1025 }),
+      } as unknown as ConfigService,
+      { emailLog } as unknown as PrismaService,
+    );
+
+    const result = await service.sendEmail(
+      { to: 'resident@example.com', subject: 'Subject', htmlBody: '<p>Body</p>', tenantId: 'tenant-1' },
+      EmailType.PAYMENT_SUBMITTED,
+      () => { throw new Error('indeterminate'); },
+    );
+
+    expect(result.success).toBe(false);
+    expect(transporter.sendMail).not.toHaveBeenCalled();
+    expect(emailLog.create).not.toHaveBeenCalled();
+  });
+
+  it('allows an in-flight provider send to finish but skips emailLog after closure', async () => {
+    let finishSend: ((value: { messageId: string }) => void) | undefined;
+    const transporter = {
+      sendMail: jest.fn(() => new Promise<{ messageId: string }>((resolve) => { finishSend = resolve; })),
+    };
+    mockedCreateTransport.mockReturnValue(transporter as unknown as nodemailer.Transporter);
+    const emailLog = { create: jest.fn() };
+    const service = new EmailService(
+      {
+        getValue: jest.fn().mockReturnValue('smtp'),
+        get: jest.fn().mockReturnValue({ mailProvider: 'smtp', smtpHost: '127.0.0.1', smtpPort: 1025 }),
+      } as unknown as ConfigService,
+      { emailLog } as unknown as PrismaService,
+    );
+    let open = true;
+
+    const pending = service.sendEmail(
+      { to: 'resident@example.com', subject: 'Subject', htmlBody: '<p>Body</p>', tenantId: 'tenant-1' },
+      EmailType.PAYMENT_SUBMITTED,
+      () => open,
+    );
+    expect(transporter.sendMail).toHaveBeenCalledTimes(1);
+    open = false;
+    finishSend?.({ messageId: 'provider-1' });
+
+    await expect(pending).resolves.toEqual({ success: true, externalId: 'provider-1' });
+    expect(emailLog.create).not.toHaveBeenCalled();
+  });
+
+  it('does not persist a FAILED emailLog when an in-flight provider failure returns after closure', async () => {
+    let rejectSend: ((error: Error) => void) | undefined;
+    const transporter = {
+      sendMail: jest.fn(() => new Promise<never>((_resolve, reject) => { rejectSend = reject; })),
+    };
+    mockedCreateTransport.mockReturnValue(transporter as unknown as nodemailer.Transporter);
+    const emailLog = { create: jest.fn() };
+    const service = new EmailService(
+      {
+        getValue: jest.fn().mockReturnValue('smtp'),
+        get: jest.fn().mockReturnValue({ mailProvider: 'smtp', smtpHost: '127.0.0.1', smtpPort: 1025 }),
+      } as unknown as ConfigService,
+      { emailLog } as unknown as PrismaService,
+    );
+    let open = true;
+
+    const pending = service.sendEmail(
+      { to: 'resident@example.com', subject: 'Subject', htmlBody: '<p>Body</p>', tenantId: 'tenant-1' },
+      EmailType.PAYMENT_SUBMITTED,
+      () => open,
+    );
+    open = false;
+    rejectSend?.(new Error('provider failure'));
+
+    await expect(pending).resolves.toMatchObject({ success: false, error: 'provider failure' });
+    expect(emailLog.create).not.toHaveBeenCalled();
+  });
+
   it.each([
     { description: 'authenticated SMTP', smtpUser: 'mailer', smtpPass: 'secret', smtpPort: 587, secure: false, auth: { user: 'mailer', pass: 'secret' } },
     { description: 'unauthenticated SMTP', smtpUser: undefined, smtpPass: undefined, smtpPort: 1025, secure: false, auth: undefined },

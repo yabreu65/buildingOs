@@ -402,7 +402,11 @@ export class CommunicationsService {
    *
     * @throws NotFoundException if communication doesn't belong to tenant
     */
-  async send(tenantId: string, communicationId: string): Promise<CommunicationWithDetails> {
+  async send(
+    tenantId: string,
+    communicationId: string,
+    writeAllowed?: () => boolean,
+  ): Promise<CommunicationWithDetails> {
     // Validate scope
     await this.validators.validateCommunicationBelongsToTenant(
       tenantId,
@@ -431,9 +435,18 @@ export class CommunicationsService {
       return current;
     }
 
-    const result = await this.prisma.$transaction(async (tx) =>
-      this.transitionCommunicationToSent(tx, tenantId, communicationId),
-    );
+    this.assertWriteAllowed(writeAllowed);
+    const result = await this.prisma.$transaction(async (tx) => {
+      this.assertWriteAllowed(writeAllowed);
+      const transitioned = await this.transitionCommunicationToSent(
+        tx,
+        tenantId,
+        communicationId,
+        writeAllowed,
+      );
+      this.assertWriteAllowed(writeAllowed);
+      return transitioned;
+    });
 
     return result.communication;
   }
@@ -1092,13 +1105,16 @@ export class CommunicationsService {
     prismaClient: Prisma.TransactionClient,
     tenantId: string,
     communicationId: string,
+    writeAllowed?: () => boolean,
   ): Promise<string[]> {
+    this.assertWriteAllowed(writeAllowed);
     const recipientIds = await this.validators.resolveRecipients(
       tenantId,
       communicationId,
       prismaClient,
     );
 
+    this.assertWriteAllowed(writeAllowed);
     await prismaClient.communicationReceipt.deleteMany({
       where: {
         tenantId,
@@ -1107,6 +1123,7 @@ export class CommunicationsService {
     });
 
     if (recipientIds.length > 0) {
+      this.assertWriteAllowed(writeAllowed);
       await prismaClient.communicationReceipt.createMany({
         data: recipientIds.map((recipientUserId) => ({
           tenantId,
@@ -1124,10 +1141,12 @@ export class CommunicationsService {
     prismaClient: Prisma.TransactionClient,
     tenantId: string,
     communicationId: string,
+    writeAllowed?: () => boolean,
   ): Promise<{
     communication: CommunicationWithDetails;
     transitionedToSent: boolean;
   }> {
+    this.assertWriteAllowed(writeAllowed);
     const now = new Date();
     const result = await prismaClient.communication.updateMany({
       where: {
@@ -1143,9 +1162,10 @@ export class CommunicationsService {
     });
 
     if (result.count === 1) {
-      await this.refreshCommunicationReceipts(prismaClient, tenantId, communicationId);
+      await this.refreshCommunicationReceipts(prismaClient, tenantId, communicationId, writeAllowed);
     }
 
+    this.assertWriteAllowed(writeAllowed);
     const communication = await prismaClient.communication.findUnique({
       where: { id: communicationId },
       include: COMMUNICATION_INCLUDE,
@@ -1159,6 +1179,21 @@ export class CommunicationsService {
       communication,
       transitionedToSent: result.count === 1,
     };
+  }
+
+  private isWriteAllowed(writeAllowed?: () => boolean): boolean {
+    if (!writeAllowed) return true;
+    try {
+      return writeAllowed();
+    } catch {
+      return false;
+    }
+  }
+
+  private assertWriteAllowed(writeAllowed?: () => boolean): void {
+    if (!this.isWriteAllowed(writeAllowed)) {
+      throw new Error('Write barrier is closed');
+    }
   }
 
   private async sendCommunicationPush(
@@ -1366,7 +1401,7 @@ export class CommunicationsService {
    * - Returns count of dispatched communications
    * - Fire-and-forget: logs errors but never throws
    */
-  async dispatchScheduledCommunications(): Promise<number> {
+  async dispatchScheduledCommunications(writeAllowed?: () => boolean): Promise<number> {
     try {
       const scheduled = await this.prisma.communication.findMany({
         where: {
@@ -1380,8 +1415,9 @@ export class CommunicationsService {
 
       let dispatchedCount = 0;
       for (const comm of scheduled) {
+        if (!this.isWriteAllowed(writeAllowed)) break;
         try {
-          await this.send(comm.tenantId, comm.id);
+          await this.send(comm.tenantId, comm.id, writeAllowed);
           dispatchedCount++;
         } catch (error) {
           // Fire-and-forget: log but continue with next

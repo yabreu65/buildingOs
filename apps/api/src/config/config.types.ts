@@ -8,6 +8,8 @@ export type NodeEnv = 'development' | 'staging' | 'production' | 'test';
 export interface AppConfig {
   // Server
   nodeEnv: NodeEnv;
+  releaseAWriteBarrierEnabled: boolean;
+  releaseAWriteBarrierPath?: string;
   port: number;
   logLevel: 'debug' | 'log' | 'warn' | 'error';
 

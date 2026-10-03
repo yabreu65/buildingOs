@@ -85,6 +85,17 @@ describe('Production Readiness Config Validation', () => {
     });
   });
 
+  describe('RELEASE_A_WRITE_BARRIER_ENABLED', () => {
+    it('defaults to disabled and accepts only explicit boolean strings', () => {
+      const schema = createConfigSchema('test');
+      expect(schema.parse(baseEnv).RELEASE_A_WRITE_BARRIER_ENABLED).toBe(false);
+      expect(schema.parse({ ...baseEnv, RELEASE_A_WRITE_BARRIER_ENABLED: 'true' }).RELEASE_A_WRITE_BARRIER_ENABLED).toBe(true);
+      expect(schema.parse({ ...baseEnv, RELEASE_A_WRITE_BARRIER_ENABLED: 'false' }).RELEASE_A_WRITE_BARRIER_ENABLED).toBe(false);
+      expect(schema.safeParse({ ...baseEnv, RELEASE_A_WRITE_BARRIER_ENABLED: 'yes' }).success).toBe(false);
+      expect(schema.safeParse({ ...baseEnv, RELEASE_A_WRITE_BARRIER_ENABLED: 'TRUE' }).success).toBe(false);
+    });
+  });
+
   describe('PAYMENT_PROVIDER env var', () => {
     it('accepts valid payment provider values', () => {
       const schema = createConfigSchema('test');

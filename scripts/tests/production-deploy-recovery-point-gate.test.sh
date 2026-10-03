@@ -85,6 +85,11 @@ run_callback_case() {
           RECOVERY_POINT_API_WAS_RUNNING=false; RECOVERY_POINT_API_QUIESCED=false; RECOVERY_POINT_POLICY_RESTORED=false
           recovery_point_quiesce_api; recovery_point_resume_api
           ;;
+        release-barrier)
+          RELEASE_A_BARRIER_ACTIVE=true; RECOVERY_POINT_API_WAS_RUNNING=true; RECOVERY_POINT_API_QUIESCED=true
+          RECOVERY_POINT_POLICY_RESTORED=true
+          recovery_point_resume_api
+          ;;
         stopped-fence)
               RECOVERY_POINT_API_WAS_RUNNING=false; RECOVERY_POINT_API_QUIESCED=false; RECOVERY_POINT_POLICY_RESTORED=false; RECOVERY_POINT_FENCE_EVIDENCE="$FAKE_EVIDENCE"
               s3_fence_restore_policy(){ printf "restore\n" >>"$FAKE_AUDIT"; return 0; }
@@ -110,6 +115,15 @@ run_callback_case() {
           s3_fence_restore_policy(){ printf "restore\n" >>"$FAKE_AUDIT"; return 0; }
           on_signal INT
           ;;
+        signal-active-barrier)
+          RELEASE_A_BARRIER_ACTIVE=true
+          fail_closed_release_a(){ printf "fail-closed\n" >>"$FAKE_AUDIT"; }
+          recovery_point_restore_and_resume(){ printf "restore\n" >>"$FAKE_AUDIT"; }
+          write_record(){ printf "record:%s\n" "$1" >>"$FAKE_AUDIT"; }
+          signal_exit() { printf "signal-exit\\n" >>"$FAKE_AUDIT"; }
+          trap signal_exit EXIT
+          on_signal INT
+          ;;
       esac
     '
 }
@@ -121,6 +135,10 @@ grep -Eq '^stop --timeout 30 buildingos-api$' "$AUDIT" && grep -Eq '^capture-und
 : >"$AUDIT"; printf false >"$STATE"
 ok 'prior-stopped API remains stopped' run_callback_case stopped
 ! grep -Eq '^(stop|start) ' "$AUDIT" && pass 'prior-stopped state has no lifecycle mutation' || fail 'prior-stopped state has no lifecycle mutation'
+
+: >"$AUDIT"; printf false >"$STATE"
+ok 'migration barrier prevents recovery callback from resuming old API' run_callback_case release-barrier
+! grep -Eq '^start ' "$AUDIT" && [[ "$(<"$STATE")" == false ]] && pass 'barrier-active recovery callback keeps old API stopped' || fail 'barrier-active recovery callback keeps old API stopped'
 
 : >"$AUDIT"; printf false >"$STATE"
 ok 'ordinary failure restores policy before API resume' run_callback_case restore
@@ -213,6 +231,17 @@ restore_line="$(grep -n -m1 '^restore$' "$AUDIT" | cut -d: -f1)"; record_line="$
 bad 'INT path restores and records failure safely' run_callback_case signal
 restore_line="$(grep -n -m1 '^restore$' "$AUDIT" | cut -d: -f1)"; record_line="$(grep -n -m1 '^record:FAILED$' "$AUDIT" | cut -d: -f1)"
 [[ -n "$restore_line" && -n "$record_line" ]] && (( restore_line < record_line )) && pass 'signal restoration precedes failure record' || fail 'signal restoration precedes failure record'
+
+: >"$AUDIT"; printf false >"$STATE"
+bad 'active-barrier INT exits with an interrupted status' run_callback_case signal-active-barrier
+fail_closed_line="$(grep -n -m1 '^fail-closed$' "$AUDIT" | cut -d: -f1)"
+restore_line="$(grep -n -m1 '^restore$' "$AUDIT" | cut -d: -f1)"
+record_line="$(grep -n -m1 '^record:FAILED$' "$AUDIT" | cut -d: -f1)"
+exit_line="$(grep -n -m1 '^signal-exit$' "$AUDIT" | cut -d: -f1)"
+[[ -n "$fail_closed_line" && -n "$restore_line" && -n "$record_line" && -n "$exit_line" ]] \
+  && (( fail_closed_line < restore_line && restore_line < record_line && record_line < exit_line )) \
+  && pass 'active-barrier signal fails closed before restoration, failure record, and exit' \
+  || fail 'active-barrier signal fails closed before restoration, failure record, and exit'
 
 (( FAIL == 0 )) || exit 1
 printf 'PASSED: %s assertions\n' "$PASS"

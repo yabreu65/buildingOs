@@ -139,6 +139,35 @@ run_contract_validation() {
     _ "$fixture_repo" "$VALIDATOR" "$previous_sha" "$target_sha"
 }
 
+run_db107_compatibility() {
+  local previous_sha="$1"
+  local target_sha="$2"
+  bash -c '
+    source "$1"
+    SCRIPT_DIR="$2"
+    MIGRATION_TARGET_APPLIED=107
+    bash() {
+      [[ "$1" == "$SCRIPT_DIR/verify-production-migration-manifest.sh" ]] || return 91
+      if [[ "$2" == verify-files ]]; then
+        printf "status=ok\\ttarget=107\\n"
+      elif [[ "$2" == verify-db && "$3" == post ]]; then
+        printf "status=ok\\tphase=post\\ttarget=107\\n"
+      else
+        return 92
+      fi
+    }
+    env() {
+      if [[ "$1" == POSTGRES_CONTAINER=* && "$2" == DATABASE_NAME=* ]]; then
+        shift 3
+        bash "$@"
+      else
+        command env "$@"
+      fi
+    }
+    validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4"
+  ' _ "$VALIDATOR" "$ROOT_DIR/scripts" "$previous_sha" "$target_sha"
+}
+
 expect_output_contains() {
   local name="$1"
   local expected="$2"
@@ -333,6 +362,34 @@ old_prisma_schema="$(git show "$PREVIOUS_PRODUCTION_APP_SHA:apps/api/prisma/sche
 [[ "$old_prisma_schema" != *publicationIntegrityVersion* ]] \
   || fail_test 'known previous production Prisma schema unexpectedly exposes publicationIntegrityVersion'
 pass 'known previous production API Liquidation INSERT omits publicationIntegrityVersion and its Prisma schema lacks the field'
+[[ "$old_liquidation_writer" == *'incomeOffsetSnapshot: (input.incomeOffsetSnapshot ??'* \
+  && "$old_liquidation_writer" == *'buildLiquidationPublicationSnapshotV3({'* \
+  && "$old_liquidation_writer" == *'snapshotVersion = 3;'* ]] \
+  || fail_test 'pinned previous production API no longer proves nullable legacy rows and V3 publication'
+pass 'pinned previous production API retains nullable legacy write and V3 publication behavior'
+
+compatibility_migration="$ROOT_DIR/apps/api/prisma/migrations/20260919000000_release_a_dual_liquidation_compatibility/migration.sql"
+[[ -f "$compatibility_migration" ]] || fail_test 'migration 107 compatibility SQL is missing'
+compatibility_sql="$(<"$compatibility_migration")"
+[[ "$compatibility_sql" == *'Release A compatibility is a surgical transition over the hardened DB106'* \
+  && "$compatibility_sql" == *'hardened DB106 V4 publication contract markers are missing'* \
+  && "$compatibility_sql" == *'expected DB106 legacy V1/V2 publication-version clause was not found exactly once'* \
+  && "$compatibility_sql" == *'expected DB106 new-NULL-insert rejection was not found exactly once'* \
+  && "$compatibility_sql" == *'expenseSourceEvidence'* \
+  && "$compatibility_sql" == *'publicationExpenseEvidence'* \
+  && "$compatibility_sql" == *'allocationChargeEvidence'* \
+  && "$compatibility_sql" == *'distributionAllocationEvidence'* \
+  && "$compatibility_sql" == *'publicationAllocationEvidence'* \
+  && "$compatibility_sql" == *'generatedChargeEvidence'* \
+  && "$compatibility_sql" == *'modern liquidation publication requires complete matching V4 evidence'* \
+  && "$compatibility_sql" == *"AND (NEW.\"publicationSnapshot\" -> 'version') IS DISTINCT FROM '3'::jsonb THEN"* \
+  && "$compatibility_sql" == *'modern liquidation distribution recipients must belong to the liquidation tenant and building'* \
+  && "$compatibility_sql" == *'validate_liquidation_distribution_snapshot('* \
+  && "$compatibility_sql" != *'CREATE OR REPLACE FUNCTION enforce_liquidation_publication_integrity('* \
+  && "$compatibility_sql" != *'UPDATE "Liquidation"'* \
+  && "$compatibility_sql" != *'SET "publicationIntegrityVersion"'* ]] \
+  || fail_test 'migration 107 does not preserve legacy and modern publication contracts via guarded rewrites'
+pass 'migration 107 surgically adds legacy V3/NULL compatibility while preserving DB106 V4 validation'
 
 origin_trigger="$(git show "$PR_CANDIDATE_SHA:apps/api/prisma/migrations/20260918000000_enforce_modern_distribution_unit_ownership/migration.sql")"
 [[ "$origin_trigger" == *'IF TG_OP = '\''INSERT'\'' AND NEW."publicationIntegrityVersion" IS NULL THEN'* \
@@ -349,6 +406,23 @@ expect_failure '106 trigger rejects incompatible previous production app even wh
     "$ROOT_DIR" "$VALIDATOR" "$PREVIOUS_PRODUCTION_APP_SHA" "$PR_CANDIDATE_SHA"
 [[ ! -e "$docker_marker" ]] || fail_test 'schema-incompatible app reached the row-only data predicate'
 pass 'incompatible app rejected before zero-row predicate can authorize rollback'
+
+expect_failure 'DB107 rejects an unknown runtime instead of using generic row-only compatibility' \
+  env \
+    PATH="$mock_bin:$PATH" \
+    bash -c 'cd "$1"; source "$2"; MIGRATION_TARGET_APPLIED=107; validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4"' _ \
+    "$fixture_repo" "$VALIDATOR" "$fixture_base_sha" "$fixture_schema_changed_sha"
+[[ ! -e "$docker_marker" ]] || fail_test 'unknown DB107 runtime reached a generic compatibility query'
+pass 'unknown DB107 runtime rejected before any application or database compatibility bypass'
+
+current_candidate_sha="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+expect_output_contains 'DB107 accepts only the pinned previous runtime after both manifest verifiers pass' \
+  'basis=DB107_PINNED_RUNTIME' \
+  run_db107_compatibility "$PREVIOUS_PRODUCTION_APP_SHA" "$current_candidate_sha"
+expect_output_contains 'DB107 accepts the exact Release A candidate runtime after both manifest verifiers pass' \
+  'basis=DB107_PINNED_RUNTIME' \
+  run_db107_compatibility "$current_candidate_sha" "$current_candidate_sha"
+pass 'DB107 compatibility positive cases are bound to the pinned old SHA or exact candidate SHA'
 
 expect_output_contains '106 application contract keeps SAME_DB_CONTRACT valid for a capable previous app' \
   'basis=SAME_DB_CONTRACT' \
@@ -461,11 +535,11 @@ generated_current_target_receipt="$(env \
   ROLLBACK_PROTECTED_DIR="$protected_dir" \
   ROLLBACK_EXPECTED_OWNER="$current_owner" \
   ROLLBACK_EXPECTED_GROUP="$current_group" \
-  bash -c 'source "$1"; MIGRATION_TARGET_APPLIED=106; ROLLBACK_COMPATIBILITY_BASIS=SAME_DB_CONTRACT; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 106' _ \
+  bash -c 'source "$1"; MIGRATION_TARGET_APPLIED=107; ROLLBACK_COMPATIBILITY_BASIS=DB107_PINNED_RUNTIME; ROLLBACK_COMPATIBILITY_TARGET_SHA="$2"; ROLLBACK_COMPATIBILITY_PREVIOUS_SHA="$3"; generate_rollback_compatibility_receipt "$2" "$3" "$4" "$5" 107' _ \
   "$VALIDATOR" "$TARGET_SHA" "$PREVIOUS_SHA" "$API_DIGEST" "$WEB_DIGEST")" \
   || fail_test 'current-target receipt generation failed'
-grep -F 'migration_count=106' "$generated_current_target_receipt" >/dev/null \
-  || fail_test 'current-target receipt did not record the verified target count'
+grep -F 'migration_count=107' "$generated_current_target_receipt" >/dev/null \
+  || fail_test 'current-target receipt did not record the verified DB107 target count'
 pass 'generates rollback receipt for the verified current migration target'
 
 migration_tampered_original="$tmp_root/migration-tampered-original.receipt"
@@ -570,9 +644,15 @@ rollback_consumer_output="$(env \
     https://api.example.test/health https://api.example.test/readyz https://app.example.test/login 2>&1)" \
   || rollback_consumer_status=$?
 [[ "$rollback_consumer_status" -ne 0 ]] || fail_test 'rollback consumer unexpectedly completed in the fixture environment'
-[[ "$rollback_consumer_output" == *'cd: /opt/pawtech/apps/buildingos/buildingos-app: No such file or directory'* ]] \
-  || fail_test 'rollback consumer did not reach the expected post-validation checkout gate'
-pass 'rollback consumer validates new-format receipt before the checkout gate'
+[[ "$rollback_consumer_output" == *'Application rollback requires the verified DB107 compatibility contract'* ]] \
+  || fail_test 'rollback consumer did not reject a non-DB107 receipt before production access'
+pass 'rollback consumer rejects receipts without the verified DB107 contract before the checkout gate'
+
+grep -F "previous_sha" "$VALIDATOR" | grep -F 'db82d3d37fc6184a6d4063709b9a15b923371695' >/dev/null \
+  || fail_test 'DB107 old-runtime compatibility is not pinned to the approved SHA'
+grep -F "previous_sha\" == \"\$target_sha\"" "$VALIDATOR" >/dev/null \
+  || fail_test 'DB107 compatibility does not explicitly permit the candidate itself'
+pass 'DB107 compatibility is limited to the pinned old runtime or exact candidate SHA'
 
 concurrent_dir="$tmp_root/concurrent-protected"
 mkdir -p "$concurrent_dir"

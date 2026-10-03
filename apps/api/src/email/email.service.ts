@@ -86,13 +86,20 @@ export class EmailService {
   async sendEmail(
     options: SendEmailOptions,
     emailType: EmailType,
+    writeAllowed?: () => boolean,
   ): Promise<SendEmailResult> {
+    if (writeAllowed && !this.isWriteAllowed(writeAllowed)) {
+      return { success: false, error: 'Write barrier is closed' };
+    }
     if (this.provider === 'none') {
       this.logger.debug(`[Email] Provider is "none", skipping: ${options.to}`);
       return { success: true, skipped: true }; // Don't fail if email is disabled
     }
 
     try {
+      if (writeAllowed && !this.isWriteAllowed(writeAllowed)) {
+        return { success: false, error: 'Write barrier is closed' };
+      }
       let externalId: string | undefined;
 
       if (this.provider === 'smtp') {
@@ -103,6 +110,10 @@ export class EmailService {
         throw new Error('SES provider is not implemented');
       }
 
+      // Provider sends may complete after closure, but persistence may not start.
+      if (writeAllowed && !this.isWriteAllowed(writeAllowed)) {
+        return { success: true, externalId };
+      }
       // Log email sent
       if (options.tenantId) {
         await this.prisma.emailLog.create({
@@ -125,8 +136,8 @@ export class EmailService {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`[Email] Failed to send ${emailType} to ${options.to}: ${errorMessage}`);
 
-      // Log email failed
-      if (options.tenantId) {
+      // Do not start failure-log persistence after a guarded send has closed.
+      if (options.tenantId && (!writeAllowed || this.isWriteAllowed(writeAllowed))) {
         try {
           await this.prisma.emailLog.create({
             data: {
@@ -149,6 +160,14 @@ export class EmailService {
       // Can add in future or handle silently
 
       return { success: false, error: errorMessage };
+    }
+  }
+
+  private isWriteAllowed(writeAllowed: () => boolean): boolean {
+    try {
+      return writeAllowed();
+    } catch {
+      return false;
     }
   }
 

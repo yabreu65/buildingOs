@@ -836,7 +836,7 @@ export class TicketsService {
    * Runs hourly - finds OPEN tickets that are HIGH/URGENT, unassigned, and created >2 hours ago
    * Marks them as escalated and notifies tenant admins
    */
-  async escalateUrgentTickets(): Promise<{ escalatedCount: number }> {
+  async escalateUrgentTickets(writeAllowed?: () => boolean): Promise<{ escalatedCount: number }> {
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
 
     // Find OPEN tickets that are HIGH/URGENT, unassigned, created >2 hours ago
@@ -857,7 +857,9 @@ export class TicketsService {
     let escalatedCount = 0;
 
     for (const ticket of escalatable) {
+      if (!this.isWriteAllowed(writeAllowed)) break;
       // Mark ticket as escalated
+      if (!this.isWriteAllowed(writeAllowed)) break;
       await this.prisma.ticket.update({
         where: { id: ticket.id },
         data: { escalatedAt: new Date() },
@@ -882,8 +884,9 @@ export class TicketsService {
 
       // Notify all tenant admins (fire-and-forget)
       for (const admin of tenantAdmins) {
+        if (!this.isWriteAllowed(writeAllowed)) break;
         if (admin.user?.id) {
-          void this.notificationsService.createNotification({
+          const notificationInput: Parameters<NotificationsService['createNotification']>[0] = {
             tenantId: ticket.building.tenantId,
             userId: admin.user.id,
             type: 'URGENT_TICKET_UNASSIGNED',
@@ -898,28 +901,46 @@ export class TicketsService {
               createdBy: ticket.createdBy.email,
             },
             deliveryMethods: ['IN_APP', 'EMAIL'],
-          });
+          };
+          if (writeAllowed) {
+            await this.notificationsService.createNotification(notificationInput, writeAllowed);
+          } else {
+            void this.notificationsService.createNotification(notificationInput);
+          }
         }
       }
 
-      // Audit the escalation (fire-and-forget)
-      void this.auditService.createLog({
-        tenantId: ticket.building.tenantId,
-        actorUserId: 'system-cronjob', // Special marker for automated actions
-        action: AuditAction.TICKET_ESCALATED,
-        entityType: 'Ticket',
-        entityId: ticket.id,
-        metadata: {
-          hoursWaiting,
-          priority: ticket.priority,
-          buildingName: ticket.building.name,
-        },
-      });
+      // Audit the escalation (fire-and-forget unless the live guard must fence the write).
+      if (this.isWriteAllowed(writeAllowed)) {
+        const auditInput: Parameters<AuditService['createLog']>[0] = {
+          tenantId: ticket.building.tenantId,
+          actorUserId: 'system-cronjob', // Special marker for automated actions
+          action: AuditAction.TICKET_ESCALATED,
+          entityType: 'Ticket',
+          entityId: ticket.id,
+          metadata: {
+            hoursWaiting,
+            priority: ticket.priority,
+            buildingName: ticket.building.name,
+          },
+        };
+        if (writeAllowed) await this.auditService.createLog(auditInput, writeAllowed);
+        else void this.auditService.createLog(auditInput);
+      }
 
       escalatedCount++;
     }
 
     return { escalatedCount };
+  }
+
+  private isWriteAllowed(writeAllowed?: () => boolean): boolean {
+    if (!writeAllowed) return true;
+    try {
+      return writeAllowed();
+    } catch {
+      return false;
+    }
   }
 
   /**
