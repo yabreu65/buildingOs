@@ -32,7 +32,7 @@ The seed is a durable QA baseline provisioner. The acceptance cleanup does not d
 ## Tasks
 
 1. [done] **Explicit full acceptance baseline handoff** — Add/require `capture-acceptance-baseline`, rename the shell snapshot variable, capture before seed, pipe the same full baseline to the acceptance child and password restore, and add RED/GREEN tests for password-only rejection/full-baseline acceptance and ordering/handoff. Record work-unit commit SHA when complete.
-2. [in progress] **Precise mutation and residue contract** — Classify Golden seed fixtures as `DURABLE_QA_BASELINE` with no cleanup; classify password hashes as `EPHEMERAL_GOLDEN_AUTH_MUTATION`; require both exact ReceiptSequence preimages for the baseline year and following year using the same local-calendar-year semantics as the receipt service, restore only the captured row matching the acceptance receipt, and prove all untargeted preimages unchanged plus both preimages unchanged when no receipt was reserved; emit precise password restore markers and gate `QA_RUN_RESIDUE_ZERO_PASS` on all required cleanup proofs. Add tests for inventory, preservation, marker semantics, UTC year rollover, and exact Golden seed allowlist. Record work-unit commit SHA when complete.
+2. [done] **Precise mutation and residue contract** — Classify Golden seed fixtures as `DURABLE_QA_BASELINE` with no cleanup; classify password hashes as `EPHEMERAL_GOLDEN_AUTH_MUTATION`; require both exact ReceiptSequence preimages for the baseline year and following year using the same local-calendar-year semantics as the receipt service, restore only the captured row matching the acceptance receipt, and prove all untargeted preimages unchanged plus both preimages unchanged when no receipt was reserved; emit precise password restore markers and gate `QA_RUN_RESIDUE_ZERO_PASS` on all required cleanup proofs. Add tests for inventory, preservation, marker semantics, year rollover, and exact Golden seed allowlist. Final cleanup tests passed 46/46; all applicable focused, full local DB, lint, typecheck, and build gates passed.
 
 ## Validation plan
 
@@ -70,4 +70,4 @@ Reliability review found a year-boundary edge case: baseline capture records onl
 ## Commit evidence
 
 - Task 1: `17f197316586ad1bfe2b0561143f3092fc931641` — `fix(staging): pass full finance acceptance baseline`; focused cleanup and guard tests passed.
-- Task 2: pending
+- Task 2: `8cfbaa5e19a9fd6342a52429bffc04aee6c7e4e9` — `fix(staging): prove finance acceptance cleanup baseline`; cleanup 46/46 and all applicable local gates passed.
