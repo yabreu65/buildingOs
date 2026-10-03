@@ -860,6 +860,17 @@ describe('CommunicationsService receipt synchronization on publication', () => {
     expect(secondResult.sentAt).toBe(sentAt);
   });
 
+  it('aborts the SENT transaction when the live guard closes inside the transaction', async () => {
+    prisma.communication.findUnique.mockResolvedValueOnce({ status: 'DRAFT' });
+    const writeAllowed = jest.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+
+    await expect(service.send(tenantId, communicationId, writeAllowed)).rejects.toThrow('Write barrier is closed');
+
+    expect(prisma.communication.updateMany).not.toHaveBeenCalled();
+    expect(prisma.communicationReceipt.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.communicationReceipt.createMany).not.toHaveBeenCalled();
+  });
+
   it('does not resend web push when publishV2() receives an already SENT communication', async () => {
     const sentAt = new Date('2026-07-05T00:00:00.000Z');
     const currentCommunication = buildCommunicationWithReceipts([userOneId]);

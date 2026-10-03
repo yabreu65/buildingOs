@@ -290,16 +290,25 @@ export class NotificationsService {
       // Send email (fire-and-forget, EmailService handles failures)
       // Use PAYMENT_SUBMITTED as a generic notification type (we can extend this later)
       if (writeAllowed && !this.isWriteAllowed(writeAllowed)) return;
-      await this.emailService.sendEmail(
-        {
-          to: user.email,
-          subject,
-          htmlBody: this.wrapHtmlBody(body, input.title),
-          textBody: body,
-          tenantId: input.tenantId,
-        },
-        EmailType.PAYMENT_SUBMITTED, // Generic notification type for now
-      );
+      const emailOptions = {
+        to: user.email,
+        subject,
+        htmlBody: this.wrapHtmlBody(body, input.title),
+        textBody: body,
+        tenantId: input.tenantId,
+      };
+      if (writeAllowed) {
+        await this.emailService.sendEmail(
+          emailOptions,
+          EmailType.PAYMENT_SUBMITTED, // Generic notification type for now
+          writeAllowed,
+        );
+      } else {
+        await this.emailService.sendEmail(
+          emailOptions,
+          EmailType.PAYMENT_SUBMITTED, // Generic notification type for now
+        );
+      }
     } catch (err) {
       // RULE: Never fail main operation
       this.logger.error('[NotificationsService] Failed to send email', {

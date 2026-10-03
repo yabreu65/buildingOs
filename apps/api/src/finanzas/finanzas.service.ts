@@ -191,6 +191,15 @@ export class FinanzasService {
     private readonly writeBarrier: Pick<ReleaseAWriteBarrierService, 'isOpen'> | undefined = undefined,
   ) {}
 
+  private isWriteAllowed(writeAllowed?: () => boolean): boolean {
+    if (!writeAllowed) return true;
+    try {
+      return writeAllowed();
+    } catch {
+      return false;
+    }
+  }
+
   private isWriteBarrierOpen(): boolean {
     try {
       return this.writeBarrier?.isOpen() ?? false;
@@ -3943,7 +3952,7 @@ export class FinanzasService {
    * [PHASE 3 MEDIUM #9] Auto-create monthly expense periods
    * Runs on 1st of each month at 8am - creates next month's period for buildings
    */
-  async autoCreateMonthlyExpensePeriods(): Promise<{ created: number }> {
+  async autoCreateMonthlyExpensePeriods(writeAllowed?: () => boolean): Promise<{ created: number }> {
     const now = new Date();
     const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1);
     const year = nextMonthDate.getFullYear();
@@ -3962,6 +3971,7 @@ export class FinanzasService {
     let createdCount = 0;
 
     for (const building of buildings) {
+      if (!this.isWriteAllowed(writeAllowed)) break;
       // Skip if period already exists for next month
       if (building.expensePeriods.length > 0) {
         continue;
@@ -3979,6 +3989,7 @@ export class FinanzasService {
       // Create new period (due 15th of next month)
       const dueDate = new Date(year, month - 1, 15);
 
+      if (!this.isWriteAllowed(writeAllowed)) break;
       const period = await this.prisma.expensePeriod.create({
         data: {
           tenantId: building.tenantId,
@@ -4006,7 +4017,7 @@ export class FinanzasService {
    * [PHASE 3 MEDIUM #10] Send payment reminders for charges due in 3 days
    * Runs daily at 10am - notifies residents of upcoming due dates
    */
-  async sendPaymentReminders(): Promise<{ count: number }> {
+  async sendPaymentReminders(writeAllowed?: () => boolean): Promise<{ count: number }> {
     const now = new Date();
     const inThreeDays = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
     const startOfDay = new Date(inThreeDays.getFullYear(), inThreeDays.getMonth(), inThreeDays.getDate());
@@ -4016,11 +4027,13 @@ export class FinanzasService {
     let reminderCount = 0;
 
     for (const tenant of tenantIds) {
+      if (!this.isWriteAllowed(writeAllowed)) break;
       reminderCount += await this.sendPaymentRemindersForTenant(
         tenant.id,
         now,
         startOfDay,
         endOfDay,
+        writeAllowed,
       );
     }
 
@@ -4032,6 +4045,7 @@ export class FinanzasService {
     now: Date,
     startOfDay: Date,
     endOfDay: Date,
+    writeAllowed?: () => boolean,
   ): Promise<number> {
     const remindableCharges = await this.prisma.charge.findMany({
       where: {
@@ -4060,7 +4074,9 @@ export class FinanzasService {
     let reminderCount = 0;
 
     for (const charge of remindableCharges) {
+      if (!this.isWriteAllowed(writeAllowed)) break;
       // Mark reminder as sent
+      if (!this.isWriteAllowed(writeAllowed)) break;
       await this.prisma.charge.update({
         where: { id: charge.id },
         data: { reminderSentAt: now },
@@ -4070,8 +4086,9 @@ export class FinanzasService {
       const dueStr = charge.dueDate.toLocaleDateString('es-AR');
       const amount = (charge.amount / 100).toFixed(2);
       for (const occupant of charge.unit.unitOccupants) {
+        if (!this.isWriteAllowed(writeAllowed)) break;
         if (occupant.member?.user?.id) {
-          await this.notificationsService.createNotification({
+          const notificationInput: CreateNotificationInput = {
             tenantId: charge.tenantId,
             userId: occupant.member.user.id,
             type: 'PAYMENT_REMINDER',
@@ -4084,7 +4101,12 @@ export class FinanzasService {
               dueDate: charge.dueDate.toISOString(),
             },
             deliveryMethods: ['IN_APP', 'EMAIL'],
-          });
+          };
+          if (writeAllowed) {
+            await this.notificationsService.createNotification(notificationInput, writeAllowed);
+          } else {
+            await this.notificationsService.createNotification(notificationInput);
+          }
           reminderCount++;
         }
       }

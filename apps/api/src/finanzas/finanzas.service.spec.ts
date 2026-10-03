@@ -5766,4 +5766,45 @@ describe('FinanzasService', () => {
       expect(share).toBe(10000);
     });
   });
+
+  describe('cron write barrier callbacks', () => {
+    it('stops monthly period creation when the live guard closes between buildings', async () => {
+      let open = true;
+      const create = jest.fn().mockImplementation(async () => {
+        open = false;
+        return { id: 'period-1' };
+      });
+      Object.assign(prismaService, {
+        building: { findMany: jest.fn().mockResolvedValue([
+          { id: 'building-1', tenantId: 'tenant-1', expensePeriods: [] },
+          { id: 'building-2', tenantId: 'tenant-1', expensePeriods: [] },
+        ]) },
+        expensePeriod: { findFirst: jest.fn().mockResolvedValue(null), create },
+      });
+
+      const result = await service.autoCreateMonthlyExpensePeriods(() => open);
+
+      expect(result.created).toBe(1);
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it('rechecks payment reminder guard immediately before charge mutation', async () => {
+      let checks = 0;
+      const update = jest.spyOn(prismaService.charge, 'update').mockResolvedValue({} as never);
+      Object.assign(prismaService, {
+        tenant: { findMany: jest.fn().mockResolvedValue([{ id: 'tenant-1' }]) },
+      });
+      jest.spyOn(prismaService.charge, 'findMany').mockResolvedValue([
+        {
+          id: 'charge-1', tenantId: 'tenant-1', amount: 100, currency: 'ARS',
+          dueDate: new Date(), unit: { label: '1A', unitOccupants: [] },
+        },
+      ] as never);
+      const writeAllowed = () => ++checks < 3;
+
+      await service.sendPaymentReminders(writeAllowed);
+
+      expect(update).not.toHaveBeenCalled();
+    });
+  });
 });

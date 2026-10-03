@@ -55,6 +55,16 @@ export class CronJobsService {
     }
   }
 
+  private isWriteAllowed(): boolean {
+    try {
+      return this.writeBarrier.isOpen();
+    } catch {
+      return false;
+    }
+  }
+
+  private readonly writeAllowed = (): boolean => this.isWriteAllowed();
+
   // =========================================================================
   // CRON JOBS (inherit this pattern for all future jobs)
   // =========================================================================
@@ -65,9 +75,9 @@ export class CronJobsService {
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async dispatchScheduledCommunications(): Promise<CronJobResult<{ dispatchedCount: number }>> {
-    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
+    if (!this.isWriteAllowed()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('dispatchScheduledCommunications', async () => {
-      const count = await this.communicationsService.dispatchScheduledCommunications();
+      const count = await this.communicationsService.dispatchScheduledCommunications(this.writeAllowed);
       return { dispatchedCount: count };
     });
   }
@@ -77,9 +87,9 @@ export class CronJobsService {
    */
   @Cron('0 8 1 * *')
   async autoCreateMonthlyExpensePeriods(): Promise<CronJobResult<{ created: number }>> {
-    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
+    if (!this.isWriteAllowed()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('autoCreateMonthlyExpensePeriods', async () => {
-      return await this.finanzasService.autoCreateMonthlyExpensePeriods();
+      return await this.finanzasService.autoCreateMonthlyExpensePeriods(this.writeAllowed);
     });
   }
 
@@ -88,9 +98,9 @@ export class CronJobsService {
    */
   @Cron('0 10 * * *')
   async sendPaymentReminders(): Promise<CronJobResult<{ count: number }>> {
-    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
+    if (!this.isWriteAllowed()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('sendPaymentReminders', async () => {
-      return await this.finanzasService.sendPaymentReminders();
+      return await this.finanzasService.sendPaymentReminders(this.writeAllowed);
     });
   }
 
@@ -101,9 +111,9 @@ export class CronJobsService {
    */
   @Cron('0 * * * *') // Every hour at :00
   async escalateUrgentTickets(): Promise<CronJobResult<{ escalatedCount: number }>> {
-    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
+    if (!this.isWriteAllowed()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('escalateUrgentTickets', async () => {
-      return await this.ticketsService.escalateUrgentTickets();
+      return await this.ticketsService.escalateUrgentTickets(this.writeAllowed);
     });
   }
 
@@ -113,9 +123,9 @@ export class CronJobsService {
    */
   @Cron('0 6 * * *')
   async processRecurringExpenses(): Promise<CronJobResult<{ createdCount: number }>> {
-    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
+    if (!this.isWriteAllowed()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('processRecurringExpenses', async () => {
-      return await this.recurringExpenseService.processRecurringExpenses();
+      return await this.recurringExpenseService.processRecurringExpenses(this.writeAllowed);
     });
   }
 
@@ -125,9 +135,9 @@ export class CronJobsService {
    */
   @Cron('0 1 1 * *')
   async sendMonthlyFinanceSummaries(): Promise<CronJobResult<{ sentCount: number }>> {
-    if (!this.writeBarrier.isOpen()) return { success: true, durationMs: 0 };
+    if (!this.isWriteAllowed()) return { success: true, durationMs: 0 };
     return this.runWithErrorHandling('sendMonthlyFinanceSummaries', async () => {
-      return await this.financeSummaryService.sendMonthlyFinanceSummaries();
+      return await this.financeSummaryService.sendMonthlyFinanceSummaries(this.writeAllowed);
     });
   }
 }

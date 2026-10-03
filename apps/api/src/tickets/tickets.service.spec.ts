@@ -1074,5 +1074,88 @@ describe('TicketsService', () => {
         );
       });
     });
+
+    it('skips the ticket mutation when the live write guard closes immediately before update', async () => {
+      jest.spyOn(prismaService.ticket, 'findMany').mockResolvedValue([
+        {
+          id: 'ticket-1',
+          createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+          title: 'Urgent issue',
+          priority: 'URGENT',
+          building: { tenantId: 'tenant-1', name: 'Building' },
+          createdBy: { email: 'creator@example.com' },
+        },
+      ] as never);
+      let checks = 0;
+      const writeAllowed = () => ++checks < 2;
+
+      const result = await service.escalateUrgentTickets(writeAllowed);
+
+      expect(result.escalatedCount).toBe(0);
+      expect(prismaService.ticket.update).not.toHaveBeenCalled();
+      expect(notificationsService.createNotification).not.toHaveBeenCalled();
+      expect(auditService.createLog).not.toHaveBeenCalled();
+    });
+
+    it('passes the same live write guard to audit and notification writes', async () => {
+      jest.spyOn(prismaService.ticket, 'findMany').mockResolvedValue([
+        {
+          id: 'ticket-1',
+          createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+          title: 'Urgent issue',
+          priority: 'URGENT',
+          building: { tenantId: 'tenant-1', name: 'Building' },
+          createdBy: { email: 'creator@example.com' },
+        },
+      ] as never);
+      jest.spyOn(prismaService.tenantMember, 'findMany').mockResolvedValue([
+        { user: { id: 'admin-1' } },
+      ] as never);
+      const writeAllowed = jest.fn(() => true);
+
+      await service.escalateUrgentTickets(writeAllowed);
+
+      expect(notificationsService.createNotification).toHaveBeenCalledWith(
+        expect.any(Object),
+        writeAllowed,
+      );
+      expect(auditService.createLog).toHaveBeenCalledWith(expect.any(Object), writeAllowed);
+    });
+
+    it('does not await audit or notification promises when no write guard is supplied', async () => {
+      jest.spyOn(prismaService.ticket, 'findMany').mockResolvedValue([
+        {
+          id: 'ticket-1',
+          createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+          title: 'Urgent issue',
+          priority: 'URGENT',
+          building: { tenantId: 'tenant-1', name: 'Building' },
+          createdBy: { email: 'creator@example.com' },
+        },
+      ] as never);
+      jest.spyOn(prismaService.tenantMember, 'findMany').mockResolvedValue([
+        { user: { id: 'admin-1' } },
+      ] as never);
+
+      let resolveAudit!: () => void;
+      let resolveNotification!: () => void;
+      auditService.createLog.mockReturnValue(new Promise<void>((resolve) => {
+        resolveAudit = resolve;
+      }));
+      notificationsService.createNotification.mockReturnValue(new Promise<void>((resolve) => {
+        resolveNotification = resolve;
+      }));
+
+      const completed = await Promise.race([
+        service.escalateUrgentTickets().then(() => true),
+        new Promise<boolean>((resolve) => setImmediate(() => resolve(false))),
+      ]);
+
+      expect(completed).toBe(true);
+      expect(notificationsService.createNotification).toHaveBeenCalledTimes(1);
+      expect(auditService.createLog).toHaveBeenCalledTimes(1);
+      resolveAudit();
+      resolveNotification();
+    });
   });
 });

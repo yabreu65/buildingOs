@@ -178,6 +178,24 @@ describe('NotificationsService', () => {
       expect(emailService.sendEmail).toHaveBeenCalledTimes(1);
     });
 
+    it('forwards the live guard to EmailService', async () => {
+      const writeAllowed = jest.fn(() => true);
+      await service.createNotification({
+        tenantId,
+        userId,
+        type: 'PAYMENT_RECEIVED',
+        title: 'Payment',
+        body: 'Body',
+        deliveryMethods: ['EMAIL'],
+      }, writeAllowed);
+
+      expect(emailService.sendEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ to: userEmail }),
+        EmailType.PAYMENT_SUBMITTED,
+        writeAllowed,
+      );
+    });
+
     it('does not send email when EMAIL delivery is not requested', async () => {
       await service.createNotification({
         tenantId,

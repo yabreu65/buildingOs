@@ -468,7 +468,7 @@ export class RecurringExpenseService {
    * If any step fails, the entire rule rolls back.
    * Audit is fired AFTER the transaction commits.
    */
-  async processRecurringExpenses(): Promise<{ createdCount: number }> {
+  async processRecurringExpenses(writeAllowed?: () => boolean): Promise<{ createdCount: number }> {
     const now = new Date();
 
     const due = await this.prisma.recurringExpense.findMany({
@@ -484,8 +484,9 @@ export class RecurringExpenseService {
     let createdCount = 0;
 
     for (const recurring of due) {
+      if (!this.isWriteAllowed(writeAllowed)) break;
       try {
-        await this.processOneRecurringExpense(recurring, now);
+        await this.processOneRecurringExpense(recurring, now, writeAllowed);
         createdCount++;
       } catch (error) {
         this.logger.error(
@@ -518,6 +519,7 @@ export class RecurringExpenseService {
       allocations: Array<{ buildingId: string; percentage: number }>;
     },
     now: Date,
+    writeAllowed?: () => boolean,
   ): Promise<void> {
     const period = this.getCurrentPeriod();
     const nextRun = this.calculateNextRunDate(now, recurring.frequency);
@@ -527,7 +529,9 @@ export class RecurringExpenseService {
         throw new Error(`RecurringExpense ${recurring.id} has BUILDING scope but no buildingId`);
       }
 
+      this.assertWriteAllowed(writeAllowed);
       const expenseId = await this.prisma.$transaction(async (tx) => {
+        this.assertWriteAllowed(writeAllowed);
         const expense = await tx.expense.create({
           data: {
             tenantId: recurring.tenantId,
@@ -545,6 +549,7 @@ export class RecurringExpenseService {
           },
         });
 
+        this.assertWriteAllowed(writeAllowed);
         const nextRunResult = await tx.recurringExpense.updateMany({
           where: { id: recurring.id, tenantId: recurring.tenantId },
           data: { nextRunDate: nextRun },
@@ -555,11 +560,12 @@ export class RecurringExpenseService {
           );
         }
 
+        this.assertWriteAllowed(writeAllowed);
         return expense.id;
       });
 
       // Post-commit audit
-      void this.auditService.createLog({
+      const auditInput: Parameters<AuditService['createLog']>[0] = {
         tenantId: recurring.tenantId,
         action: 'EXPENSE_CREATE',
         entityType: 'Expense',
@@ -571,7 +577,9 @@ export class RecurringExpenseService {
           frequency: recurring.frequency,
           nextRunDate: nextRun.toISOString(),
         },
-      });
+      };
+      if (writeAllowed) void this.auditService.createLog(auditInput, writeAllowed);
+      else void this.auditService.createLog(auditInput);
       return;
     }
 
@@ -620,7 +628,9 @@ export class RecurringExpenseService {
 
     // Atomic: create Expense + MovementAllocations (canonical, largest remainder)
     // + update nextRunDate. No audit inside the transaction.
+    this.assertWriteAllowed(writeAllowed);
     const expenseId = await this.prisma.$transaction(async (tx) => {
+      this.assertWriteAllowed(writeAllowed);
       const expense = await tx.expense.create({
         data: {
           tenantId: recurring.tenantId,
@@ -638,6 +648,7 @@ export class RecurringExpenseService {
         },
       });
 
+      this.assertWriteAllowed(writeAllowed);
       await this.movementAllocationService.createForExpenseInTx(
         tx,
         recurring.tenantId,
@@ -647,6 +658,7 @@ export class RecurringExpenseService {
         percentageAllocations,
       );
 
+      this.assertWriteAllowed(writeAllowed);
       const nextRunResult = await tx.recurringExpense.updateMany({
         where: { id: recurring.id, tenantId: recurring.tenantId },
         data: { nextRunDate: nextRun },
@@ -657,11 +669,12 @@ export class RecurringExpenseService {
         );
       }
 
+      this.assertWriteAllowed(writeAllowed);
       return expense.id;
     });
 
     // Post-commit audit
-    void this.auditService.createLog({
+    const auditInput: Parameters<AuditService['createLog']>[0] = {
       tenantId: recurring.tenantId,
       action: 'EXPENSE_CREATE',
       entityType: 'Expense',
@@ -674,7 +687,24 @@ export class RecurringExpenseService {
         frequency: recurring.frequency,
         nextRunDate: nextRun.toISOString(),
       },
-    });
+    };
+    if (writeAllowed) void this.auditService.createLog(auditInput, writeAllowed);
+    else void this.auditService.createLog(auditInput);
+  }
+
+  private isWriteAllowed(writeAllowed?: () => boolean): boolean {
+    if (!writeAllowed) return true;
+    try {
+      return writeAllowed();
+    } catch {
+      return false;
+    }
+  }
+
+  private assertWriteAllowed(writeAllowed?: () => boolean): void {
+    if (!this.isWriteAllowed(writeAllowed)) {
+      throw new Error('Write barrier is closed');
+    }
   }
 
   // --- Private helpers ---

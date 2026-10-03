@@ -43,12 +43,25 @@ describe('CronJobsService Release A write barrier', () => {
     }
   });
 
-  it('runs scheduled dependencies normally after the barrier opens', async () => {
+  it('passes the live write-barrier callback to every scheduled dependency', async () => {
     barrier.isOpen.mockReturnValue(true);
-    communications.dispatchScheduledCommunications.mockResolvedValue(2);
 
-    await service.dispatchScheduledCommunications();
+    for (const [, run, dependency] of scheduledMutators) {
+      dependency.mockResolvedValue({});
+      await run();
+      const writeAllowed = dependency.mock.calls[dependency.mock.calls.length - 1]?.[0];
+      expect(writeAllowed).toEqual(expect.any(Function));
+      expect(writeAllowed()).toBe(true);
+      barrier.isOpen.mockReturnValue(false);
+      expect(writeAllowed()).toBe(false);
+      barrier.isOpen.mockReturnValue(true);
+    }
+  });
 
-    expect(communications.dispatchScheduledCommunications).toHaveBeenCalledTimes(1);
+  it('treats an exception from the initial barrier check as closed', async () => {
+    barrier.isOpen.mockImplementation(() => { throw new Error('indeterminate'); });
+
+    await expect(service.dispatchScheduledCommunications()).resolves.toMatchObject({ success: true });
+    expect(communications.dispatchScheduledCommunications).not.toHaveBeenCalled();
   });
 });

@@ -929,6 +929,28 @@ describe('RecurringExpenseService', () => {
       expect(loggerErrorSpy).toHaveBeenCalled();
     });
 
+    it('rolls back a BUILDING transaction when the barrier closes after expense creation', async () => {
+      jest.spyOn(prisma.recurringExpense, 'findMany').mockResolvedValue([buildingRule()] as any);
+      let checks = 0;
+      const writeAllowed = () => ++checks < 4;
+      const committed = { expense: false, allocation: false, nextRunDate: false };
+      (prisma.$transaction as jest.Mock).mockImplementation(async (callback) => {
+        const result = await callback(tx);
+        committed.expense = (tx.expense.create as jest.Mock).mock.calls.length > 0;
+        committed.allocation = (movementAllocationService.createForExpenseInTx as jest.Mock).mock.calls.length > 0;
+        committed.nextRunDate = (tx.recurringExpense.updateMany as jest.Mock).mock.calls.length > 0;
+        return result;
+      });
+
+      const result = await service.processRecurringExpenses(writeAllowed);
+
+      expect(tx.expense.create).toHaveBeenCalledTimes(1);
+      expect(committed).toEqual({ expense: false, allocation: false, nextRunDate: false });
+      expect(tx.recurringExpense.updateMany).not.toHaveBeenCalled();
+      expect(auditService.createLog).not.toHaveBeenCalled();
+      expect(result.createdCount).toBe(0);
+    });
+
     it('fallo en expense.create: sin nextRunDate ni audit exitoso', async () => {
       jest.spyOn(prisma.recurringExpense, 'findMany').mockResolvedValue([buildingRule()] as any);
       tx.expense.create.mockRejectedValueOnce(new Error('expense create failed'));
@@ -1070,6 +1092,29 @@ describe('RecurringExpenseService', () => {
       expect(tx.expense.create).not.toHaveBeenCalled();
       expect(result.createdCount).toBe(0);
       expect(loggerErrorSpy).toHaveBeenCalled();
+    });
+
+    it('aborts TENANT_SHARED transaction after allocation when the barrier closes', async () => {
+      jest.spyOn(prisma.recurringExpense, 'findMany').mockResolvedValue([manualRule()] as any);
+      let checks = 0;
+      const writeAllowed = () => ++checks < 5;
+      const committed = { expense: false, allocation: false, nextRunDate: false };
+      (prisma.$transaction as jest.Mock).mockImplementation(async (callback) => {
+        const result = await callback(tx);
+        committed.expense = (tx.expense.create as jest.Mock).mock.calls.length > 0;
+        committed.allocation = (movementAllocationService.createForExpenseInTx as jest.Mock).mock.calls.length > 0;
+        committed.nextRunDate = (tx.recurringExpense.updateMany as jest.Mock).mock.calls.length > 0;
+        return result;
+      });
+
+      const result = await service.processRecurringExpenses(writeAllowed);
+
+      expect(tx.expense.create).toHaveBeenCalledTimes(1);
+      expect(movementAllocationService.createForExpenseInTx).toHaveBeenCalledTimes(1);
+      expect(committed).toEqual({ expense: false, allocation: false, nextRunDate: false });
+      expect(tx.recurringExpense.updateMany).not.toHaveBeenCalled();
+      expect(auditService.createLog).not.toHaveBeenCalled();
+      expect(result.createdCount).toBe(0);
     });
 
     it('createForExpenseInTx falla: transacción rechazada, sin nextRunDate ni audit, createdCount no incrementa', async () => {
