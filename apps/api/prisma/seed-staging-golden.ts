@@ -47,6 +47,9 @@ async function main(): Promise<void> {
       selectStagingGoldenDataset(process.env),
     );
     console.log('STG-DATA-01 Golden Dataset applied to verified staging database.');
+    if (process.env.FINANCE_ACCEPTANCE_SEED_HASH_HANDOFF === '1') {
+      console.log(`STAGING_GOLDEN_SEED_HASH_PRIVATE=${passwordHash}`);
+    }
   } finally {
     await prisma.$disconnect();
   }

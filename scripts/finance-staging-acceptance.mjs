@@ -927,7 +927,7 @@ if (mode === "capture-acceptance-baseline") {
   try {
     let serializedSnapshot = "";
     for await (const chunk of process.stdin) serializedSnapshot += chunk;
-    await restoreGoldenPasswordHashes(prisma.user, serializedSnapshot);
+    await restoreGoldenPasswordHashes(prisma, serializedSnapshot, process.env.FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH);
     console.log("GOLDEN_PASSWORD_HASH_RESTORE_PASS");
   } catch (error) {
     console.error(`GOLDEN_PASSWORD_HASH_RESTORE_FAIL: ${error instanceof Error ? error.message : "unknown error"}`);
