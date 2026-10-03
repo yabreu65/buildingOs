@@ -544,7 +544,15 @@ export class InvitationsService {
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async markExpiredInvitations(): Promise<number> {
-    if (!this.writeBarrier.isOpen()) {
+    const writeAllowed = (): boolean => {
+      try {
+        return this.writeBarrier.isOpen();
+      } catch {
+        return false;
+      }
+    };
+
+    if (!writeAllowed()) {
       return 0;
     }
 
@@ -560,25 +568,45 @@ export class InvitationsService {
       },
     });
 
-    if (expiredInvitations.length === 0) {
+    if (!writeAllowed() || expiredInvitations.length === 0) {
       return 0;
     }
 
-    // Update all to EXPIRED status
-    await this.prisma.invitation.updateMany({
-      where: {
-        status: InvitationStatus.PENDING,
-        expiresAt: {
-          lt: now,
+    if (!writeAllowed()) {
+      return 0;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (!writeAllowed()) {
+        throw new Error('Invitation expiration blocked by the write barrier');
+      }
+
+      await tx.invitation.updateMany({
+        where: {
+          status: InvitationStatus.PENDING,
+          expiresAt: {
+            lt: now,
+          },
         },
-      },
-      data: {
-        status: InvitationStatus.EXPIRED,
-      },
+        data: {
+          status: InvitationStatus.EXPIRED,
+        },
+      });
+
+      if (!writeAllowed()) {
+        throw new Error('Invitation expiration blocked by the write barrier');
+      }
     });
 
-    // Log each expiration (fire-and-forget)
+    if (!writeAllowed()) {
+      return 0;
+    }
+
+    // Each audit write receives the live barrier check; it remains best-effort.
     for (const inv of expiredInvitations) {
+      if (!writeAllowed()) {
+        break;
+      }
       void this.auditService.createLog({
         tenantId: inv.tenantId,
         action: AuditAction.MEMBERSHIP_INVITE_EXPIRED,
@@ -589,7 +617,7 @@ export class InvitationsService {
           expiredAt: now,
           originalExpiresAt: inv.expiresAt,
         },
-      });
+      }, writeAllowed);
     }
 
     this.logger.log(`Marked ${expiredInvitations.length} invitations as EXPIRED`);

@@ -47,7 +47,7 @@ receipt_line="$(line_number 'generate_rollback_compatibility_receipt' "$DEPLOY_S
 recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$DEPLOY_SCRIPT")"
 checkpoint_line="$(line_number 'write_record IN_PROGRESS' "$DEPLOY_SCRIPT")"
 rollback_compose_line="$(line_number 'compose=(docker compose --project-name buildingos' "$ROLLBACK_SCRIPT")"
-rollback_quiesce_line="$(line_number 'stop --timeout 30 buildingos-api' "$ROLLBACK_SCRIPT")"
+rollback_quiesce_line="$(line_number_after "$rollback_compose_line" '"${compose[@]}" stop --timeout 30 buildingos-api buildingos-web' "$ROLLBACK_SCRIPT")"
 rollback_migration_line="$(line_number 'current_migration_count=' "$ROLLBACK_SCRIPT")"
 rollback_compatibility_line="$(line_number 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$ROLLBACK_SCRIPT")"
 rollback_fail_closed_line="$(line_number 'rollback_fail_closed() {' "$ROLLBACK_SCRIPT")"
@@ -71,7 +71,8 @@ rollback_selector_publish_line="$(line_number 'if ! publish_current_successful_s
 [[ -n "$early_state_line" && -n "$later_state_line" && -n "$migrate_line" && -n "$post_line" ]]
 [[ -n "$compatibility_line" && -n "$receipt_line" && -n "$recreate_line" ]]
 [[ -n "$checkpoint_line" && -n "$recovery_preflight_line" && -n "$recovery_capture_line" && -n "$recovery_gate_line" ]]
-[[ -n "$rollback_compose_line" && -n "$rollback_quiesce_line" && -n "$rollback_migration_line" && -n "$rollback_compatibility_line" ]]
+[[ -n "$rollback_compose_line" && -n "$rollback_quiesce_line" && -n "$rollback_migration_line" && -n "$rollback_compatibility_line" ]] \
+  || { printf 'FAIL: rollback main quiesce invocation is missing after compose initialization\n' >&2; exit 1; }
 [[ -n "$rollback_fail_closed_line" && -n "$rollback_fail_closed_barrier_line" && -n "$rollback_fail_closed_stop_line" \
   && -n "$rollback_exit_line" && -n "$rollback_exit_guard_line" && -n "$rollback_exit_fail_closed_line" \
   && -n "$rollback_exit_failed_record_line" && -n "$rollback_exit_trap_line" ]] \
@@ -84,12 +85,14 @@ rollback_selector_publish_line="$(line_number 'if ! publish_current_successful_s
 [[ -n "$rollback_recreate_started_line" && -n "$rollback_record_line" && -n "$rollback_smoke_line" && -n "$rollback_active_identity_line" && -n "$rollback_recovery_binding_line" && -n "$rollback_success_record_line" && -n "$rollback_target_sha_line" && -n "$rollback_selector_publish_line" ]]
 [[ -n "$storage_guard_line" ]]
 [[ -n "$bundle_start_line" && -n "$remote_invocation_line" ]]
-(( bundle_start_line < remote_invocation_line ))
+(( bundle_start_line < remote_invocation_line )) \
+  || { printf 'FAIL: workflow bundle must be assembled before remote invocation\n' >&2; exit 1; }
 for recovery_helper_path in "${recovery_helper_paths[@]}"; do
   grep -F "test -f $recovery_helper_path && test ! -L $recovery_helper_path" "$WORKFLOW" >/dev/null
   recovery_bundle_line="$(line_number_after "$bundle_start_line" "$recovery_helper_path" "$WORKFLOW")"
   [[ -n "$recovery_bundle_line" ]]
-  (( bundle_start_line < recovery_bundle_line && recovery_bundle_line < remote_invocation_line ))
+  (( bundle_start_line < recovery_bundle_line && recovery_bundle_line < remote_invocation_line )) \
+    || { printf 'FAIL: recovery helper %s is not bundled before remote invocation\n' "$recovery_helper_path" >&2; exit 1; }
 done
 
 rollback_success_line="$(line_number 'if [[ "${record##*/}" == rollback-*.txt && ( "$migration_count" == '\''98'\'' || "$migration_count" == '\''99'\'' || "$migration_count" == "$MIGRATION_TARGET_APPLIED" ) ]]; then' "$DEPLOY_SCRIPT")"
@@ -101,14 +104,17 @@ generic_reject_line="$(line_number_after "$generic_success_line" 'else' "$DEPLOY
 generic_reject_continue_line="$(line_number_after "$generic_reject_line" 'continue' "$DEPLOY_SCRIPT")"
 [[ -n "$rollback_success_line" && -n "$rollback_previous_sha_line" && -n "$rollback_api_digest_line" && -n "$rollback_web_digest_line" ]]
 [[ -n "$generic_success_line" && -n "$generic_reject_line" && -n "$generic_reject_continue_line" ]]
-(( rollback_success_line < rollback_previous_sha_line && rollback_previous_sha_line < rollback_api_digest_line && rollback_api_digest_line < rollback_web_digest_line ))
-(( rollback_web_digest_line < generic_success_line && generic_success_line < generic_reject_line && generic_reject_line < generic_reject_continue_line ))
+(( rollback_success_line < rollback_previous_sha_line && rollback_previous_sha_line < rollback_api_digest_line && rollback_api_digest_line < rollback_web_digest_line )) \
+  || { printf 'FAIL: rollback predecessor identity fields are out of order\n' >&2; exit 1; }
+(( rollback_web_digest_line < generic_success_line && generic_success_line < generic_reject_line && generic_reject_line < generic_reject_continue_line )) \
+  || { printf 'FAIL: rollback-record scan ordering is invalid\n' >&2; exit 1; }
 [[ -n "$target_tree_line" && -n "$target_compose_line" ]]
 [[ -n "$api_revision_line" && -n "$web_revision_line" && -n "$revision_match_line" && -n "$previous_sha_line" ]]
 [[ "$(grep -F -c 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")" -eq 1 ]]
 [[ "$(grep -F 'bash "$STORAGE_CUTOVER_GUARD"' "$DEPLOY_SCRIPT")" == *'TARGET_COMPOSE_FILE'* ]]
 [[ "$target_tree_line" -lt "$target_compose_line" ]]
-(( api_revision_line < revision_match_line && web_revision_line < revision_match_line && revision_match_line < previous_sha_line ))
+(( api_revision_line < revision_match_line && web_revision_line < revision_match_line && revision_match_line < previous_sha_line )) \
+  || { printf 'FAIL: API/Web revision agreement must precede previous SHA selection\n' >&2; exit 1; }
 [[ "$(grep -F -c 'CURRENT_CHECKOUT_SHA" == "$PREVIOUS_API_REVISION' "$DEPLOY_SCRIPT")" -eq 0 ]]
 [[ "$target_compose_line" -lt "$storage_guard_line" ]]
 [[ "$target_compose_line" -lt "$early_state_line" && "$early_state_line" -lt "$storage_guard_line" ]]
@@ -116,16 +122,16 @@ generic_reject_continue_line="$(line_number_after "$generic_reject_line" 'contin
 [[ "$storage_guard_line" -lt "$build_phase_line" ]]
 [[ "$storage_guard_line" -lt "$migrations_phase_line" ]]
 [[ "$storage_guard_line" -lt "$recreate_line" ]]
-(( backup_phase_line < checkout_phase_line ))
-(( checkout_phase_line < build_phase_line ))
-(( build_phase_line < baseline_phase_line && baseline_phase_line < migrations_phase_line ))
-(( baseline_line < later_state_line && later_state_line < migrate_line && migrate_line < post_line ))
-(( post_line < compatibility_line && compatibility_line < receipt_line && receipt_line < recreate_line ))
-(( previous_sha_line < recovery_preflight_line && recovery_preflight_line < recovery_capture_line && recovery_capture_line < recovery_gate_line && recovery_gate_line < checkpoint_line && checkpoint_line < backup_phase_line ))
-(( rollback_compose_line < rollback_quiesce_line && rollback_quiesce_line < rollback_migration_line && rollback_migration_line < rollback_compatibility_line ))
+(( backup_phase_line < checkout_phase_line )) || { printf 'FAIL: backup must precede checkout\n' >&2; exit 1; }
+(( checkout_phase_line < build_phase_line )) || { printf 'FAIL: checkout must precede build\n' >&2; exit 1; }
+(( build_phase_line < baseline_phase_line && baseline_phase_line < migrations_phase_line )) || { printf 'FAIL: build, migration baseline, and migrations are out of order\n' >&2; exit 1; }
+(( baseline_line < later_state_line && later_state_line < migrate_line && migrate_line < post_line )) || { printf 'FAIL: migration verification commands are out of order\n' >&2; exit 1; }
+(( post_line < compatibility_line && compatibility_line < receipt_line && receipt_line < recreate_line )) || { printf 'FAIL: post-migration compatibility, receipt, and recreate gates are out of order\n' >&2; exit 1; }
+(( previous_sha_line < recovery_preflight_line && recovery_preflight_line < recovery_capture_line && recovery_capture_line < recovery_gate_line && recovery_gate_line < checkpoint_line && checkpoint_line < backup_phase_line )) || { printf 'FAIL: recovery point must be validated before deployment state changes\n' >&2; exit 1; }
+(( rollback_compose_line < rollback_quiesce_line && rollback_quiesce_line < rollback_migration_line && rollback_migration_line < rollback_compatibility_line )) || { printf 'FAIL: rollback must initialize compose, quiesce both services, then validate migrations/compatibility\n' >&2; exit 1; }
 rollback_recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$ROLLBACK_SCRIPT")"
-(( rollback_compatibility_line < rollback_record_line && rollback_record_line < rollback_recreate_line && rollback_recreate_line < rollback_recreate_started_line ))
-(( rollback_smoke_line < rollback_active_identity_line && rollback_active_identity_line < rollback_recovery_binding_line && rollback_recovery_binding_line < rollback_success_record_line && rollback_success_record_line < rollback_selector_publish_line ))
+(( rollback_compatibility_line < rollback_record_line && rollback_record_line < rollback_recreate_line && rollback_recreate_line < rollback_recreate_started_line )) || { printf 'FAIL: rollback validation must precede record and runtime recreation\n' >&2; exit 1; }
+(( rollback_smoke_line < rollback_active_identity_line && rollback_active_identity_line < rollback_recovery_binding_line && rollback_recovery_binding_line < rollback_success_record_line && rollback_success_record_line < rollback_selector_publish_line )) || { printf 'FAIL: rollback success evidence and selector publication are out of order\n' >&2; exit 1; }
 
 env_invocation_count="$(grep -F -c 'env POSTGRES_CONTAINER="$POSTGRES_CONTAINER" DATABASE_NAME=buildingos_db' "$DEPLOY_SCRIPT")"
 [[ "$env_invocation_count" -eq 4 ]]
@@ -189,16 +195,16 @@ selector_line="$(line_number 'if ! publish_current_successful_selector; then' "$
   || { printf 'FAIL: candidate API, readyz, and Web login gates are missing before or after release\n' >&2; exit 1; }
 [[ -n "$observability_line" && -n "$success_line" && -n "$selector_line" ]] \
   || { printf 'FAIL: observability SUCCESS and selector gates are missing\n' >&2; exit 1; }
-(( backup_phase_line < old_api_stop_line && build_phase_line < old_api_stop_line ))
-(( old_api_stop_line < barrier_closed_line && barrier_closed_line < migrations_phase_line ))
-(( migrations_phase_line < manifest_pass_line && manifest_pass_line < compatibility_pass_line ))
-(( compatibility_pass_line < candidate_start_line && candidate_start_line < api_container_health_line ))
-(( api_container_health_line < web_container_health_line && web_container_health_line < api_health_line ))
-(( api_health_line < readyz_line && readyz_line < web_login_line ))
-(( web_login_line < barrier_open_line && barrier_open_line < post_release_api_line ))
-(( post_release_api_line < post_release_readyz_line && post_release_readyz_line < post_release_login_line ))
-(( post_release_login_line < observability_line ))
-(( observability_line < success_line && success_line < selector_line ))
+(( backup_phase_line < old_api_stop_line && build_phase_line < old_api_stop_line )) || { printf 'FAIL: backup and build must precede stopping the old API\n' >&2; exit 1; }
+(( old_api_stop_line < barrier_closed_line && barrier_closed_line < migrations_phase_line )) || { printf 'FAIL: old API stop and CLOSED barrier must precede migrations\n' >&2; exit 1; }
+(( migrations_phase_line < manifest_pass_line && manifest_pass_line < compatibility_pass_line )) || { printf 'FAIL: migration and compatibility validation gates are out of order\n' >&2; exit 1; }
+(( compatibility_pass_line < candidate_start_line && candidate_start_line < api_container_health_line )) || { printf 'FAIL: compatibility must pass before candidate recreation and health checks\n' >&2; exit 1; }
+(( api_container_health_line < web_container_health_line && web_container_health_line < api_health_line )) || { printf 'FAIL: candidate container health checks are out of order\n' >&2; exit 1; }
+(( api_health_line < readyz_line && readyz_line < web_login_line )) || { printf 'FAIL: candidate API, readyz, and web login checks are out of order\n' >&2; exit 1; }
+(( web_login_line < barrier_open_line && barrier_open_line < post_release_api_line )) || { printf 'FAIL: candidate login must pass before opening barrier and post-release checks\n' >&2; exit 1; }
+(( post_release_api_line < post_release_readyz_line && post_release_readyz_line < post_release_login_line )) || { printf 'FAIL: post-release API, readyz, and login checks are out of order\n' >&2; exit 1; }
+(( post_release_login_line < observability_line )) || { printf 'FAIL: post-release health checks must precede observability\n' >&2; exit 1; }
+(( observability_line < success_line && success_line < selector_line )) || { printf 'FAIL: observability and success must precede selector publication\n' >&2; exit 1; }
 grep -F 'recovery_point_resume_api' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'RELEASE_A_BARRIER_ACTIVE' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'Rollback runtime image IDs do not match the requested previous digests' "$ROLLBACK_SCRIPT" >/dev/null
@@ -228,4 +234,45 @@ if grep -F 'scripts/manifests/production-migrations-81-to-98.tsv' "$WORKFLOW" >/
   exit 1
 fi
 if grep -F 'incompatible_rows=' "$ROLLBACK_SCRIPT" >/dev/null; then exit 1; fi
+if [[ "${PRODUCTION_DEPLOY_ORDER_HARNESS:-0}" != 1 ]]; then
+  harness_dir="$(mktemp -d "${TMPDIR:-/tmp}/production-deploy-order.XXXXXX")"
+  trap 'rm -rf -- "$harness_dir"' EXIT
+  mkdir -p "$harness_dir/scripts/tests" "$harness_dir/scripts"
+  cp "$0" "$harness_dir/scripts/tests/production-deploy-order.test.sh"
+  cp "$DEPLOY_SCRIPT" "$harness_dir/scripts/deploy-production.sh"
+  cp "$ROLLBACK_SCRIPT" "$harness_dir/scripts/rollback-production.sh"
+  cp "$WORKFLOW" "$harness_dir/.github-workflow-placeholder"
+  mkdir -p "$harness_dir/.github/workflows"
+  mv "$harness_dir/.github-workflow-placeholder" "$harness_dir/.github/workflows/deploy-production.yml"
+
+  if PRODUCTION_DEPLOY_ORDER_HARNESS=1 bash "$harness_dir/scripts/tests/production-deploy-order.test.sh"; then
+    printf 'PASS: valid production deploy-order fixture returned 0\n'
+  else
+    printf 'FAIL: valid production deploy-order fixture returned nonzero\n' >&2
+    exit 1
+  fi
+
+  python3 - "$harness_dir/scripts/rollback-production.sh" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+lines = path.read_text().splitlines(keepends=True)
+quiesce = '"${compose[@]}" stop --timeout 30 buildingos-api buildingos-web'
+quiesce_index = next(index for index, line in enumerate(lines) if quiesce in line)
+migration_index = next(index for index, line in enumerate(lines) if 'current_migration_count=' in line)
+line = lines.pop(quiesce_index)
+if migration_index > quiesce_index:
+    migration_index -= 1
+lines.insert(migration_index + 1, line)
+path.write_text(''.join(lines))
+PY
+  if PRODUCTION_DEPLOY_ORDER_HARNESS=1 bash "$harness_dir/scripts/tests/production-deploy-order.test.sh"; then
+    printf 'FAIL: invalid rollback quiesce order unexpectedly returned 0\n' >&2
+    exit 1
+  else
+    printf 'PASS: invalid rollback quiesce order returned nonzero\n'
+  fi
+fi
+
 printf 'PASS: rollback EXIT trap fail-closed contract and Release A deploy-order assertions executed\n'
