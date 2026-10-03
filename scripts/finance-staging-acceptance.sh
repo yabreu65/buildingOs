@@ -13,8 +13,8 @@ readonly QA_EMAIL='admin.autogestionada@staging.buildingos.local'
 readonly SNAPSHOT_MIGRATION='20260831000000_add_payment_receipt_issuance_snapshot'
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CONTROL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PASSWORD_SNAPSHOT=''
-PASSWORD_RESTORE_REQUIRED=0
+ACCEPTANCE_BASELINE_SNAPSHOT=''
+ACCEPTANCE_BASELINE_RESTORE_REQUIRED=0
 COMPOSE_COMMAND=()
 RUN_CLEANUP_PASS=0
 
@@ -55,8 +55,8 @@ restore_golden_password_baseline() {
   local original_status=$?
   local restore_status=0
   trap - EXIT
-  if [[ "$PASSWORD_RESTORE_REQUIRED" == '1' ]]; then
-    if ! printf '%s' "$PASSWORD_SNAPSHOT" | "${COMPOSE_COMMAND[@]}" run --rm --no-deps -T \
+  if [[ "$ACCEPTANCE_BASELINE_RESTORE_REQUIRED" == '1' ]]; then
+    if ! printf '%s' "$ACCEPTANCE_BASELINE_SNAPSHOT" | "${COMPOSE_COMMAND[@]}" run --rm --no-deps -T \
       -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/app/apps/api/finance-staging-acceptance.mjs:ro" \
       -v "$SCRIPT_DIR/lib/finance-staging-acceptance-cleanup.mjs:/app/apps/api/finance-staging-acceptance-cleanup.mjs:ro" \
       --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs restore-golden-passwords; then
@@ -67,8 +67,8 @@ restore_golden_password_baseline() {
       printf 'QA_GOLDEN_BASELINE_RESTORE_PASS\n'
     fi
   fi
-  unset PASSWORD_SNAPSHOT
-  if [[ "$RUN_CLEANUP_PASS" == '1' && "$restore_status" == '0' && "$PASSWORD_RESTORE_REQUIRED" == '1' ]]; then
+  unset ACCEPTANCE_BASELINE_SNAPSHOT
+  if [[ "$RUN_CLEANUP_PASS" == '1' && "$restore_status" == '0' && "$ACCEPTANCE_BASELINE_RESTORE_REQUIRED" == '1' ]]; then
     printf 'QA_RUN_RESIDUE_ZERO_PASS\n'
   fi
   if [[ "$original_status" -ne 0 ]]; then exit "$original_status"; fi
@@ -234,12 +234,12 @@ main() {
 
   COMPOSE_COMMAND=(docker compose --project-name "$project" --env-file "$env_file" --file "$app_path/$compose_file")
   local compose=("${COMPOSE_COMMAND[@]}")
-  PASSWORD_SNAPSHOT="$("${compose[@]}" run --rm --no-deps -T \
+  ACCEPTANCE_BASELINE_SNAPSHOT="$("${compose[@]}" run --rm --no-deps -T \
     -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/app/apps/api/finance-staging-acceptance.mjs:ro" \
     -v "$SCRIPT_DIR/lib/finance-staging-acceptance-cleanup.mjs:/app/apps/api/finance-staging-acceptance-cleanup.mjs:ro" \
-    --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs capture-golden-passwords)" || fail 'unable to capture Golden password baseline'
-  [[ -n "$PASSWORD_SNAPSHOT" ]] || fail 'Golden password baseline snapshot is empty'
-  PASSWORD_RESTORE_REQUIRED=1
+    --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs capture-acceptance-baseline)" || fail 'unable to capture Golden acceptance baseline'
+  [[ -n "$ACCEPTANCE_BASELINE_SNAPSHOT" ]] || fail 'Golden acceptance baseline snapshot is empty'
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
 
   "${compose[@]}" --profile seed-staging-golden run --rm --build -T \
     -e STAGING_GOLDEN_TENANTS=stg-golden-tenant-auto \
@@ -249,7 +249,7 @@ main() {
 
   local acceptance_output=''
   local acceptance_status=0
-  if acceptance_output="$(printf '%s' "$PASSWORD_SNAPSHOT" | "${compose[@]}" run --rm --no-deps -T \
+  if acceptance_output="$(printf '%s' "$ACCEPTANCE_BASELINE_SNAPSHOT" | "${compose[@]}" run --rm --no-deps -T \
     -e STAGING_GOLDEN_QA_PASSWORD \
     -e FINANCE_ACCEPTANCE_RUN_ID \
     -e FINANCE_ACCEPTANCE_API_BASE_URL="$api_base_url" \

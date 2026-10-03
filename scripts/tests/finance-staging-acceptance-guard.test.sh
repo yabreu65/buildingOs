@@ -78,12 +78,25 @@ done < "$golden_seed_source"
   exit 1
 }
 
-password_capture_line="$(grep -n 'capture-golden-passwords' "$SCRIPT" | head -1 | cut -d: -f1)"
+baseline_capture_line="$(grep -n 'capture-acceptance-baseline' "$SCRIPT" | head -1 | cut -d: -f1)"
 seed_line="$(grep -n 'profile seed-staging-golden run' "$SCRIPT" | head -1 | cut -d: -f1)"
-[[ -n "$password_capture_line" && -n "$seed_line" && "$password_capture_line" -lt "$seed_line" ]] || {
-  printf 'FAIL: Golden password baseline must be captured before seed\n' >&2
+[[ -n "$baseline_capture_line" && -n "$seed_line" && "$baseline_capture_line" -lt "$seed_line" ]] || {
+  printf 'FAIL: full acceptance baseline must be captured before seed\n' >&2
   exit 1
 }
+grep -Fq 'ACCEPTANCE_BASELINE_SNAPSHOT' "$SCRIPT" || {
+  printf 'FAIL: full baseline must use ACCEPTANCE_BASELINE_SNAPSHOT\n' >&2
+  exit 1
+}
+baseline_pipe_count="$(grep -Fc "printf '%s' \"\$ACCEPTANCE_BASELINE_SNAPSHOT\" |" "$SCRIPT")"
+[[ "$baseline_pipe_count" == '2' ]] || {
+  printf 'FAIL: the same full baseline must be piped to acceptance and password restoration\n' >&2
+  exit 1
+}
+if grep -Eq 'capture-golden-passwords|PASSWORD_SNAPSHOT' "$SCRIPT"; then
+  printf 'FAIL: password-only baseline mode and variable name are forbidden\n' >&2
+  exit 1
+fi
 grep -Fq 'trap restore_golden_password_baseline EXIT' "$SCRIPT" || {
   printf 'FAIL: Golden password restore must be registered for all shell exits\n' >&2
   exit 1
@@ -143,8 +156,8 @@ set +e
 preserved_failure_output="$(bash -c '
   source "$1"
   docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }
-  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
-  PASSWORD_RESTORE_REQUIRED=1
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
   COMPOSE_COMMAND=(docker)
   trap - EXIT
   set +e
@@ -164,8 +177,8 @@ set +e
 missing_cleanup_output="$(bash -c '
   source "$1"
   docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }
-  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
-  PASSWORD_RESTORE_REQUIRED=1
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
   COMPOSE_COMMAND=(docker)
   trap - EXIT
   set +e
@@ -184,8 +197,8 @@ set -e
 restore_output="$(bash -c '
   source "$1"
   docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }
-  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
-  PASSWORD_RESTORE_REQUIRED=1
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
   RUN_CLEANUP_PASS=1
   COMPOSE_COMMAND=(docker)
   trap - EXIT
@@ -204,8 +217,8 @@ set +e
 failed_restore_output="$(bash -c '
   source "$1"
   docker() { cat >/dev/null; return 1; }
-  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
-  PASSWORD_RESTORE_REQUIRED=1
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
   RUN_CLEANUP_PASS=1
   COMPOSE_COMMAND=(docker)
   trap - EXIT

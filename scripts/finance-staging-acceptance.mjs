@@ -914,11 +914,11 @@ async function main() {
 }
 
 const mode = process.argv[2];
-if (mode === "capture-golden-passwords") {
+if (mode === "capture-acceptance-baseline") {
   try {
     process.stdout.write(await captureAcceptanceBaseline(prisma));
   } catch (error) {
-    console.error(`GOLDEN_PASSWORD_SNAPSHOT_FAILED: ${error instanceof Error ? error.message : "unknown error"}`);
+    console.error(`GOLDEN_ACCEPTANCE_BASELINE_CAPTURE_FAILED: ${error instanceof Error ? error.message : "unknown error"}`);
     process.exitCode = 1;
   } finally {
     await prisma.$disconnect();

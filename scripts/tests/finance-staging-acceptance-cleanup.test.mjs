@@ -90,7 +90,7 @@ function createFixture() {
     storageRemovals,
     fileLookups,
     storage,
-    cleanup: createAcceptanceCleanup({ prisma: delegates, storage, runId: "test-run", baseline: { receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" } } }, qaUserId, onPass() {} }),
+    cleanup: createAcceptanceCleanup({ prisma: delegates, storage, runId: "test-run", baseline: { passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })), receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" } } }, qaUserId, onPass() {} }),
     add(kind, row) { delegates[kind].values.set(row.id, structuredClone(row)); },
   };
 }
@@ -170,13 +170,43 @@ test("Golden password restoration attempts every exact user and fails if one upd
   assert.deepEqual(attempted, GOLDEN_PASSWORD_USERS.map(({ id }) => id));
   assert.equal((await users.findFirst({ where: { id: GOLDEN_PASSWORD_USERS[1].id } })).passwordHash, `old-${GOLDEN_PASSWORD_USERS[1].id}`);
 });
-test("acceptance baseline captures the exact ReceiptSequence preimage with private Golden hashes", async () => {
+test("password-only baseline is rejected by acceptance cleanup", () => {
+  const f = createFixture();
+  const passwordHashes = GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` }));
+  assert.throws(() => createAcceptanceCleanup({
+    prisma: f.delegates,
+    storage: f.storage,
+    runId: "test-run",
+    baseline: { passwordHashes },
+    qaUserId,
+    onPass() {},
+  }), /receipt-sequence baseline is missing or invalid/);
+});
+test("full password-hash and ReceiptSequence baseline is accepted by acceptance cleanup", () => {
+  const f = createFixture();
+  assert.doesNotThrow(() => createAcceptanceCleanup({
+    prisma: f.delegates,
+    storage: f.storage,
+    runId: "test-run",
+    baseline: {
+      passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })),
+      receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 7, updatedAt: "2026-01-01T00:00:00.000Z" } },
+    },
+    qaUserId,
+    onPass() {},
+  }));
+});
+test("acceptance baseline serializes private Golden hashes and the exact ReceiptSequence preimage", async () => {
   const f = createFixture();
   for (const user of GOLDEN_PASSWORD_USERS) f.add("user", { ...user, passwordHash: `old-${user.id}` });
   f.add("receiptSequence", { id: "seq-1", tenantId, year: 2026, lastNumber: 7, updatedAt: new Date("2026-01-01T00:00:00.000Z") });
   const baseline = JSON.parse(await captureAcceptanceBaseline(f.delegates, 2026));
-  assert.equal(baseline.receiptSequence.row.lastNumber, 7);
-  assert.equal(baseline.passwordHashes.length, GOLDEN_PASSWORD_USERS.length);
+  assert.deepEqual(baseline.passwordHashes, GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
+  assert.deepEqual(baseline.receiptSequence, {
+    tenantId,
+    year: 2026,
+    row: { id: "seq-1", lastNumber: 7, updatedAt: "2026-01-01T00:00:00.000Z" },
+  });
 });
 test("failure after Expense cleans its exact registered row", async () => {
   const f = createFixture(); const row = { id: "expense-fail", tenantId, buildingId }; f.add("expense", row); f.cleanup.register("expense", row); await f.cleanup.cleanup(); assert.equal(f.delegates.expense.values.size, 0);
