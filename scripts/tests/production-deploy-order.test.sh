@@ -50,7 +50,14 @@ rollback_compose_line="$(line_number 'compose=(docker compose --project-name bui
 rollback_quiesce_line="$(line_number 'stop --timeout 30 buildingos-api' "$ROLLBACK_SCRIPT")"
 rollback_migration_line="$(line_number 'current_migration_count=' "$ROLLBACK_SCRIPT")"
 rollback_compatibility_line="$(line_number 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$ROLLBACK_SCRIPT")"
-rollback_restore_line="$(line_number 'restore_quiesced_api_on_exit' "$ROLLBACK_SCRIPT")"
+rollback_fail_closed_line="$(line_number 'rollback_fail_closed() {' "$ROLLBACK_SCRIPT")"
+rollback_fail_closed_barrier_line="$(line_number_after "$rollback_fail_closed_line" 'ensure_rollback_barrier || printf' "$ROLLBACK_SCRIPT")"
+rollback_fail_closed_stop_line="$(line_number_after "$rollback_fail_closed_line" 'docker stop --timeout 30 buildingos-api buildingos-web' "$ROLLBACK_SCRIPT")"
+rollback_exit_line="$(line_number 'rollback_exit() {' "$ROLLBACK_SCRIPT")"
+rollback_exit_guard_line="$(line_number_after "$rollback_exit_line" 'if [[ "$ROLLBACK_BARRIER_ACTIVE" == true && "$ROLLBACK_RECORD_SUCCESS" != true ]]; then' "$ROLLBACK_SCRIPT")"
+rollback_exit_fail_closed_line="$(line_number_after "$rollback_exit_line" 'rollback_fail_closed || true' "$ROLLBACK_SCRIPT")"
+rollback_exit_failed_record_line="$(line_number_after "$rollback_exit_line" 'write_rollback_record FAILED || true' "$ROLLBACK_SCRIPT")"
+rollback_exit_trap_line="$(line_number 'trap rollback_exit EXIT' "$ROLLBACK_SCRIPT")"
 rollback_recreate_started_line="$(line_number 'ROLLBACK_RECREATE_STARTED=true' "$ROLLBACK_SCRIPT")"
 rollback_record_line="$(line_number 'write_rollback_record IN_PROGRESS' "$ROLLBACK_SCRIPT")"
 rollback_smoke_line="$(line_number 'Rollback smoke failed' "$ROLLBACK_SCRIPT")"
@@ -65,7 +72,16 @@ rollback_selector_publish_line="$(line_number 'if ! publish_current_successful_s
 [[ -n "$compatibility_line" && -n "$receipt_line" && -n "$recreate_line" ]]
 [[ -n "$checkpoint_line" && -n "$recovery_preflight_line" && -n "$recovery_capture_line" && -n "$recovery_gate_line" ]]
 [[ -n "$rollback_compose_line" && -n "$rollback_quiesce_line" && -n "$rollback_migration_line" && -n "$rollback_compatibility_line" ]]
-[[ -n "$rollback_restore_line" && -n "$rollback_recreate_started_line" && -n "$rollback_record_line" && -n "$rollback_smoke_line" && -n "$rollback_active_identity_line" && -n "$rollback_recovery_binding_line" && -n "$rollback_success_record_line" && -n "$rollback_target_sha_line" && -n "$rollback_selector_publish_line" ]]
+[[ -n "$rollback_fail_closed_line" && -n "$rollback_fail_closed_barrier_line" && -n "$rollback_fail_closed_stop_line" \
+  && -n "$rollback_exit_line" && -n "$rollback_exit_guard_line" && -n "$rollback_exit_fail_closed_line" \
+  && -n "$rollback_exit_failed_record_line" && -n "$rollback_exit_trap_line" ]] \
+  || { printf 'FAIL: rollback EXIT trap fail-closed contract is missing\n' >&2; exit 1; }
+(( rollback_fail_closed_line < rollback_fail_closed_barrier_line && rollback_fail_closed_barrier_line < rollback_fail_closed_stop_line \
+  && rollback_fail_closed_stop_line < rollback_exit_line && rollback_exit_line < rollback_exit_guard_line \
+  && rollback_exit_guard_line < rollback_exit_fail_closed_line && rollback_exit_fail_closed_line < rollback_exit_failed_record_line \
+  && rollback_exit_failed_record_line < rollback_exit_trap_line && rollback_exit_trap_line < rollback_record_line )) \
+  || { printf 'FAIL: rollback EXIT trap must fail closed before rollback state changes\n' >&2; exit 1; }
+[[ -n "$rollback_recreate_started_line" && -n "$rollback_record_line" && -n "$rollback_smoke_line" && -n "$rollback_active_identity_line" && -n "$rollback_recovery_binding_line" && -n "$rollback_success_record_line" && -n "$rollback_target_sha_line" && -n "$rollback_selector_publish_line" ]]
 [[ -n "$storage_guard_line" ]]
 [[ -n "$bundle_start_line" && -n "$remote_invocation_line" ]]
 (( bundle_start_line < remote_invocation_line ))
@@ -212,4 +228,4 @@ if grep -F 'scripts/manifests/production-migrations-81-to-98.tsv' "$WORKFLOW" >/
   exit 1
 fi
 if grep -F 'incompatible_rows=' "$ROLLBACK_SCRIPT" >/dev/null; then exit 1; fi
-printf 'PASS: recovery helper bundle -> remote invocation and recovery point -> checkpoint -> backup -> checkout -> build -> baseline -> pre -> migrate -> post -> compatibility -> receipt -> application recreation\n'
+printf 'PASS: rollback EXIT trap fail-closed contract and Release A deploy-order assertions executed\n'
