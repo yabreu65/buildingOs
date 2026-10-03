@@ -7,16 +7,46 @@ readonly EXPECTED_PROJECT_NAME='buildingos-staging'
 readonly EXPECTED_ENV_FILE='/opt/pawtech/env/buildingos-staging.env'
 readonly EXPECTED_DATABASE='buildingos_staging_db'
 readonly ALLOWED_TENANT='stg-golden-tenant-auto'
-readonly ALLOWED_BUILDING='stg-golden-building-auto'
-readonly ALLOWED_UNIT='stg-golden-unit-auto-102'
-readonly QA_EMAIL='admin.autogestionada@staging.buildingos.local'
 readonly SNAPSHOT_MIGRATION='20260831000000_add_payment_receipt_issuance_snapshot'
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly CONTROL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PASSWORD_SNAPSHOT=''
-PASSWORD_RESTORE_REQUIRED=0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+CONTROL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+readonly CONTROL_ROOT
+ACCEPTANCE_BASELINE_SNAPSHOT=''
+ACCEPTANCE_BASELINE_RESTORE_REQUIRED=0
 COMPOSE_COMMAND=()
 RUN_CLEANUP_PASS=0
+GOLDEN_PASSWORD_RESTORE_PASS=0
+FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH=''
+export -n FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH
+
+sanitize_private_diagnostics() {
+  local output="$1"
+  local line
+  local sanitized=''
+  while IFS= read -r line; do
+    [[ "$line" == *'STAGING_GOLDEN_SEED_HASH_PRIVATE='* ]] && continue
+    if [[ -n "$FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH" ]]; then
+      line="${line//"$FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH"/[REDACTED]}"
+    fi
+    while [[ "$line" =~ (\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}) ]]; do
+      local private_hash="${BASH_REMATCH[1]}"
+      line="${line/"$private_hash"/[REDACTED]}"
+    done
+    sanitized+="${sanitized:+$'\n'}$line"
+  done <<< "$output"
+  printf '%s' "$sanitized"
+}
+
+print_sanitized_output() {
+  local sanitized
+  sanitized="$(sanitize_private_diagnostics "$1")"
+  [[ -z "$sanitized" ]] || printf '%s\n' "$sanitized"
+}
+
+print_sanitized_diagnostics() {
+  print_sanitized_output "$1" >&2
+}
 
 acceptance_output_proves_cleanup() {
   local output="$1"
@@ -26,6 +56,7 @@ acceptance_output_proves_cleanup() {
     QA_RUN_STORAGE_CLEANUP_PASS \
     QA_AUTH_SESSION_CLEANUP_PASS \
     QA_AUDIT_HISTORY_PRESERVED_PASS \
+    QA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS \
     RUN_SCOPED_MUTABLE_DB_RESIDUE=0 \
     RUN_SCOPED_STORAGE_RESIDUE=0 \
     RUN_SCOPED_ACTIVE_SESSION_RESIDUE=0; do
@@ -36,7 +67,9 @@ acceptance_output_proves_cleanup() {
 record_acceptance_result() {
   local child_status="$1"
   local output="$2"
-  printf '%s\n' "$output"
+  local safe_output
+  safe_output="$(sanitize_private_diagnostics "$output")"
+  printf '%s\n' "$safe_output"
   if acceptance_output_proves_cleanup "$output"; then
     RUN_CLEANUP_PASS=1
   elif [[ "$child_status" == '0' ]]; then
@@ -54,21 +87,35 @@ fail() {
 restore_golden_password_baseline() {
   local original_status=$?
   local restore_status=0
+  local restore_output=''
   trap - EXIT
-  if [[ "$PASSWORD_RESTORE_REQUIRED" == '1' ]]; then
-    if ! printf '%s' "$PASSWORD_SNAPSHOT" | "${COMPOSE_COMMAND[@]}" run --rm --no-deps -T \
+  if [[ "$ACCEPTANCE_BASELINE_RESTORE_REQUIRED" == '1' ]]; then
+    export FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH
+    if restore_output="$(printf '%s' "$ACCEPTANCE_BASELINE_SNAPSHOT" | "${COMPOSE_COMMAND[@]}" run --rm --no-deps -T \
       -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/app/apps/api/finance-staging-acceptance.mjs:ro" \
       -v "$SCRIPT_DIR/lib/finance-staging-acceptance-cleanup.mjs:/app/apps/api/finance-staging-acceptance-cleanup.mjs:ro" \
-      --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs restore-golden-passwords; then
+      -e FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH \
+      --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs restore-golden-passwords 2>&1)"; then
+      if grep -Fxq -- 'GOLDEN_PASSWORD_HASH_RESTORE_PASS' <<<"$restore_output"; then
+        print_sanitized_output "$restore_output"
+        GOLDEN_PASSWORD_RESTORE_PASS=1
+        printf 'GOLDEN_PASSWORD_HASH_RESTORE_PASS\n'
+        printf 'GOLDEN_PASSWORD_HASH_RESIDUE=0\n'
+        printf 'QA_GOLDEN_PASSWORD_RESTORE_PASS\n'
+      else
+        print_sanitized_diagnostics "$restore_output"
+        printf 'GOLDEN_PASSWORD_HASH_RESTORE_FAIL\n' >&2
+        restore_status=1
+      fi
+    else
+      print_sanitized_diagnostics "$restore_output"
       printf 'GOLDEN_PASSWORD_HASH_RESTORE_FAIL\n' >&2
       restore_status=1
-    else
-      printf 'GOLDEN_BASELINE_MUTATION_RESIDUE=0\n'
-      printf 'QA_GOLDEN_BASELINE_RESTORE_PASS\n'
     fi
+    export -n FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH
   fi
-  unset PASSWORD_SNAPSHOT
-  if [[ "$RUN_CLEANUP_PASS" == '1' && "$restore_status" == '0' && "$PASSWORD_RESTORE_REQUIRED" == '1' ]]; then
+  unset ACCEPTANCE_BASELINE_SNAPSHOT FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH
+  if [[ "$RUN_CLEANUP_PASS" == '1' && "$restore_status" == '0' && "$GOLDEN_PASSWORD_RESTORE_PASS" == '1' ]]; then
     printf 'QA_RUN_RESIDUE_ZERO_PASS\n'
   fi
   if [[ "$original_status" -ne 0 ]]; then exit "$original_status"; fi
@@ -121,8 +168,8 @@ assert_staging_runtime_environment() {
   # APP_ENV identifies the BuildingOS deployment environment. NODE_ENV identifies the Node runtime mode.
   # Staging intentionally runs the long-lived API/web runtime with APP_ENV=staging and NODE_ENV=production.
   # The Golden seed remains separate and runs with APP_ENV=staging and NODE_ENV=staging.
-  [[ "$(container_env_value "$container" APP_ENV || true)" == 'staging' ]] || { fail "$label APP_ENV is not staging"; return 1; }
-  [[ "$(container_env_value "$container" NODE_ENV || true)" == 'production' ]] || { fail "$label NODE_ENV is not production"; return 1; }
+  [[ "$(container_env_value "$container" APP_ENV || true)" == 'staging' ]] || fail "$label APP_ENV is not staging"
+  [[ "$(container_env_value "$container" NODE_ENV || true)" == 'production' ]] || fail "$label NODE_ENV is not production"
 }
 
 validate_arguments() {
@@ -231,25 +278,44 @@ main() {
   printf '%s\n' "$storage_before"
   printf 'tested_application_sha=%s\n' "$tested_sha"
   printf 'tenant_allowlist=%s\n' "$ALLOWED_TENANT"
+  # Durable seed fixtures are intentionally retained and are not run-scoped residue.
 
   COMPOSE_COMMAND=(docker compose --project-name "$project" --env-file "$env_file" --file "$app_path/$compose_file")
   local compose=("${COMPOSE_COMMAND[@]}")
-  PASSWORD_SNAPSHOT="$("${compose[@]}" run --rm --no-deps -T \
+  ACCEPTANCE_BASELINE_SNAPSHOT="$("${compose[@]}" run --rm --no-deps -T \
     -v "$SCRIPT_DIR/finance-staging-acceptance.mjs:/app/apps/api/finance-staging-acceptance.mjs:ro" \
     -v "$SCRIPT_DIR/lib/finance-staging-acceptance-cleanup.mjs:/app/apps/api/finance-staging-acceptance-cleanup.mjs:ro" \
-    --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs capture-golden-passwords)" || fail 'unable to capture Golden password baseline'
-  [[ -n "$PASSWORD_SNAPSHOT" ]] || fail 'Golden password baseline snapshot is empty'
-  PASSWORD_RESTORE_REQUIRED=1
+    --entrypoint node buildingos-api /app/apps/api/finance-staging-acceptance.mjs capture-acceptance-baseline)" || fail 'unable to capture Golden acceptance baseline'
+  [[ -n "$ACCEPTANCE_BASELINE_SNAPSHOT" ]] || fail 'Golden acceptance baseline snapshot is empty'
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
 
-  "${compose[@]}" --profile seed-staging-golden run --rm --build -T \
+  local seed_output=''
+  if ! seed_output="$("${compose[@]}" --profile seed-staging-golden run --rm --build -T \
     -e STAGING_GOLDEN_TENANTS=stg-golden-tenant-auto \
+    -e FINANCE_ACCEPTANCE_SEED_HASH_HANDOFF=1 \
     -v "$CONTROL_ROOT/apps/api/prisma/seed-staging-golden.ts:/app/apps/api/prisma/seed-staging-golden.ts:ro" \
     -v "$CONTROL_ROOT/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:/app/apps/api/prisma/lib/staging-seed/staging-golden-seed.ts:ro" \
-    api-seed-staging-golden
+    api-seed-staging-golden 2>&1)"; then
+    print_sanitized_diagnostics "$seed_output"
+    fail 'Golden staging seed failed'
+  fi
+  local seed_hash_lines
+  seed_hash_lines="$(grep -F 'STAGING_GOLDEN_SEED_HASH_PRIVATE=' <<<"$seed_output" || true)"
+  if [[ "$(grep -Fc 'STAGING_GOLDEN_SEED_HASH_PRIVATE=' <<<"$seed_output")" != '1' ]]; then
+    print_sanitized_diagnostics "$seed_output"
+    fail 'Golden seed did not provide one private password-hash handoff'
+  fi
+  FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH="${seed_hash_lines#STAGING_GOLDEN_SEED_HASH_PRIVATE=}"
+  if [[ ! "$FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH" =~ ^\$2[aby]\$[0-9]{2}\$.{53}$ ]]; then
+    print_sanitized_diagnostics "$seed_output"
+    fail 'Golden seed password-hash handoff is malformed'
+  fi
+  print_sanitized_output "$seed_output"
+  unset seed_output seed_hash_lines
 
   local acceptance_output=''
   local acceptance_status=0
-  if acceptance_output="$(printf '%s' "$PASSWORD_SNAPSHOT" | "${compose[@]}" run --rm --no-deps -T \
+  if acceptance_output="$(printf '%s' "$ACCEPTANCE_BASELINE_SNAPSHOT" | "${compose[@]}" run --rm --no-deps -T \
     -e STAGING_GOLDEN_QA_PASSWORD \
     -e FINANCE_ACCEPTANCE_RUN_ID \
     -e FINANCE_ACCEPTANCE_API_BASE_URL="$api_base_url" \

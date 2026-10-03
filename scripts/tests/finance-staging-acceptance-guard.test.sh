@@ -14,13 +14,14 @@ readonly VALID_ARGS=(
   http://buildingos-api:3000
 )
 
+# shellcheck source=scripts/finance-staging-acceptance.sh
 source "$SCRIPT"
 dynamic_sha_args=("${VALID_ARGS[@]/$SHA/1111111111111111111111111111111111111111}")
 validate_arguments "${dynamic_sha_args[@]}"
 
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
-  return 1
+  exit 1
 }
 
 MOCK_CONTAINER=''
@@ -48,7 +49,7 @@ run_runtime_case() {
   MOCK_NODE_ENV="$node_env"
 
   local actual_status='FAIL'
-  if assert_staging_runtime_environment "$container" "$name" >/dev/null 2>&1; then
+  if (assert_staging_runtime_environment "$container" "$name") >/dev/null 2>&1; then
     actual_status='PASS'
   fi
   [[ "$actual_status" == "$expected_status" ]] || {
@@ -77,13 +78,56 @@ done < "$golden_seed_source"
   printf 'FAIL: Golden seed NODE_ENV=staging contract changed\n' >&2
   exit 1
 }
-
-password_capture_line="$(grep -n 'capture-golden-passwords' "$SCRIPT" | head -1 | cut -d: -f1)"
-seed_line="$(grep -n 'profile seed-staging-golden run' "$SCRIPT" | head -1 | cut -d: -f1)"
-[[ -n "$password_capture_line" && -n "$seed_line" && "$password_capture_line" -lt "$seed_line" ]] || {
-  printf 'FAIL: Golden password baseline must be captured before seed\n' >&2
+seed_handoff_guard_line="$(grep -nF "process.env.FINANCE_ACCEPTANCE_SEED_HASH_HANDOFF === '1'" "$ROOT_DIR/apps/api/prisma/seed-staging-golden.ts" | cut -d: -f1)"
+seed_handoff_output_line="$(grep -nF 'STAGING_GOLDEN_SEED_HASH_PRIVATE=' "$ROOT_DIR/apps/api/prisma/seed-staging-golden.ts" | cut -d: -f1)"
+[[ -n "$seed_handoff_guard_line" && "$seed_handoff_output_line" == "$((seed_handoff_guard_line + 1))" && \
+  "$(grep -Fc 'STAGING_GOLDEN_SEED_HASH_PRIVATE=' "$ROOT_DIR/apps/api/prisma/seed-staging-golden.ts")" == '1' ]] || {
+  printf 'FAIL: direct seed source must emit its sole handoff only inside the acceptance switch\n' >&2
   exit 1
 }
+sanitized_success_output="$(bash -c '
+  source "$1"
+  FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH="PRIVATE_HASH_SENTINEL"
+  print_sanitized_output "$2"
+' _ "$SCRIPT" $'benign warning retained\nSTAGING_GOLDEN_SEED_HASH_PRIVATE=PRIVATE_HASH_SENTINEL\nrestore note PRIVATE_HASH_SENTINEL')"
+[[ "$sanitized_success_output" == *'benign warning retained'* && "$sanitized_success_output" == *'restore note [REDACTED]'* && \
+  "$sanitized_success_output" != *'STAGING_GOLDEN_SEED_HASH_PRIVATE='* && "$sanitized_success_output" != *'PRIVATE_HASH_SENTINEL'* ]] || {
+  printf 'FAIL: successful diagnostics must remain visible with private handoff/hash redacted\n' >&2
+  exit 1
+}
+grep -Fq -- '-e FINANCE_ACCEPTANCE_SEED_HASH_HANDOFF=1' "$SCRIPT" || {
+  printf 'FAIL: acceptance seed invocation must explicitly enable private handoff\n' >&2
+  exit 1
+}
+[[ "$(grep -Fc -- '-e FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH' "$SCRIPT")" == '1' ]] || {
+  printf 'FAIL: seed hash must be passed only to the restore child\n' >&2
+  exit 1
+}
+if ! grep -Fq "print_sanitized_output \"\$seed_output\"" "$SCRIPT" || \
+  ! grep -Fq "print_sanitized_output \"\$restore_output\"" "$SCRIPT"; then
+  printf 'FAIL: successful seed and restore diagnostics must be printed through redaction\n' >&2
+  exit 1
+fi
+
+baseline_capture_line="$(grep -n 'capture-acceptance-baseline' "$SCRIPT" | head -1 | cut -d: -f1)"
+seed_line="$(grep -n 'profile seed-staging-golden run' "$SCRIPT" | head -1 | cut -d: -f1)"
+[[ -n "$baseline_capture_line" && -n "$seed_line" && "$baseline_capture_line" -lt "$seed_line" ]] || {
+  printf 'FAIL: full acceptance baseline must be captured before seed\n' >&2
+  exit 1
+}
+grep -Fq 'ACCEPTANCE_BASELINE_SNAPSHOT' "$SCRIPT" || {
+  printf 'FAIL: full baseline must use ACCEPTANCE_BASELINE_SNAPSHOT\n' >&2
+  exit 1
+}
+baseline_pipe_count="$(grep -Fc "printf '%s' \"\$ACCEPTANCE_BASELINE_SNAPSHOT\" |" "$SCRIPT")"
+[[ "$baseline_pipe_count" == '2' ]] || {
+  printf 'FAIL: the same full baseline must be piped to acceptance and password restoration\n' >&2
+  exit 1
+}
+if grep -Eq 'capture-golden-passwords|PASSWORD_SNAPSHOT' "$SCRIPT"; then
+  printf 'FAIL: password-only baseline mode and variable name are forbidden\n' >&2
+  exit 1
+fi
 grep -Fq 'trap restore_golden_password_baseline EXIT' "$SCRIPT" || {
   printf 'FAIL: Golden password restore must be registered for all shell exits\n' >&2
   exit 1
@@ -101,7 +145,7 @@ grep -Fq 'cleanup.markSessionAttempted()' "$ACCEPTANCE_MJS" || {
   exit 1
 }
 
-successful_cleanup_markers=$'QA_RUN_MUTABLE_DB_CLEANUP_PASS\nQA_RUN_STORAGE_CLEANUP_PASS\nQA_AUTH_SESSION_CLEANUP_PASS\nQA_AUDIT_HISTORY_PRESERVED_PASS\nRUN_SCOPED_MUTABLE_DB_RESIDUE=0\nRUN_SCOPED_STORAGE_RESIDUE=0\nRUN_SCOPED_ACTIVE_SESSION_RESIDUE=0'
+successful_cleanup_markers=$'QA_RUN_MUTABLE_DB_CLEANUP_PASS\nQA_RUN_STORAGE_CLEANUP_PASS\nQA_AUTH_SESSION_CLEANUP_PASS\nQA_AUDIT_HISTORY_PRESERVED_PASS\nQA_RECEIPT_SEQUENCE_BASELINE_UNCHANGED_PASS\nQA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS\nRUN_SCOPED_MUTABLE_DB_RESIDUE=0\nRUN_SCOPED_STORAGE_RESIDUE=0\nRUN_SCOPED_ACTIVE_SESSION_RESIDUE=0'
 failed_acceptance_output="$successful_cleanup_markers"$'\nFINANCE_02C_ACCEPTANCE_FAILED: synthetic original failure'
 acceptance_output_proves_cleanup "$successful_cleanup_markers" || {
   printf 'FAIL: all exact cleanup success markers and zero residue counts must prove child cleanup\n' >&2
@@ -120,7 +164,8 @@ recorded_success_output="$(bash -c '
 }
 for incomplete_output in \
   "${successful_cleanup_markers/QA_RUN_STORAGE_CLEANUP_PASS/QA_RUN_STORAGE_CLEANUP_FAIL}" \
-  "${successful_cleanup_markers/RUN_SCOPED_STORAGE_RESIDUE=0/RUN_SCOPED_STORAGE_RESIDUE=1}"; do
+  "${successful_cleanup_markers/RUN_SCOPED_STORAGE_RESIDUE=0/RUN_SCOPED_STORAGE_RESIDUE=1}" \
+  "${successful_cleanup_markers/QA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS/}"; do
   if acceptance_output_proves_cleanup "$incomplete_output"; then
     printf 'FAIL: incomplete child cleanup evidence must not set cleanup-success state\n' >&2
     exit 1
@@ -131,7 +176,7 @@ incomplete_success_output="$(bash -c '
   source "$1"
   trap - EXIT
   record_acceptance_result 0 "$2"
-' _ "$SCRIPT" "${successful_cleanup_markers/RUN_SCOPED_ACTIVE_SESSION_RESIDUE=0/}" 2>&1)"
+' _ "$SCRIPT" "${successful_cleanup_markers/QA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS/}" 2>&1)"
 incomplete_success_status=$?
 set -e
 [[ "$incomplete_success_status" -ne 0 && "$incomplete_success_output" == *'without complete cleanup evidence'* ]] || {
@@ -143,8 +188,8 @@ set +e
 preserved_failure_output="$(bash -c '
   source "$1"
   docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }
-  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
-  PASSWORD_RESTORE_REQUIRED=1
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
   COMPOSE_COMMAND=(docker)
   trap - EXIT
   set +e
@@ -155,7 +200,7 @@ preserved_failure_output="$(bash -c '
 ' _ "$SCRIPT" "$failed_acceptance_output" 2>&1)"
 preserved_failure_status=$?
 set -e
-[[ "$preserved_failure_status" -eq 7 && "$preserved_failure_output" == *'FINANCE_02C_ACCEPTANCE_FAILED: synthetic original failure'* && "$preserved_failure_output" == *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
+[[ "$preserved_failure_status" -eq 7 && "$preserved_failure_output" == *'FINANCE_02C_ACCEPTANCE_FAILED: synthetic original failure'* && "$preserved_failure_output" == *'GOLDEN_PASSWORD_HASH_RESIDUE=0'* && "$preserved_failure_output" == *'QA_GOLDEN_PASSWORD_RESTORE_PASS'* && "$preserved_failure_output" == *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
   printf 'FAIL: successful exact cleanup plus password restoration must report zero residue without masking the original failure\n' >&2
   exit 1
 }
@@ -164,8 +209,8 @@ set +e
 missing_cleanup_output="$(bash -c '
   source "$1"
   docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }
-  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
-  PASSWORD_RESTORE_REQUIRED=1
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
   COMPOSE_COMMAND=(docker)
   trap - EXIT
   set +e
@@ -184,15 +229,19 @@ set -e
 restore_output="$(bash -c '
   source "$1"
   docker() { cat >/dev/null; printf "GOLDEN_PASSWORD_HASH_RESTORE_PASS\\n"; }
-  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
-  PASSWORD_RESTORE_REQUIRED=1
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
   RUN_CLEANUP_PASS=1
   COMPOSE_COMMAND=(docker)
   trap - EXIT
   restore_golden_password_baseline
 ' _ "$SCRIPT")"
-[[ "$restore_output" == *'GOLDEN_PASSWORD_HASH_RESTORE_PASS'* && "$restore_output" == *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
+[[ "$restore_output" == *'GOLDEN_PASSWORD_HASH_RESTORE_PASS'* && "$restore_output" == *'GOLDEN_PASSWORD_HASH_RESIDUE=0'* && "$restore_output" == *'QA_GOLDEN_PASSWORD_RESTORE_PASS'* && "$restore_output" == *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
   printf 'FAIL: exit trap must restore the exact baseline and report zero residue only after cleanup\n' >&2
+  exit 1
+}
+[[ "$restore_output" != *'GOLDEN_BASELINE_MUTATION_RESIDUE=0'* && "$restore_output" != *'QA_GOLDEN_BASELINE_RESTORE_PASS'* ]] || {
+  printf 'FAIL: ambiguous Golden baseline markers are forbidden\\n' >&2
   exit 1
 }
 [[ "$restore_output" != *'PRIVATE_HASH_SENTINEL'* ]] || {
@@ -203,9 +252,31 @@ restore_output="$(bash -c '
 set +e
 failed_restore_output="$(bash -c '
   source "$1"
+  docker() {
+    cat >/dev/null
+    printf "useful restore diagnostic\\nSTAGING_GOLDEN_SEED_HASH_PRIVATE=PRIVATE_HASH_SENTINEL\\nrestore failed for PRIVATE_HASH_SENTINEL\\n" >&2
+    return 1
+  }
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
+  FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH="PRIVATE_HASH_SENTINEL"
+  COMPOSE_COMMAND=(docker)
+  trap - EXIT
+  restore_golden_password_baseline
+' _ "$SCRIPT" 2>&1)"
+failed_restore_status=$?
+set -e
+[[ "$failed_restore_status" -ne 0 && "$failed_restore_output" == *'useful restore diagnostic'* && "$failed_restore_output" != *'PRIVATE_HASH_SENTINEL'* ]] || {
+  printf 'FAIL: restore diagnostics must remain useful while private hash material is redacted\\n' >&2
+  exit 1
+}
+
+set +e
+failed_restore_output="$(bash -c '
+  source "$1"
   docker() { cat >/dev/null; return 1; }
-  PASSWORD_SNAPSHOT="PRIVATE_HASH_SENTINEL"
-  PASSWORD_RESTORE_REQUIRED=1
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
   RUN_CLEANUP_PASS=1
   COMPOSE_COMMAND=(docker)
   trap - EXIT
@@ -215,6 +286,24 @@ failed_restore_status=$?
 set -e
 [[ "$failed_restore_status" -ne 0 && "$failed_restore_output" == *'GOLDEN_PASSWORD_HASH_RESTORE_FAIL'* && "$failed_restore_output" != *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
   printf 'FAIL: failed Golden password restoration must fail acceptance without claiming zero residue\n' >&2
+  exit 1
+}
+
+set +e
+missing_password_proof_output="$(bash -c '
+  source "$1"
+  docker() { cat >/dev/null; return 0; }
+  ACCEPTANCE_BASELINE_SNAPSHOT="PRIVATE_HASH_SENTINEL"
+  ACCEPTANCE_BASELINE_RESTORE_REQUIRED=1
+  RUN_CLEANUP_PASS=1
+  COMPOSE_COMMAND=(docker)
+  trap - EXIT
+  restore_golden_password_baseline
+' _ "$SCRIPT" 2>&1)"
+missing_password_proof_status=$?
+set -e
+[[ "$missing_password_proof_status" -ne 0 && "$missing_password_proof_output" != *'QA_RUN_RESIDUE_ZERO_PASS'* ]] || {
+  printf 'FAIL: successful restore command without exact password proof must not report zero residue\n' >&2
   exit 1
 }
 

@@ -914,11 +914,11 @@ async function main() {
 }
 
 const mode = process.argv[2];
-if (mode === "capture-golden-passwords") {
+if (mode === "capture-acceptance-baseline") {
   try {
     process.stdout.write(await captureAcceptanceBaseline(prisma));
   } catch (error) {
-    console.error(`GOLDEN_PASSWORD_SNAPSHOT_FAILED: ${error instanceof Error ? error.message : "unknown error"}`);
+    console.error(`GOLDEN_ACCEPTANCE_BASELINE_CAPTURE_FAILED: ${error instanceof Error ? error.message : "unknown error"}`);
     process.exitCode = 1;
   } finally {
     await prisma.$disconnect();
@@ -927,7 +927,7 @@ if (mode === "capture-golden-passwords") {
   try {
     let serializedSnapshot = "";
     for await (const chunk of process.stdin) serializedSnapshot += chunk;
-    await restoreGoldenPasswordHashes(prisma.user, serializedSnapshot);
+    await restoreGoldenPasswordHashes(prisma, serializedSnapshot, process.env.FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH);
     console.log("GOLDEN_PASSWORD_HASH_RESTORE_PASS");
   } catch (error) {
     console.error(`GOLDEN_PASSWORD_HASH_RESTORE_FAIL: ${error instanceof Error ? error.message : "unknown error"}`);

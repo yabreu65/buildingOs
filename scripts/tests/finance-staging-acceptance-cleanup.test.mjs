@@ -61,11 +61,12 @@ function makeDelegate(rows = []) {
   };
 }
 
-function createFixture() {
+function createFixture({ onPass = () => {} } = {}) {
   const delegates = {
     expense: makeDelegate(), income: makeDelegate(), charge: makeDelegate(), payment: makeDelegate(),
     document: makeDelegate(), file: makeDelegate(), paymentAllocation: makeDelegate(), paymentAuditLog: makeDelegate(),
     authSession: makeDelegate(), membership: makeDelegate(), user: makeDelegate(), auditLog: makeDelegate(), receiptSequence: makeDelegate(),
+    tenant: makeDelegate(), building: makeDelegate(), unit: makeDelegate(),
   };
   const storageRows = new Map();
   const storageRemovals = [];
@@ -90,7 +91,7 @@ function createFixture() {
     storageRemovals,
     fileLookups,
     storage,
-    cleanup: createAcceptanceCleanup({ prisma: delegates, storage, runId: "test-run", baseline: { receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" } } }, qaUserId, onPass() {} }),
+    cleanup: createAcceptanceCleanup({ prisma: delegates, storage, runId: "test-run", baseline: { passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })), receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" }, nextYear: { year: 2027, row: null } } }, qaUserId, onPass }),
     add(kind, row) { delegates[kind].values.set(row.id, structuredClone(row)); },
   };
 }
@@ -142,41 +143,142 @@ test("exact AuthSession is removed", async () => {
 test("unrelated AuthSession is preserved", async () => {
   const f = createFixture(); addBaseResources(f); f.add("authSession", { id: "session-other", userId: qaUserId, revokedAt: null, expiresAt: new Date(Date.now() + 60_000) }); await f.cleanup.cleanup(); assert.equal(f.delegates.authSession.values.has("session-other"), true);
 });
+test("mutation inventory records exact durable, run-scoped, shared, and ephemeral classes", () => {
+  const byResource = new Map(ACCEPTANCE_MUTATION_INVENTORY.map((entry) => [entry.resource, entry]));
+  assert.deepEqual(byResource.get("AUTH_LOGIN AuditLog"), { resource: "AUTH_LOGIN AuditLog", classification: "DURABLE_AUDIT_EVIDENCE", cleanup: "NONE" });
+  assert.deepEqual(byResource.get("Golden staging seed fixtures"), { resource: "Golden staging seed fixtures", classification: "DURABLE_QA_BASELINE", scope: "stg-golden-tenant-auto", cleanup: "NONE" });
+  assert.deepEqual(byResource.get("AuthSession"), { resource: "AuthSession", classification: "RUN_SCOPED_DB", cleanup: "exact session id and Golden QA user" });
+  assert.deepEqual(byResource.get("Finance rows and Documents/Files"), { resource: "Finance rows and Documents/Files", classification: "RUN_SCOPED_MUTABLE_DB", cleanup: "registered exact IDs with tenant/building ownership" });
+  assert.deepEqual(byResource.get("S3 objects"), { resource: "S3 objects", classification: "RUN_SCOPED_STORAGE", cleanup: "exact bucket/key/version with File binding" });
+  assert.deepEqual(byResource.get("ReceiptSequence"), { resource: "ReceiptSequence", classification: "SHARED_MONOTONIC_FINANCE_STATE", cleanup: "restore only on exact compare-and-set; otherwise fail closed" });
+  assert.deepEqual(byResource.get("Golden user passwordHash"), { resource: "Golden user passwordHash", classification: "EPHEMERAL_GOLDEN_AUTH_MUTATION", cleanup: "exact pre-seed hash restored and verified" });
+  assert.equal(byResource.size, ACCEPTANCE_MUTATION_INVENTORY.length, "inventory resource names must be unique");
+});
 test("AUTH_LOGIN AuditLog is durable and preserved", async () => {
   const f = createFixture(); addBaseResources(f); await f.cleanup.cleanup(); assert.equal(f.delegates.auditLog.values.has("auth-audit-1"), true);
-  assert.deepEqual(ACCEPTANCE_MUTATION_INVENTORY[0], { resource: "AUTH_LOGIN AuditLog", classification: "DURABLE_AUDIT_EVIDENCE", cleanup: "NONE" });
+});
+test("cleanup preserves durable Golden tenant, building, unit, and membership fixtures", async () => {
+  const f = createFixture();
+  const fixtures = {
+    tenant: { id: tenantId },
+    building: { id: buildingId, tenantId },
+    unit: { id: "stg-golden-unit-auto-102", buildingId },
+    membership: { id: "fixture-membership", userId: qaUserId, tenantId },
+  };
+  for (const [kind, row] of Object.entries(fixtures)) f.add(kind, row);
+  addBaseResources(f);
+  await f.cleanup.cleanup();
+  for (const [kind, row] of Object.entries(fixtures)) assert.deepEqual(f.delegates[kind].values.get(row.id), row);
+  assert.equal(f.delegates.auditLog.values.has("auth-audit-1"), true, "cleanup must not delete AUTH_LOGIN AuditLog evidence");
 });
 test("AuditLog growth is excluded from mutable residue checks", async () => {
   const f = createFixture(); addBaseResources(f); f.add("auditLog", { id: "auth-audit-2", action: "AUTH_LOGIN", actorUserId: qaUserId }); await f.cleanup.cleanup(); assert.equal(f.delegates.auditLog.values.size, 2);
 });
-test("Golden password hashes are captured privately and restored exactly", async () => {
+test("Golden password hashes are captured privately and atomically restored only from the exact seed hash", async () => {
   const users = makeDelegate(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
   const snapshot = await captureGoldenPasswordHashes(users);
-  for (const user of GOLDEN_PASSWORD_USERS) await users.updateMany({ where: user, data: { passwordHash: "ephemeral" } });
-  await restoreGoldenPasswordHashes(users, snapshot);
+  for (const user of GOLDEN_PASSWORD_USERS) await users.updateMany({ where: user, data: { passwordHash: "exact-seed-hash" } });
+  await restoreGoldenPasswordHashes({ user: users, $transaction: async (callback) => callback({ user: users }) }, snapshot, "exact-seed-hash");
   for (const user of GOLDEN_PASSWORD_USERS) assert.equal((await users.findFirst({ where: { id: user.id } })).passwordHash, `old-${user.id}`);
 });
-test("Golden password restoration attempts every exact user and fails if one update fails", async () => {
+
+test("Golden password restoration preserves a concurrent hash mismatch and rolls back all users", async () => {
+  const users = makeDelegate(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: "exact-seed-hash" })));
+  const snapshot = JSON.stringify(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
+  users.values.get(GOLDEN_PASSWORD_USERS[1].id).passwordHash = "concurrent-hash";
+  const before = structuredClone([...users.values]);
+  const database = {
+    user: users,
+    async $transaction(callback) {
+      const draft = makeDelegate([...users.values]);
+      await callback({ user: draft });
+      users.values.clear();
+      for (const [id, row] of draft.values) users.values.set(id, row);
+    },
+  };
+  await assert.rejects(restoreGoldenPasswordHashes(database, snapshot, "exact-seed-hash"));
+  assert.deepEqual([...users.values], before, "failed atomic restoration must preserve every user's current hash");
+});
+
+test("Golden password restoration validates every fixed ID and email before writing", async () => {
+  const users = makeDelegate(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: "exact-seed-hash" })));
+  for (const [index, expected] of GOLDEN_PASSWORD_USERS.entries()) {
+    for (const field of ["id", "email"]) {
+      const entries = GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` }));
+      entries[index] = { ...entries[index], [field]: `unexpected-${field}` };
+      await assert.rejects(restoreGoldenPasswordHashes({ user: users, $transaction: async () => assert.fail("must not transact") }, JSON.stringify(entries), "exact-seed-hash"), /identity/);
+    }
+    assert.equal((await users.findFirst({ where: { id: expected.id } })).passwordHash, "exact-seed-hash");
+  }
+});
+test("Golden password restoration requires the exact ephemeral seed hash", async () => {
   const users = makeDelegate(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
   const snapshot = await captureGoldenPasswordHashes(users);
-  const attempted = [];
-  const updateMany = users.updateMany;
-  users.updateMany = async (args) => {
-    attempted.push(args.where.id);
-    if (args.where.id === GOLDEN_PASSWORD_USERS[0].id) throw new Error("injected restore failure");
-    return updateMany(args);
-  };
-  await assert.rejects(restoreGoldenPasswordHashes(users, snapshot), AggregateError);
-  assert.deepEqual(attempted, GOLDEN_PASSWORD_USERS.map(({ id }) => id));
-  assert.equal((await users.findFirst({ where: { id: GOLDEN_PASSWORD_USERS[1].id } })).passwordHash, `old-${GOLDEN_PASSWORD_USERS[1].id}`);
+  await assert.rejects(restoreGoldenPasswordHashes({ user: users }, snapshot, "exact-seed-hash"), /\$transaction is not a function/);
+  for (const user of GOLDEN_PASSWORD_USERS) assert.equal((await users.findFirst({ where: { id: user.id } })).passwordHash, `old-${user.id}`);
 });
-test("acceptance baseline captures the exact ReceiptSequence preimage with private Golden hashes", async () => {
+test("password-only baseline is rejected by acceptance cleanup", () => {
+  const f = createFixture();
+  const passwordHashes = GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` }));
+  assert.throws(() => createAcceptanceCleanup({
+    prisma: f.delegates,
+    storage: f.storage,
+    runId: "test-run",
+    baseline: { passwordHashes },
+    qaUserId,
+    onPass() {},
+  }), /receipt-sequence baseline is missing or invalid/);
+});
+test("full password-hash and ReceiptSequence baseline is accepted by acceptance cleanup", () => {
+  const f = createFixture();
+  assert.doesNotThrow(() => createAcceptanceCleanup({
+    prisma: f.delegates,
+    storage: f.storage,
+    runId: "test-run",
+    baseline: {
+      passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })),
+      receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 7, updatedAt: "2026-01-01T00:00:00.000Z" }, nextYear: { year: 2027, row: null } },
+    },
+    qaUserId,
+    onPass() {},
+  }));
+});
+test("default acceptance baseline uses the local calendar year across a UTC year boundary", async () => {
+  const f = createFixture();
+  for (const user of GOLDEN_PASSWORD_USERS) f.add("user", { ...user, passwordHash: `old-${user.id}` });
+  const originalDate = globalThis.Date;
+  const originalTimezone = process.env.TZ;
+  const fixedInstant = new originalDate("2027-01-01T00:30:00.000Z");
+  globalThis.Date = class extends originalDate {
+    constructor(...args) { super(...(args.length ? args : [fixedInstant])); }
+  };
+  process.env.TZ = "America/Los_Angeles";
+  try {
+    assert.equal(new Date().getFullYear(), 2026);
+    assert.equal(new Date().getUTCFullYear(), 2027);
+    const baseline = JSON.parse(await captureAcceptanceBaseline(f.delegates));
+    assert.equal(baseline.receiptSequence.year, 2026);
+    assert.equal(baseline.receiptSequence.nextYear.year, 2027);
+  } finally {
+    globalThis.Date = originalDate;
+    if (originalTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTimezone;
+  }
+});
+
+test("acceptance baseline serializes private Golden hashes and the exact ReceiptSequence preimage", async () => {
   const f = createFixture();
   for (const user of GOLDEN_PASSWORD_USERS) f.add("user", { ...user, passwordHash: `old-${user.id}` });
   f.add("receiptSequence", { id: "seq-1", tenantId, year: 2026, lastNumber: 7, updatedAt: new Date("2026-01-01T00:00:00.000Z") });
+  f.add("receiptSequence", { id: "seq-2027", tenantId, year: 2027, lastNumber: 2, updatedAt: new Date("2027-01-01T00:00:00.000Z") });
   const baseline = JSON.parse(await captureAcceptanceBaseline(f.delegates, 2026));
-  assert.equal(baseline.receiptSequence.row.lastNumber, 7);
-  assert.equal(baseline.passwordHashes.length, GOLDEN_PASSWORD_USERS.length);
+  assert.deepEqual(baseline.passwordHashes, GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
+  assert.deepEqual(baseline.receiptSequence, {
+    tenantId,
+    year: 2026,
+    row: { id: "seq-1", lastNumber: 7, updatedAt: "2026-01-01T00:00:00.000Z" },
+    nextYear: { year: 2027, row: { id: "seq-2027", lastNumber: 2, updatedAt: "2027-01-01T00:00:00.000Z" } },
+  });
 });
 test("failure after Expense cleans its exact registered row", async () => {
   const f = createFixture(); const row = { id: "expense-fail", tenantId, buildingId }; f.add("expense", row); f.cleanup.register("expense", row); await f.cleanup.cleanup(); assert.equal(f.delegates.expense.values.size, 0);
@@ -246,17 +348,199 @@ test("receipt cleanup fails closed on Document building or File tenant mismatch"
     assert.equal(f.storageRemovals.some(({ key }) => key.includes("/payments/payment-1/receipts/")), false);
   }
 });
+test("receipt issued in the next UTC year restores that year's exact sequence preimage", async () => {
+  const f = createFixture();
+  const nextYearSequence = { id: "seq-2027", tenantId, year: 2027, lastNumber: 4, updatedAt: new Date("2027-01-01T00:00:00.000Z") };
+  f.add("receiptSequence", nextYearSequence);
+  addBaseResources(f, { withReceipt: true });
+  const payment = f.delegates.payment.values.get("payment-1");
+  payment.receiptNumber = "R-GOLDEN-2027-000005";
+  f.delegates.receiptSequence.values.get("seq-1").lastNumber = 10;
+  f.delegates.receiptSequence.values.get("seq-1").updatedAt = new Date("2026-01-01T00:00:00.000Z");
+  f.delegates.receiptSequence.values.get("seq-2027").lastNumber = 5;
+  f.delegates.receiptSequence.values.get("seq-2027").updatedAt = new Date("2027-01-02T00:00:00.000Z");
+  f.delegates.file.values.get("receipt-file-1").objectKey = `tenant/${tenantId}/payments/payment-1/receipts/R-GOLDEN-2027-000005.pdf`;
+  const cleanup = createAcceptanceCleanup({ prisma: f.delegates, storage: f.storage, runId: "test-run", baseline: {
+    passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })),
+    receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" }, nextYear: { year: 2027, row: { id: "seq-2027", lastNumber: 4, updatedAt: "2027-01-01T00:00:00.000Z" } } },
+  }, qaUserId, onPass() {} });
+  for (const kind of ["expense", "income", "charge", "payment"]) cleanup.register(kind, f.delegates[kind].values.get(`${kind}-1`));
+  cleanup.register("document", f.delegates.document.values.get("proof-doc-1"));
+  cleanup.register("file", f.delegates.file.values.get("proof-file-1"));
+  cleanup.registerObject({ tenantId, bucket: "staging", objectKey: `tenant-${tenantId}/payment-proofs/run-1.pdf`, objectVersionId: versionId, fileId: "proof-file-1" });
+  cleanup.setSessionId("session-run");
+  await cleanup.cleanup();
+  const restored = await f.delegates.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year: 2027 } } });
+  assert.equal(restored.lastNumber, 4);
+  assert.equal(restored.updatedAt.toISOString(), "2027-01-01T00:00:00.000Z");
+  const currentYear = await f.delegates.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year: 2026 } } });
+  assert.equal(currentYear.lastNumber, 10);
+  assert.equal(currentYear.updatedAt.toISOString(), "2026-01-01T00:00:00.000Z");
+});
+
+test("next-year receipt fails closed when that year's preimage was not captured", async () => {
+  const f = createFixture();
+  addBaseResources(f, { withReceipt: true });
+  const payment = f.delegates.payment.values.get("payment-1");
+  payment.receiptNumber = "R-GOLDEN-2027-000005";
+  f.delegates.receiptSequence.values.get("seq-1").lastNumber = 10;
+  f.delegates.receiptSequence.values.get("seq-1").updatedAt = new Date("2026-01-01T00:00:00.000Z");
+  f.add("receiptSequence", { id: "seq-2027", tenantId, year: 2027, lastNumber: 5, updatedAt: new Date("2027-01-02T00:00:00.000Z") });
+  f.delegates.file.values.get("receipt-file-1").objectKey = `tenant/${tenantId}/payments/payment-1/receipts/R-GOLDEN-2027-000005.pdf`;
+  const cleanup = createAcceptanceCleanup({ prisma: f.delegates, storage: f.storage, runId: "test-run", baseline: {
+    passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })),
+    receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" } },
+  }, qaUserId, onPass() {} });
+  for (const kind of ["expense", "income", "charge", "payment"]) cleanup.register(kind, f.delegates[kind].values.get(`${kind}-1`));
+  cleanup.register("document", f.delegates.document.values.get("proof-doc-1"));
+  cleanup.register("file", f.delegates.file.values.get("proof-file-1"));
+  cleanup.registerObject({ tenantId, bucket: "staging", objectKey: `tenant-${tenantId}/payment-proofs/run-1.pdf`, objectVersionId: versionId, fileId: "proof-file-1" });
+  cleanup.setSessionId("session-run");
+  await assert.rejects(cleanup.cleanup(), /next-year receipt sequence preimage is missing/);
+  assert.equal(f.delegates.receiptSequence.values.get("seq-2027").lastNumber, 5);
+  assert.equal(f.delegates.receiptSequence.values.get("seq-2027").updatedAt.toISOString(), "2027-01-02T00:00:00.000Z");
+});
+
 test("run-owned final receipt number restores its exact shared sequence preimage", async () => {
-  const f = createFixture(); addBaseResources(f, { withReceipt: true }); await f.cleanup.cleanup();
+  const proof = [];
+  const f = createFixture({ onPass: (marker) => proof.push(marker) });
+  addBaseResources(f, { withReceipt: true });
+  await f.cleanup.cleanup();
   const restored = await f.delegates.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year: 2026 } } });
   assert.equal(restored.lastNumber, 10);
   assert.equal(restored.updatedAt.toISOString(), "2026-01-01T00:00:00.000Z");
+  assert.ok(proof.includes("QA_RECEIPT_SEQUENCE_RESTORE_PASS"));
+  assert.ok(proof.includes("QA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS"));
+  assert.ok(!proof.includes("QA_RECEIPT_SEQUENCE_BASELINE_UNCHANGED_PASS"));
 });
+test("current-year receipt fails closed without both consecutive-year preimages", async () => {
+  const proof = [];
+  const f = createFixture();
+  addBaseResources(f, { withReceipt: true });
+  const currentSequence = f.delegates.receiptSequence.values.get("seq-1");
+  currentSequence.lastNumber = 11;
+  currentSequence.updatedAt = new Date("2026-01-02T00:00:00.000Z");
+  const cleanup = createAcceptanceCleanup({ prisma: f.delegates, storage: f.storage, runId: "test-run", baseline: {
+    passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })),
+    receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" } },
+  }, qaUserId, onPass: (marker) => proof.push(marker) });
+  for (const kind of ["expense", "income", "charge", "payment"]) cleanup.register(kind, f.delegates[kind].values.get(`${kind}-1`));
+  cleanup.register("document", f.delegates.document.values.get("proof-doc-1"));
+  cleanup.register("file", f.delegates.file.values.get("proof-file-1"));
+  cleanup.registerObject({ tenantId, bucket: "staging", objectKey: `tenant-${tenantId}/payment-proofs/run-1.pdf`, objectVersionId: versionId, fileId: "proof-file-1" });
+  cleanup.setSessionId("session-run");
+
+  let cleanupError;
+  try { await cleanup.cleanup(); } catch (error) { cleanupError = error; }
+  assert.ok(cleanupError, `cleanup resolved with sequence ${f.delegates.receiptSequence.values.get("seq-1").lastNumber} and proof ${proof.join(",")}`);
+  assert.match(cleanupError.message, /next-year receipt sequence preimage is missing/);
+  assert.equal(f.delegates.receiptSequence.values.get("seq-1").lastNumber, 11, "incomplete baseline must not restore the sequence");
+  assert.equal(f.delegates.receiptSequence.values.get("seq-1").updatedAt.toISOString(), "2026-01-02T00:00:00.000Z");
+  assert.ok(!proof.includes("QA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS"), "incomplete baseline must not emit sequence proof");
+  assert.ok(!proof.includes("RUN_SCOPED_MUTABLE_DB_RESIDUE=0"), "incomplete baseline must not emit zero-residue proof");
+});
+
+test("receipt restore fails closed when the untargeted captured year changed", async () => {
+  const proof = [];
+  const f = createFixture({ onPass: (marker) => proof.push(marker) });
+  addBaseResources(f, { withReceipt: true });
+  const otherYear = { id: "seq-2027", tenantId, year: 2027, lastNumber: 3, updatedAt: new Date("2027-01-01T00:00:00.000Z") };
+  f.add("receiptSequence", otherYear);
+  const cleanup = createAcceptanceCleanup({ prisma: f.delegates, storage: f.storage, runId: "test-run", baseline: {
+    passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })),
+    receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" }, nextYear: { year: 2027, row: { id: otherYear.id, lastNumber: otherYear.lastNumber, updatedAt: otherYear.updatedAt.toISOString() } } },
+  }, qaUserId, onPass: (marker) => proof.push(marker) });
+  for (const kind of ["expense", "income", "charge", "payment"]) cleanup.register(kind, f.delegates[kind].values.get(`${kind}-1`));
+  cleanup.register("document", f.delegates.document.values.get("proof-doc-1"));
+  cleanup.register("file", f.delegates.file.values.get("proof-file-1"));
+  cleanup.registerObject({ tenantId, bucket: "staging", objectKey: `tenant-${tenantId}/payment-proofs/run-1.pdf`, objectVersionId: versionId, fileId: "proof-file-1" });
+  cleanup.setSessionId("session-run");
+  const changed = f.delegates.receiptSequence.values.get(otherYear.id);
+  changed.lastNumber = 4;
+  changed.updatedAt = new Date("2027-01-02T00:00:00.000Z");
+  const expectedOtherYear = structuredClone(changed);
+  await assert.rejects(cleanup.cleanup(), /captured baseline/);
+  const restoredReceiptYear = await f.delegates.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year: 2026 } } });
+  assert.equal(restoredReceiptYear.lastNumber, 10);
+  assert.equal(restoredReceiptYear.updatedAt.toISOString(), "2026-01-01T00:00:00.000Z");
+  assert.deepEqual(f.delegates.receiptSequence.values.get(otherYear.id), expectedOtherYear, "cleanup must preserve the concurrent mutation in the other year");
+  assert.ok(!proof.includes("QA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS"));
+  assert.ok(!proof.includes("RUN_SCOPED_MUTABLE_DB_RESIDUE=0"));
+});
+
 test("receipt sequence is not rewound when a later concurrent receipt exists", async () => {
   const f = createFixture(); addBaseResources(f, { withReceipt: true });
   const row = f.delegates.receiptSequence.values.get("seq-1"); row.lastNumber = 12;
   await assert.rejects(f.cleanup.cleanup(), /receipt sequence advanced concurrently/);
   assert.equal(f.delegates.receiptSequence.values.get("seq-1").lastNumber, 12);
+});
+
+test("no-receipt cleanup proves both captured sequence years unchanged without claiming restoration", async () => {
+  const f = createFixture(); addBaseResources(f);
+  const nextYearRow = { id: "seq-2027", tenantId, year: 2027, lastNumber: 3, updatedAt: new Date("2027-01-01T00:00:00.000Z") };
+  f.add("receiptSequence", nextYearRow);
+  const proof = [];
+  const cleanup = createAcceptanceCleanup({ prisma: f.delegates, storage: f.storage, runId: "test-run", baseline: {
+    passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })),
+    receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 10, updatedAt: "2026-01-01T00:00:00.000Z" }, nextYear: { year: 2027, row: { id: "seq-2027", lastNumber: 3, updatedAt: "2027-01-01T00:00:00.000Z" } } },
+  }, qaUserId, onPass: (marker) => proof.push(marker) });
+  cleanup.register("expense", { id: "expense-1", tenantId, buildingId });
+  cleanup.register("income", { id: "income-1", tenantId, buildingId });
+  cleanup.register("charge", { id: "charge-1", tenantId, buildingId });
+  cleanup.register("payment", { id: "payment-1", tenantId, buildingId });
+  cleanup.setSessionId("session-run");
+  await cleanup.cleanup();
+  assert.ok(proof.includes("QA_RECEIPT_SEQUENCE_BASELINE_UNCHANGED_PASS"));
+  assert.ok(proof.includes("QA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS"));
+  assert.ok(!proof.includes("QA_RECEIPT_SEQUENCE_RESTORE_PASS"));
+  assert.deepEqual(await f.delegates.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year: 2027 } } }), nextYearRow);
+});
+
+test("no-receipt cleanup fails closed without mutating an altered sequence baseline", async () => {
+  const f = createFixture(); addBaseResources(f);
+  f.delegates.receiptSequence.values.get("seq-1").lastNumber = 11;
+  await assert.rejects(f.cleanup.cleanup(), /without a receipt number/);
+  assert.equal(f.delegates.receiptSequence.values.get("seq-1").lastNumber, 11);
+});
+
+test("no-receipt cleanup fails closed when a captured existing sequence row disappears", async () => {
+  const f = createFixture(); addBaseResources(f);
+  f.delegates.receiptSequence.values.delete("seq-1");
+  await assert.rejects(f.cleanup.cleanup(), /without a receipt number/);
+  assert.equal(f.delegates.receiptSequence.values.has("seq-1"), false);
+});
+
+test("no-receipt cleanup proves baseline-null sequence row remains absent", async () => {
+  const proof = [];
+  const f = createFixture(); addBaseResources(f);
+  f.delegates.receiptSequence.values.clear();
+  const cleanup = createAcceptanceCleanup({ prisma: f.delegates, storage: f.storage, runId: "test-run", baseline: {
+    passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })),
+    receiptSequence: { tenantId, year: 2026, row: null, nextYear: { year: 2027, row: null } },
+  }, qaUserId, onPass: (marker) => proof.push(marker) });
+  for (const kind of ["expense", "income", "charge", "payment"]) cleanup.register(kind, { id: `${kind}-1`, tenantId, buildingId });
+  cleanup.setSessionId("session-run");
+  await cleanup.cleanup();
+  assert.deepEqual([...f.delegates.receiptSequence.values], []);
+  assert.ok(proof.includes("QA_RECEIPT_SEQUENCE_BASELINE_UNCHANGED_PASS"));
+  assert.ok(proof.includes("QA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS"));
+});
+
+test("no-receipt cleanup fails closed when baseline-null sequence row appeared", async () => {
+  const f = createFixture(); addBaseResources(f);
+  f.delegates.receiptSequence.values.clear();
+  const cleanup = createAcceptanceCleanup({ prisma: f.delegates, storage: f.storage, runId: "test-run", baseline: {
+    passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })),
+    receiptSequence: { tenantId, year: 2026, row: null, nextYear: { year: 2027, row: null } },
+  }, qaUserId, onPass() {} });
+  cleanup.register("expense", { id: "expense-1", tenantId, buildingId });
+  cleanup.register("income", { id: "income-1", tenantId, buildingId });
+  cleanup.register("charge", { id: "charge-1", tenantId, buildingId });
+  cleanup.register("payment", { id: "payment-1", tenantId, buildingId });
+  cleanup.setSessionId("session-run");
+  f.add("receiptSequence", { id: "appeared", tenantId, year: 2026, lastNumber: 1, updatedAt: new Date("2026-01-02T00:00:00.000Z") });
+  await assert.rejects(cleanup.cleanup(), /without a receipt number/);
+  assert.equal(f.delegates.receiptSequence.values.has("appeared"), true);
 });
 test("cross-tenant registration is rejected before mutation", async () => {
   const f = createFixture(); const row = { id: "foreign", tenantId: "other-tenant", buildingId }; assert.throws(() => f.cleanup.register("expense", row), /fixed tenant/); assert.equal(f.delegates.expense.values.size, 0);
