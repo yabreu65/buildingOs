@@ -1,6 +1,10 @@
 jest.mock('fs', () => {
   const actual = jest.requireActual<typeof import('fs')>('fs');
-  return { ...actual, accessSync: jest.fn(actual.accessSync) };
+  return {
+    ...actual,
+    accessSync: jest.fn(actual.accessSync),
+    lstatSync: jest.fn(actual.lstatSync),
+  };
 });
 
 import * as fs from 'fs';
@@ -60,8 +64,18 @@ describe('ReleaseAWriteBarrierService', () => {
     expect(buildService('production', true).isOpen()).toBe(false);
   });
 
-  it('opens when enabled and the accessible control directory has no sentinel', () => {
+  it('opens when enabled and the searchable control directory has no sentinel', () => {
+    const access = jest.mocked(fs.accessSync);
+    access.mockClear();
+    access.mockImplementation((_target, mode) => {
+      if (mode !== fs.constants.X_OK) {
+        throw new Error('read permission is not granted');
+      }
+    });
+
     expect(buildService('production', true, sentinelPath).isOpen()).toBe(true);
+    expect(access).toHaveBeenCalledWith(controlDirectory, fs.constants.X_OK);
+    access.mockImplementation(jest.requireActual<typeof import('fs')>('fs').accessSync);
   });
 
   it('closes when the sentinel is present', () => {
@@ -83,14 +97,30 @@ describe('ReleaseAWriteBarrierService', () => {
     },
   );
 
-  it('fails closed when the control directory is unreadable', () => {
+  it('fails closed when parent search permission is denied', () => {
     const access = jest.mocked(fs.accessSync);
     access.mockImplementationOnce(() => {
-      throw new Error('permission denied');
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
     });
 
     expect(buildService('production', true, sentinelPath).isOpen()).toBe(false);
-    access.mockRestore();
+    access.mockImplementation(jest.requireActual<typeof import('fs')>('fs').accessSync);
+  });
+
+  it.each([
+    ['EACCES', Object.assign(new Error('permission denied'), { code: 'EACCES' })],
+    ['unknown filesystem error', new Error('unknown filesystem error')],
+  ])('fails closed when sentinel lstat returns %s', (_description, error) => {
+    const lstat = jest.mocked(fs.lstatSync);
+    lstat.mockImplementation((target, ...args) => {
+      if (target === sentinelPath) {
+        throw error;
+      }
+      return jest.requireActual<typeof import('fs')>('fs').lstatSync(target, ...args);
+    });
+
+    expect(buildService('production', true, sentinelPath).isOpen()).toBe(false);
+    lstat.mockImplementation(jest.requireActual<typeof import('fs')>('fs').lstatSync);
   });
 
   it('fails closed when the configured control directory is missing', () => {
@@ -102,6 +132,13 @@ describe('ReleaseAWriteBarrierService', () => {
   it('fails closed when a file occupies the configured control directory path', () => {
     fs.rmdirSync(controlDirectory);
     fs.writeFileSync(controlDirectory, 'not a directory');
+
+    expect(buildService('production', true, sentinelPath).isOpen()).toBe(false);
+  });
+
+  it('fails closed when the sentinel parent is a symlink', () => {
+    fs.rmdirSync(controlDirectory);
+    fs.symlinkSync(root, controlDirectory);
 
     expect(buildService('production', true, sentinelPath).isOpen()).toBe(false);
   });

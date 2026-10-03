@@ -175,6 +175,8 @@ barrier_open_line="$(line_number 'remove_release_a_barrier || fail' "$DEPLOY_SCR
 manifest_pass_line="$(line_number 'verify-production-migration-manifest.sh verify-db post' "$DEPLOY_SCRIPT")"
 compatibility_pass_line="$(line_number 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$DEPLOY_SCRIPT")"
 candidate_start_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$DEPLOY_SCRIPT")"
+closed_probe_line="$(line_number_after "$candidate_start_line" 'probe_release_a_runtime_barrier CLOSED' "$DEPLOY_SCRIPT")"
+open_probe_line="$(line_number_after "$barrier_open_line" 'probe_release_a_runtime_barrier OPEN' "$DEPLOY_SCRIPT")"
 api_container_health_line="$(line_number_after "$candidate_start_line" 'wait_for_container_health buildingos-api' "$DEPLOY_SCRIPT")"
 web_container_health_line="$(line_number_after "$candidate_start_line" 'wait_for_container_health buildingos-web' "$DEPLOY_SCRIPT")"
 api_health_line="$(line_number_after "$candidate_start_line" 'check_http api-health' "$DEPLOY_SCRIPT")"
@@ -188,8 +190,9 @@ success_line="$(line_number 'write_record SUCCESS' "$DEPLOY_SCRIPT")"
 selector_line="$(line_number 'if ! publish_current_successful_selector; then' "$DEPLOY_SCRIPT")"
 [[ -n "$old_api_stop_line" && -n "$barrier_closed_line" && -n "$barrier_open_line" && -n "$manifest_pass_line" && -n "$compatibility_pass_line" ]] \
   || { printf 'FAIL: Release A stop/barrier/manifest/compatibility gates are missing\n' >&2; exit 1; }
-[[ -n "$candidate_start_line" && -n "$api_container_health_line" && -n "$web_container_health_line" ]] \
-  || { printf 'FAIL: candidate API and Web container health gates are missing\n' >&2; exit 1; }
+[[ -n "$candidate_start_line" && -n "$api_container_health_line" && -n "$web_container_health_line" \
+  && -n "$closed_probe_line" && -n "$open_probe_line" ]] \
+  || { printf 'FAIL: candidate health gates or runtime barrier probes are missing\n' >&2; exit 1; }
 [[ -n "$api_health_line" && -n "$readyz_line" && -n "$web_login_line" \
   && -n "$post_release_api_line" && -n "$post_release_readyz_line" && -n "$post_release_login_line" ]] \
   || { printf 'FAIL: candidate API, readyz, and Web login gates are missing before or after release\n' >&2; exit 1; }
@@ -199,14 +202,23 @@ selector_line="$(line_number 'if ! publish_current_successful_selector; then' "$
 (( old_api_stop_line < barrier_closed_line && barrier_closed_line < migrations_phase_line )) || { printf 'FAIL: old API stop and CLOSED barrier must precede migrations\n' >&2; exit 1; }
 (( migrations_phase_line < manifest_pass_line && manifest_pass_line < compatibility_pass_line )) || { printf 'FAIL: migration and compatibility validation gates are out of order\n' >&2; exit 1; }
 (( compatibility_pass_line < candidate_start_line && candidate_start_line < api_container_health_line )) || { printf 'FAIL: compatibility must pass before candidate recreation and health checks\n' >&2; exit 1; }
-(( api_container_health_line < web_container_health_line && web_container_health_line < api_health_line )) || { printf 'FAIL: candidate container health checks are out of order\n' >&2; exit 1; }
+(( api_container_health_line < web_container_health_line && web_container_health_line < closed_probe_line \
+  && closed_probe_line < api_health_line )) || { printf 'FAIL: CLOSED runtime proof must follow container health and precede HTTP checks\n' >&2; exit 1; }
 (( api_health_line < readyz_line && readyz_line < web_login_line )) || { printf 'FAIL: candidate API, readyz, and web login checks are out of order\n' >&2; exit 1; }
-(( web_login_line < barrier_open_line && barrier_open_line < post_release_api_line )) || { printf 'FAIL: candidate login must pass before opening barrier and post-release checks\n' >&2; exit 1; }
+(( web_login_line < barrier_open_line && barrier_open_line < open_probe_line \
+  && open_probe_line < post_release_api_line )) || { printf 'FAIL: OPEN runtime proof must precede post-release checks\n' >&2; exit 1; }
 (( post_release_api_line < post_release_readyz_line && post_release_readyz_line < post_release_login_line )) || { printf 'FAIL: post-release API, readyz, and login checks are out of order\n' >&2; exit 1; }
-(( post_release_login_line < observability_line )) || { printf 'FAIL: post-release health checks must precede observability\n' >&2; exit 1; }
+(( post_release_login_line < observability_line && open_probe_line < success_line && open_probe_line < selector_line )) \
+  || { printf 'FAIL: OPEN runtime proof and post-release health checks must precede success and selector\n' >&2; exit 1; }
 (( observability_line < success_line && success_line < selector_line )) || { printf 'FAIL: observability and success must precede selector publication\n' >&2; exit 1; }
 grep -F 'recovery_point_resume_api' "$DEPLOY_SCRIPT" >/dev/null
 grep -F 'RELEASE_A_BARRIER_ACTIVE' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'docker exec --user 1001:1001 buildingos-api node -e' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'process.env.RELEASE_A_WRITE_BARRIER_ENABLED !== "true"' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'process.env.RELEASE_A_WRITE_BARRIER_PATH' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'fs.accessSync(parent, fs.constants.X_OK)' "$DEPLOY_SCRIPT" >/dev/null
+grep -F 'probe_rollback_runtime_barrier CLOSED' "$ROLLBACK_SCRIPT" >/dev/null
+grep -F 'NOT_APPLICABLE (current API is non-barrier-aware)' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Rollback runtime image IDs do not match the requested previous digests' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Rollback API revision does not match the requested previous SHA' "$ROLLBACK_SCRIPT" >/dev/null
 grep -F 'Rollback Web revision does not match the requested previous SHA' "$ROLLBACK_SCRIPT" >/dev/null
@@ -273,6 +285,52 @@ PY
   else
     printf 'PASS: invalid rollback quiesce order returned nonzero\n'
   fi
+
+  make_deploy_fixture() {
+    local name="$1"
+    local fixture="$harness_dir/$name"
+    mkdir -p "$fixture/scripts/tests" "$fixture/scripts" "$fixture/.github/workflows"
+    cp "$0" "$fixture/scripts/tests/production-deploy-order.test.sh"
+    cp "$DEPLOY_SCRIPT" "$fixture/scripts/deploy-production.sh"
+    cp "$ROLLBACK_SCRIPT" "$fixture/scripts/rollback-production.sh"
+    cp "$WORKFLOW" "$fixture/.github/workflows/deploy-production.yml"
+    printf '%s' "$fixture"
+  }
+  expect_rejected_deploy_fixture() {
+    local fixture="$1" label="$2"
+    if PRODUCTION_DEPLOY_ORDER_HARNESS=1 bash "$fixture/scripts/tests/production-deploy-order.test.sh"; then
+      printf 'FAIL: %s negative fixture unexpectedly returned 0\n' "$label" >&2
+      exit 1
+    fi
+    printf 'PASS: %s negative fixture returned nonzero\n' "$label"
+  }
+
+  no_open_fixture="$(make_deploy_fixture no-open-probe)"
+  python3 - "$no_open_fixture/scripts/deploy-production.sh" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(path.read_text().replace('probe_release_a_runtime_barrier OPEN', 'probe_release_a_runtime_barrier REMOVED'))
+PY
+  expect_rejected_deploy_fixture "$no_open_fixture" 'missing OPEN probe'
+
+  late_open_fixture="$(make_deploy_fixture late-open-probe)"
+  python3 - "$late_open_fixture/scripts/deploy-production.sh" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+lines = path.read_text().splitlines(keepends=True)
+start = next(index for index, line in enumerate(lines) if 'if ! probe_release_a_runtime_barrier OPEN' in line)
+end = next(index for index in range(start, len(lines)) if lines[index] == 'fi\n') + 1
+block = lines[start:end]
+del lines[start:end]
+success = next(index for index, line in enumerate(lines) if 'write_record SUCCESS' in line)
+lines[success + 1:success + 1] = block
+path.write_text(''.join(lines))
+PY
+  expect_rejected_deploy_fixture "$late_open_fixture" 'OPEN probe after SUCCESS'
 fi
 
 printf 'PASS: rollback EXIT trap fail-closed contract and Release A deploy-order assertions executed\n'

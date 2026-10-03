@@ -5,6 +5,13 @@ SCRIPT_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 # shellcheck source=scripts/production-security-validate.sh
 source "$SCRIPT_DIR/production-security-validate.sh"
+readonly RELEASE_A_PORTABLE_STAT_LIBRARY="$SCRIPT_DIR/lib/recovery-point-portable-stat.sh"
+[[ -f "$RELEASE_A_PORTABLE_STAT_LIBRARY" && ! -L "$RELEASE_A_PORTABLE_STAT_LIBRARY" ]] || {
+  printf 'ERROR: trusted portable stat helper is missing or invalid\n' >&2
+  exit 1
+}
+# shellcheck source=scripts/lib/recovery-point-portable-stat.sh
+source "$RELEASE_A_PORTABLE_STAT_LIBRARY"
 
 usage() {
   printf 'Usage: %s <expected_current_sha> <previous_sha> <previous_api_digest> <previous_web_digest> <compatibility_receipt> <api_health_url> <api_readyz_url> <web_login_url>\n' "${0##*/}" >&2
@@ -40,9 +47,10 @@ ensure_rollback_barrier() {
   if [[ -e "$ROLLBACK_CONTROL_DIR" || -L "$ROLLBACK_CONTROL_DIR" ]]; then
     [[ -d "$ROLLBACK_CONTROL_DIR" && ! -L "$ROLLBACK_CONTROL_DIR" ]] || return 1
   else
-    install -d -m 700 "$ROLLBACK_CONTROL_DIR" || return 1
+    install -d -m 711 "$ROLLBACK_CONTROL_DIR" || return 1
   fi
-  chmod 700 "$ROLLBACK_CONTROL_DIR" || return 1
+  chmod 711 "$ROLLBACK_CONTROL_DIR" || return 1
+  [[ "$(recovery_point_portable_stat_mode "$ROLLBACK_CONTROL_DIR")" == 711 ]] || return 1
   if [[ -e "$ROLLBACK_SENTINEL" || -L "$ROLLBACK_SENTINEL" ]]; then
     [[ -f "$ROLLBACK_SENTINEL" && ! -L "$ROLLBACK_SENTINEL" ]] || return 1
   else
@@ -52,11 +60,35 @@ ensure_rollback_barrier() {
   fi
   [[ -f "$ROLLBACK_SENTINEL" && ! -L "$ROLLBACK_SENTINEL" ]] || return 1
   chmod 600 "$ROLLBACK_SENTINEL" || return 1
+  [[ "$(recovery_point_portable_stat_mode "$ROLLBACK_SENTINEL")" == 600 ]] || return 1
   ROLLBACK_BARRIER_ACTIVE=true
+}
+
+probe_rollback_runtime_barrier() {
+  local expected_state="$1"
+  docker exec --user 1001:1001 buildingos-api node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const fail = (message) => { console.error(message); process.exit(1); };
+const sentinel = process.env.RELEASE_A_WRITE_BARRIER_PATH;
+if (process.env.RELEASE_A_WRITE_BARRIER_ENABLED !== "true") fail("barrier is not enabled");
+if (process.getuid() !== 1001 || process.getgid() !== 1001) fail("unexpected API UID/GID");
+if (!sentinel) fail("barrier sentinel path is missing");
+const parent = path.dirname(sentinel);
+const parentStat = fs.lstatSync(parent);
+if (!parentStat.isDirectory()) fail("barrier parent is not a directory");
+fs.accessSync(parent, fs.constants.X_OK);
+let state;
+try { fs.lstatSync(sentinel); state = "CLOSED"; }
+catch (error) { if (error && error.code === "ENOENT") state = "OPEN"; else throw error; }
+if (state !== process.argv[1]) fail(`expected ${process.argv[1]}, observed ${state}`);
+' "$expected_state"
 }
 
 remove_release_a_barrier() {
   [[ "$ROLLBACK_BARRIER_ACTIVE" == true && -f "$ROLLBACK_SENTINEL" && ! -L "$ROLLBACK_SENTINEL" ]] || return 1
+  [[ "$(recovery_point_portable_stat_mode "$ROLLBACK_CONTROL_DIR")" == 711 ]] || return 1
+  [[ "$(recovery_point_portable_stat_mode "$ROLLBACK_SENTINEL")" == 600 ]] || return 1
   rm -f -- "$ROLLBACK_SENTINEL" || return 1
   [[ ! -e "$ROLLBACK_SENTINEL" && ! -L "$ROLLBACK_SENTINEL" ]] || return 1
 }
@@ -292,6 +324,16 @@ ROLLBACK_FROM_WEB_DIGEST="$(docker inspect --format '{{.Image}}' buildingos-web)
 [[ "$ROLLBACK_FROM_API_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$ROLLBACK_FROM_WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] \
   || fail 'Current rollback source images are not immutable'
 ensure_rollback_barrier || fail 'Unable to establish the Release A CLOSED write barrier'
+current_barrier_enabled="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' buildingos-api \
+  | awk -F= '$1 == "RELEASE_A_WRITE_BARRIER_ENABLED" { count++; value=substr($0, index($0, "=") + 1) } END { if (count > 1) exit 2; if (count == 1) print value }')" \
+  || fail 'Unable to inspect current API barrier configuration'
+if [[ "$current_barrier_enabled" == true ]]; then
+  probe_rollback_runtime_barrier CLOSED || fail 'Current API runtime could not prove the Release A barrier CLOSED'
+elif [[ -z "$current_barrier_enabled" || "$current_barrier_enabled" == false ]]; then
+  printf 'Rollback runtime barrier probe: NOT_APPLICABLE (current API is non-barrier-aware)\n'
+else
+  fail 'Current API has an invalid Release A barrier-enabled value'
+fi
 ROLLBACK_API_QUIESCED=true
 "${compose[@]}" stop --timeout 30 buildingos-api buildingos-web
 [[ "$(docker inspect --format '{{.State.Running}}' buildingos-api)" == false ]] \

@@ -590,9 +590,10 @@ ensure_release_a_barrier() {
   if [[ -e "$RELEASE_A_CONTROL_DIR" || -L "$RELEASE_A_CONTROL_DIR" ]]; then
     [[ -d "$RELEASE_A_CONTROL_DIR" && ! -L "$RELEASE_A_CONTROL_DIR" ]] || return 1
   else
-    install -d -m 700 "$RELEASE_A_CONTROL_DIR" || return 1
+    install -d -m 711 "$RELEASE_A_CONTROL_DIR" || return 1
   fi
-  chmod 700 "$RELEASE_A_CONTROL_DIR" || return 1
+  chmod 711 "$RELEASE_A_CONTROL_DIR" || return 1
+  [[ "$(recovery_point_portable_stat_mode "$RELEASE_A_CONTROL_DIR")" == 711 ]] || return 1
   if [[ -e "$RELEASE_A_SENTINEL" || -L "$RELEASE_A_SENTINEL" ]]; then
     [[ -f "$RELEASE_A_SENTINEL" && ! -L "$RELEASE_A_SENTINEL" ]] || return 1
   else
@@ -602,6 +603,7 @@ ensure_release_a_barrier() {
   fi
   [[ -f "$RELEASE_A_SENTINEL" && ! -L "$RELEASE_A_SENTINEL" ]] || return 1
   chmod 600 "$RELEASE_A_SENTINEL" || return 1
+  [[ "$(recovery_point_portable_stat_mode "$RELEASE_A_SENTINEL")" == 600 ]] || return 1
   RELEASE_A_BARRIER_ACTIVE=true
 }
 
@@ -622,8 +624,31 @@ fail_closed_release_a() {
 
 remove_release_a_barrier() {
   [[ "$RELEASE_A_BARRIER_ACTIVE" == true && -f "$RELEASE_A_SENTINEL" && ! -L "$RELEASE_A_SENTINEL" ]] || return 1
+  [[ "$(recovery_point_portable_stat_mode "$RELEASE_A_CONTROL_DIR")" == 711 ]] || return 1
+  [[ "$(recovery_point_portable_stat_mode "$RELEASE_A_SENTINEL")" == 600 ]] || return 1
   rm -f -- "$RELEASE_A_SENTINEL" || return 1
   [[ ! -e "$RELEASE_A_SENTINEL" && ! -L "$RELEASE_A_SENTINEL" ]] || return 1
+}
+
+probe_release_a_runtime_barrier() {
+  local expected_state="$1"
+  docker exec --user 1001:1001 buildingos-api node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const fail = (message) => { console.error(message); process.exit(1); };
+const sentinel = process.env.RELEASE_A_WRITE_BARRIER_PATH;
+if (process.env.RELEASE_A_WRITE_BARRIER_ENABLED !== "true") fail("barrier is not enabled");
+if (process.getuid() !== 1001 || process.getgid() !== 1001) fail("unexpected API UID/GID");
+if (!sentinel) fail("barrier sentinel path is missing");
+const parent = path.dirname(sentinel);
+const parentStat = fs.lstatSync(parent);
+if (!parentStat.isDirectory()) fail("barrier parent is not a directory");
+fs.accessSync(parent, fs.constants.X_OK);
+let state;
+try { fs.lstatSync(sentinel); state = "CLOSED"; }
+catch (error) { if (error && error.code === "ENOENT") state = "OPEN"; else throw error; }
+if (state !== process.argv[1]) fail(`expected ${process.argv[1]}, observed ${state}`);
+' "$expected_state"
 }
 
 recovery_point_capture_under_fence() {
@@ -856,12 +881,20 @@ PHASE='application-recreate'
 "${compose[@]}" up --detach --no-deps --force-recreate buildingos-api buildingos-web
 wait_for_container_health buildingos-api
 wait_for_container_health buildingos-web
+if ! probe_release_a_runtime_barrier CLOSED; then
+  fail_closed_release_a || true
+  fail 'API runtime could not prove the Release A barrier CLOSED'
+fi
 check_http api-health "$API_HEALTH_URL"
 check_http api-readyz "$API_READYZ_URL"
 check_http web-login "$WEB_LOGIN_URL"
 
 PHASE='barrier-release'
 remove_release_a_barrier || fail 'Unable to securely release the Release A write barrier'
+if ! probe_release_a_runtime_barrier OPEN; then
+  fail_closed_release_a || true
+  fail 'API runtime could not prove the Release A barrier OPEN'
+fi
 wait_for_container_health buildingos-api
 wait_for_container_health buildingos-web
 check_http api-health "$API_HEALTH_URL"

@@ -57,7 +57,8 @@ target_contract_line="$(line_number 'bash scripts/verify-production-target-contr
 deployment_step_line="$(line_number '- name: Run trusted production deployment' "$WORKFLOW")"
 ssh_line="$(line_number 'ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST"' "$WORKFLOW")"
 [[ -n "$manifest_gate_line" && -n "$target_contract_line" && -n "$deployment_step_line" && -n "$ssh_line" ]] || fail_test 'workflow manifest gate, target contract gate, or SSH step is missing'
-(( manifest_gate_line < target_contract_line && target_contract_line < deployment_step_line && deployment_step_line < ssh_line )) || fail_test 'manifest and target gates must run before the SSH deployment step'
+(( manifest_gate_line < target_contract_line && target_contract_line < deployment_step_line && deployment_step_line < ssh_line )) \
+  || fail_test 'manifest and target gates must run before the SSH deployment step'
 pass_test 'exact 107 manifest and target contract rejection occur before the SSH deployment step'
 
 release_a_manifest="$ROOT_DIR/scripts/manifests/production-migrations-81-to-107.tsv"
@@ -78,6 +79,67 @@ grep -F 'RELEASE_A_WRITE_BARRIER_PATH: /run/buildingos-release-control/CLOSED' "
 grep -F '/opt/pawtech/apps/buildingos/release-control:/run/buildingos-release-control:ro' "$PRODUCTION_COMPOSE" >/dev/null \
   || fail_test 'production API control directory is not mounted read-only'
 pass_test 'production API enables the barrier with the CLOSED sentinel and read-only control mount'
+
+assert_read_only_barrier_mount() {
+  local compose_file="$1"
+  grep -F '/opt/pawtech/apps/buildingos/release-control:/run/buildingos-release-control:ro' "$compose_file" >/dev/null
+}
+read_only_fixture="$TMP_ROOT/production-compose-readonly.yml"
+cp "$PRODUCTION_COMPOSE" "$read_only_fixture"
+python3 - "$read_only_fixture" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(path.read_text().replace(
+    '/opt/pawtech/apps/buildingos/release-control:/run/buildingos-release-control:ro',
+    '/opt/pawtech/apps/buildingos/release-control:/run/buildingos-release-control:rw',
+))
+PY
+if assert_read_only_barrier_mount "$read_only_fixture" >/dev/null 2>&1; then
+  fail_test 'writable production API barrier mount fixture was accepted'
+fi
+assert_read_only_barrier_mount "$PRODUCTION_COMPOSE" || fail_test 'production API control directory mount is not read-only at the exact runtime path'
+pass_test 'writable barrier mount negative fixture is rejected'
+
+assert_helper_barrier_modes() {
+  local helper="$1" label="$2"
+  grep -F 'install -d -m 711 ' "$helper" >/dev/null || return 1
+  grep -F 'chmod 711 ' "$helper" >/dev/null || return 1
+  grep -F 'recovery_point_portable_stat_mode "$' "$helper" | grep -F '== 711' >/dev/null || return 1
+  grep -F 'chmod 600 ' "$helper" >/dev/null || return 1
+  grep -F 'recovery_point_portable_stat_mode "$' "$helper" | grep -F '== 600' >/dev/null || return 1
+  if grep -E '(^|[^0-9])0?777([^0-9]|$)' "$helper" >/dev/null; then return 1; fi
+}
+assert_helper_barrier_modes "$ROOT_DIR/scripts/deploy-production.sh" deploy || fail_test 'deploy mode contract is missing'
+assert_helper_barrier_modes "$ROOT_DIR/scripts/rollback-production.sh" rollback || fail_test 'rollback mode contract is missing'
+assert_release_checks_modes_before_delete() {
+  local helper="$1" directory_var="$2" sentinel_var="$3" block
+  block="$(awk '/^remove_release_a_barrier\(\) \{/ { in_function=1 } in_function { print } in_function && /^}/ { exit }' "$helper")"
+  awk -v directory_var="$directory_var" -v sentinel_var="$sentinel_var" '
+    /recovery_point_portable_stat_mode/ && index($0, directory_var) { directory_check=NR }
+    /recovery_point_portable_stat_mode/ && index($0, sentinel_var) { sentinel_check=NR }
+    /rm -f --/ && index($0, sentinel_var) { delete_line=NR }
+    END { exit !(directory_check && sentinel_check && delete_line && directory_check < delete_line && sentinel_check < delete_line) }
+  ' <<< "$block"
+}
+assert_release_checks_modes_before_delete "$ROOT_DIR/scripts/deploy-production.sh" RELEASE_A_CONTROL_DIR RELEASE_A_SENTINEL \
+  || fail_test 'deploy does not prove both modes before releasing the sentinel'
+assert_release_checks_modes_before_delete "$ROOT_DIR/scripts/rollback-production.sh" ROLLBACK_CONTROL_DIR ROLLBACK_SENTINEL \
+  || fail_test 'rollback does not prove both modes before releasing the sentinel'
+mode_fixture="$TMP_ROOT/deploy-create-mode-0700.sh"
+cp "$ROOT_DIR/scripts/deploy-production.sh" "$mode_fixture"
+python3 - "$mode_fixture" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(path.read_text().replace('install -d -m 711 "$RELEASE_A_CONTROL_DIR"', 'install -d -m 700 "$RELEASE_A_CONTROL_DIR"'))
+PY
+if assert_helper_barrier_modes "$mode_fixture" negative-create-0700 >/dev/null 2>&1; then
+  fail_test '0700 directory creation mode negative fixture was accepted'
+fi
+pass_test 'deploy and rollback prove create/chmod directory 0711 and sentinel 0600; 0700 and 0777 are rejected'
 
 staging_api="$(awk '/^  buildingos-api:/{capture=1} capture{print} capture && /^  [^ ]/{if ($1 != "buildingos-api:") exit}' "$STAGING_COMPOSE")"
 release_staging_api="$(awk '/^  buildingos-api:/{capture=1} capture{print} capture && /^  [^ ]/{if ($1 != "buildingos-api:") exit}' "$RELEASE_STAGING_COMPOSE")"
@@ -124,4 +186,4 @@ for compose_file in "$LOCAL_COMPOSE" "$RELEASE_STAGING_COMPOSE"; do
 done
 pass_test 'local and release-staging bucket initializers enforce private anonymous access without public grants'
 
-printf '1..10\n'
+printf '1..12\n'

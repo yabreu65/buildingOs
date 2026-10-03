@@ -25,7 +25,7 @@ export class ReleaseAWriteBarrierService {
       if (!parentStat.isDirectory()) {
         return false;
       }
-      fs.accessSync(parentPath, fs.constants.R_OK | fs.constants.X_OK);
+      fs.accessSync(parentPath, fs.constants.X_OK);
 
       try {
         fs.lstatSync(sentinelPath);
