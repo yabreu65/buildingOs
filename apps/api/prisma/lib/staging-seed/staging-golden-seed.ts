@@ -18,6 +18,49 @@ export interface StagingGoldenEnvironment {
   readonly DATABASE_URL?: string;
 }
 
+export function isAcceptanceHashHandoffEnabled(environment: Readonly<Record<string, string | undefined>>): boolean {
+  return environment.FINANCE_ACCEPTANCE_SEED_HASH_HANDOFF === '1';
+}
+
+export interface AcceptanceSeedPasswordPreimage {
+  readonly id: string;
+  readonly email: string;
+  readonly passwordHash: string;
+}
+
+export interface AcceptanceSeedHandoff {
+  readonly passwordHashes: readonly AcceptanceSeedPasswordPreimage[];
+  readonly seedPasswordHash: string;
+}
+
+export function isValidAcceptanceSeedPasswordHash(value: unknown): value is string {
+  return typeof value === 'string' && /^\$2[aby]\$10\$[./A-Za-z0-9]{53}$/.test(value);
+}
+
+export function parseAcceptanceSeedHandoff(serialized: string): AcceptanceSeedHandoff {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new Error('Golden acceptance seed handoff is invalid or incomplete');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Golden acceptance seed handoff is invalid or incomplete');
+  const handoff = parsed as Record<string, unknown>;
+  if (Object.keys(handoff).length !== 2 || !Array.isArray(handoff.passwordHashes) || !isValidAcceptanceSeedPasswordHash(handoff.seedPasswordHash)) {
+    throw new Error('Golden acceptance seed handoff is invalid or incomplete');
+  }
+  const passwordHashes: AcceptanceSeedPasswordPreimage[] = [];
+  for (const entry of handoff.passwordHashes) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Golden acceptance seed handoff is invalid or incomplete');
+    const preimage = entry as Record<string, unknown>;
+    if (Object.keys(preimage).length !== 3 || typeof preimage.id !== 'string' || !preimage.id || typeof preimage.email !== 'string' || !preimage.email || typeof preimage.passwordHash !== 'string' || !preimage.passwordHash) {
+      throw new Error('Golden acceptance seed handoff is invalid or incomplete');
+    }
+    passwordHashes.push({ id: preimage.id, email: preimage.email, passwordHash: preimage.passwordHash });
+  }
+  return { passwordHashes, seedPasswordHash: handoff.seedPasswordHash };
+}
+
 export interface StagingGoldenTarget {
   readonly database: typeof STAGING_DATABASE;
   readonly host: typeof STAGING_DATABASE_HOST;
@@ -44,6 +87,10 @@ interface RecordDelegate {
     readonly where: Readonly<Record<string, unknown>>;
     readonly data: Readonly<Record<string, unknown>>;
   }): Promise<RecordValue>;
+  updateMany(args: {
+    readonly where: Readonly<Record<string, unknown>>;
+    readonly data: Readonly<Record<string, unknown>>;
+  }): Promise<{ readonly count: number }>;
 }
 
 export interface StagingGoldenWriteClient {
@@ -341,13 +388,34 @@ async function ensureRecord(delegate: RecordDelegate, id: string, data: Readonly
   }
 }
 
-async function ensureUser(delegate: RecordDelegate, spec: UserSpec, passwordHash: string): Promise<RecordValue> {
+interface GoldenPasswordPreimage {
+  readonly id: string;
+  readonly email: string;
+  readonly passwordHash: string;
+}
+
+async function ensureUser(
+  delegate: RecordDelegate,
+  spec: UserSpec,
+  passwordHash: string,
+  preimage?: GoldenPasswordPreimage,
+): Promise<RecordValue> {
   const data = { id: spec.id, email: spec.email, name: spec.name, passwordHash };
   const existing = await delegate.findFirst({ where: { email: spec.email } });
+  if (preimage && (preimage.id !== spec.id || preimage.email !== spec.email || !preimage.passwordHash)) {
+    throw new Error(`Golden user ${spec.email} pre-seed password baseline is incomplete`);
+  }
   if (existing) {
     assertCompatible(existing, { id: spec.id, email: spec.email, name: spec.name }, `user ${spec.email}`);
-    return delegate.update({ where: { id: existing.id }, data: { name: spec.name, passwordHash } });
+    if (!preimage) return delegate.update({ where: { id: existing.id }, data: { name: spec.name, passwordHash } });
+    const result = await delegate.updateMany({
+      where: { id: preimage.id, email: preimage.email, passwordHash: preimage.passwordHash },
+      data: { name: spec.name, passwordHash },
+    });
+    if (result.count !== 1) throw new Error(`Golden user ${spec.email} pre-seed password baseline changed`);
+    return { ...existing, name: spec.name, passwordHash };
   }
+  if (preimage) throw new Error(`Golden user ${spec.email} pre-seed password baseline changed: user is missing`);
   return delegate.create({ data });
 }
 
@@ -402,8 +470,15 @@ export async function applyStagingGoldenSeed(
   database: StagingGoldenWriteClient,
   passwordHash: string,
   dataset: readonly TenantSpec[] = STAGING_GOLDEN_DATASET,
+  passwordPreimages?: readonly GoldenPasswordPreimage[],
 ): Promise<void> {
   await database.$transaction(async (tx) => {
+    if (passwordPreimages) {
+      const expectedUsers = dataset.flatMap((tenant) => tenant.users);
+      if (passwordPreimages.length !== expectedUsers.length || expectedUsers.some((user) => !passwordPreimages.some((entry) => entry.id === user.id && entry.email === user.email && typeof entry.passwordHash === 'string' && entry.passwordHash.length > 0))) {
+        throw new Error('Golden pre-seed password baseline is incomplete or mismatched');
+      }
+    }
     const plans = new Map<string, RecordValue>();
     for (const planId of ['FREE', 'PRO'] as const) {
       const plan = await tx.billingPlan.findFirst({ where: { planId } });
@@ -486,7 +561,8 @@ export async function applyStagingGoldenSeed(
       const members = new Map<string, RecordValue>();
       const users = new Map<string, RecordValue>();
       for (const userSpec of tenantSpec.users) {
-        const user = await ensureUser(tx.user, userSpec, passwordHash);
+        const preimage = passwordPreimages?.find((entry) => entry.id === userSpec.id && entry.email === userSpec.email);
+        const user = await ensureUser(tx.user, userSpec, passwordHash, passwordPreimages ? preimage : undefined);
         users.set(userSpec.email, user);
         const membership = await ensureRecord(tx.membership, `stg-golden-membership-${tenantSpec.id}-${userSpec.id}`, { tenantId, userId: user.id }, `membership ${userSpec.email}`, false);
         memberships.set(userSpec.email, membership);

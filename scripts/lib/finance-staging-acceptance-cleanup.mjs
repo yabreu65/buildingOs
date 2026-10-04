@@ -9,11 +9,13 @@ export const GOLDEN_PASSWORD_USERS = Object.freeze([
 ]);
 export const ACCEPTANCE_MUTATION_INVENTORY = Object.freeze([
   { resource: "AUTH_LOGIN AuditLog", classification: "DURABLE_AUDIT_EVIDENCE", cleanup: "NONE" },
+  // Seed convergence establishes durable QA fixtures; they are not run-scoped residue.
+  { resource: "Golden staging seed fixtures", classification: "DURABLE_QA_BASELINE", scope: "stg-golden-tenant-auto", cleanup: "NONE" },
   { resource: "AuthSession", classification: "RUN_SCOPED_DB", cleanup: "exact session id and Golden QA user" },
   { resource: "Finance rows and Documents/Files", classification: "RUN_SCOPED_MUTABLE_DB", cleanup: "registered exact IDs with tenant/building ownership" },
   { resource: "S3 objects", classification: "RUN_SCOPED_STORAGE", cleanup: "exact bucket/key/version with File binding" },
   { resource: "ReceiptSequence", classification: "SHARED_MONOTONIC_FINANCE_STATE", cleanup: "restore only on exact compare-and-set; otherwise fail closed" },
-  { resource: "Golden user passwordHash", classification: "GOLDEN_BASELINE_MUTATION", cleanup: "exact pre-seed value restored and verified" },
+  { resource: "Golden user passwordHash", classification: "EPHEMERAL_GOLDEN_AUTH_MUTATION", cleanup: "exact pre-seed hash restored and verified" },
 ]);
 
 const resourceKinds = ["expense", "income", "charge", "payment", "document", "file"];
@@ -69,24 +71,63 @@ export async function captureGoldenPasswordHashes(userDelegate) {
 
 export async function captureAcceptanceBaseline(prisma, year = new Date().getFullYear()) {
   const passwordHashes = JSON.parse(await captureGoldenPasswordHashes(prisma.user));
-  const receiptSequence = await prisma.receiptSequence.findUnique({
-    where: { tenantId_year: { tenantId: ALLOWED_TENANT_ID, year } },
-  });
+  const captureSequence = async (sequenceYear) => {
+    const row = await prisma.receiptSequence.findUnique({
+      where: { tenantId_year: { tenantId: ALLOWED_TENANT_ID, year: sequenceYear } },
+    });
+    return { year: sequenceYear, row: row ? {
+      id: row.id,
+      lastNumber: row.lastNumber,
+      updatedAt: row.updatedAt.toISOString(),
+    } : null };
+  };
+  const currentYear = await captureSequence(year);
+  const nextYear = await captureSequence(year + 1);
   return JSON.stringify({
     passwordHashes,
+    receiptSequence: { tenantId: ALLOWED_TENANT_ID, year, row: currentYear.row, nextYear },
+  });
+}
+
+export function formatPrivateRecord(marker, payload) {
+  if (typeof marker !== "string" || !/^__FINANCE_ACCEPTANCE_BASELINE_[a-f0-9]{32}__$/.test(marker)) {
+    throw new Error("private baseline marker is invalid");
+  }
+  if (typeof payload !== "string" || /[\r\n]/.test(payload)) {
+    throw new Error("private baseline record must be single-line text");
+  }
+  return `${marker}:${payload}`;
+}
+
+export function projectAcceptanceSeedPasswordHashes(baseline) {
+  if (!Array.isArray(baseline?.passwordHashes)) throw new Error("acceptance seed password preimages are missing");
+  return JSON.stringify(baseline.passwordHashes);
+}
+
+export function projectAcceptanceChildBaseline(baseline) {
+  const receiptSequence = baseline?.receiptSequence;
+  if (!receiptSequence || receiptSequence.tenantId !== ALLOWED_TENANT_ID || !Number.isInteger(receiptSequence.year) || !receiptSequence.nextYear || receiptSequence.nextYear.year !== receiptSequence.year + 1) {
+    throw new Error("acceptance ReceiptSequence baseline is missing or invalid");
+  }
+  const projectRow = (row) => {
+    if (row === null) return null;
+    if (!row || typeof row.id !== "string" || !Number.isInteger(row.lastNumber) || typeof row.updatedAt !== "string") {
+      throw new Error("acceptance ReceiptSequence row preimage is invalid");
+    }
+    return { id: row.id, lastNumber: row.lastNumber, updatedAt: row.updatedAt };
+  };
+  return JSON.stringify({
     receiptSequence: {
-      tenantId: ALLOWED_TENANT_ID,
-      year,
-      row: receiptSequence ? {
-        id: receiptSequence.id,
-        lastNumber: receiptSequence.lastNumber,
-        updatedAt: receiptSequence.updatedAt.toISOString(),
-      } : null,
+      tenantId: receiptSequence.tenantId,
+      year: receiptSequence.year,
+      row: projectRow(receiptSequence.row),
+      nextYear: { year: receiptSequence.nextYear.year, row: projectRow(receiptSequence.nextYear.row) },
     },
   });
 }
 
-export async function restoreGoldenPasswordHashes(userDelegate, serializedSnapshot) {
+export async function restoreGoldenPasswordHashes(database, serializedSnapshot, seedPasswordHash) {
+  if (seedPasswordHash !== undefined && seedPasswordHash !== null && (typeof seedPasswordHash !== "string" || !seedPasswordHash)) throw new Error("exact Golden seed password hash is invalid");
   let snapshot;
   try { snapshot = JSON.parse(serializedSnapshot); } catch { throw new Error("Golden password snapshot is invalid"); }
   if (!Array.isArray(snapshot)) snapshot = snapshot?.passwordHashes;
@@ -99,21 +140,27 @@ export async function restoreGoldenPasswordHashes(userDelegate, serializedSnapsh
       throw new Error("Golden password snapshot identity is invalid");
     }
   }
-  const errors = [];
-  for (const entry of snapshot) {
-    try {
-      const result = await userDelegate.updateMany({
-        where: { id: entry.id, email: entry.email },
-        data: { passwordHash: entry.passwordHash },
-      });
-      if (result.count !== 1) throw new Error("Golden password baseline restore was not exact");
-      const restored = await userDelegate.findFirst({ where: { id: entry.id } });
-      if (restored?.email !== entry.email || restored.passwordHash !== entry.passwordHash) {
+  let changed = false;
+  await database.$transaction(async (transaction) => {
+    for (const entry of snapshot) {
+      const current = await transaction.user.findFirst({ where: { id: entry.id, email: entry.email } });
+      if (current?.passwordHash !== entry.passwordHash) {
+        const restored = seedPasswordHash && seedPasswordHash !== entry.passwordHash
+          ? await transaction.user.updateMany({
+            where: { id: entry.id, email: entry.email, passwordHash: seedPasswordHash },
+            data: { passwordHash: entry.passwordHash },
+          })
+          : { count: 0 };
+        if (restored.count !== 1) throw new Error("Golden password compare-and-set failed; concurrent hash preserved");
+        changed = true;
+      }
+      const verified = await transaction.user.findFirst({ where: { id: entry.id, email: entry.email } });
+      if (verified?.passwordHash !== entry.passwordHash) {
         throw new Error("Golden password baseline restore verification failed");
       }
-    } catch (error) { errors.push(error); }
-  }
-  if (errors.length) throw new AggregateError(errors, "Golden password baseline restore failed");
+    }
+  });
+  return changed ? "restored" : "unchanged";
 }
 
 export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tenantId = ALLOWED_TENANT_ID, buildingId = ALLOWED_BUILDING_ID, qaUserId, onPass = console.log }) {
@@ -225,6 +272,17 @@ export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tena
 
   async function restoreReceiptSequence() {
     const snapshot = baseline.receiptSequence;
+    const isPreimage = (preimage, year) => preimage?.year === year && (
+      preimage.row === null || (
+        preimage.row && typeof preimage.row.id === "string" && Number.isInteger(preimage.row.lastNumber) &&
+        typeof preimage.row.updatedAt === "string"
+      )
+    );
+    const captured = [
+      isPreimage(snapshot, snapshot.year) ? { year: snapshot.year, row: snapshot.row } : null,
+      isPreimage(snapshot.nextYear, snapshot.year + 1) ? snapshot.nextYear : null,
+    ].filter(Boolean);
+    if (captured.length !== 2) throw new Error("next-year receipt sequence preimage is missing");
     const receiptNumbers = [...new Set([...resources.payment.keys()].flatMap((id) => {
       const payment = paymentRowsById.get(id);
       return typeof payment?.receiptNumber === "string" ? [payment.receiptNumber] : [];
@@ -232,37 +290,52 @@ export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tena
     if (receiptNumbers.length > 1) throw new Error("acceptance run reserved more than one receipt number");
     const [receiptNumber] = receiptNumbers;
     const match = receiptNumber?.match(/^R-[A-Z0-9]+-(\d{4})-(\d{6})$/);
-    if (receiptNumber && (!match || Number(match[1]) !== snapshot.year)) {
-      throw new Error("acceptance receipt number does not match its private sequence baseline");
+    const receiptYear = match ? Number(match[1]) : null;
+    if (receiptNumber && (!match || !captured.some(({ year }) => year === receiptYear))) {
+      throw new Error("acceptance receipt number does not match a captured private sequence preimage");
     }
-    const original = snapshot.row;
-    if (!receiptNumber) return;
+    const assertUnchanged = async ({ year, row }, context = "without a receipt number") => {
+      const current = await prisma.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year } } });
+      if (row === null ? current !== null : !current || current.id !== row.id || current.lastNumber !== row.lastNumber || current.updatedAt.toISOString() !== row.updatedAt) {
+        throw new Error(`receipt sequence changed from its captured baseline ${context}`);
+      }
+    };
+    if (!receiptNumber) {
+      for (const preimage of captured) await assertUnchanged(preimage);
+      return "unchanged";
+    }
+    const preimage = captured.find(({ year }) => year === receiptYear);
+    if (!preimage) throw new Error("receipt year has no captured sequence preimage");
+    const { year, row: original } = preimage;
     const current = await prisma.receiptSequence.findUnique({
-      where: { tenantId_year: { tenantId, year: snapshot.year } },
+      where: { tenantId_year: { tenantId, year } },
     });
     const reservedNumber = Number(match[2]);
     if (original === null) {
       if (!current || reservedNumber !== 1 || current.lastNumber !== reservedNumber) {
         throw new Error("receipt sequence is no longer at the exact run-owned first number");
       }
-      const result = await prisma.receiptSequence.deleteMany({ where: { id: current.id, tenantId, year: snapshot.year, lastNumber: reservedNumber } });
+      const result = await prisma.receiptSequence.deleteMany({ where: { id: current.id, tenantId, year, lastNumber: reservedNumber } });
       if (result.count !== 1) throw new Error("run-created receipt sequence could not be removed exactly");
-      const remaining = await prisma.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year: snapshot.year } } });
+      const remaining = await prisma.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year } } });
       if (remaining) throw new Error("run-created receipt sequence remains after cleanup");
-      return;
+      for (const other of captured.filter(({ year: capturedYear }) => capturedYear !== year)) await assertUnchanged(other, "after receipt-year restoration");
+      return "restored";
     }
     if (!current || current.id !== original.id || reservedNumber !== original.lastNumber + 1 || current.lastNumber !== reservedNumber) {
       throw new Error("receipt sequence advanced concurrently; refusing to rewind shared numbering");
     }
     const result = await prisma.receiptSequence.updateMany({
-      where: { id: current.id, tenantId, year: snapshot.year, lastNumber: reservedNumber, updatedAt: current.updatedAt },
+      where: { id: current.id, tenantId, year, lastNumber: reservedNumber, updatedAt: current.updatedAt },
       data: { lastNumber: original.lastNumber, updatedAt: new Date(original.updatedAt) },
     });
     if (result.count !== 1) throw new Error("receipt sequence compare-and-set restoration failed");
-    const restored = await prisma.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year: snapshot.year } } });
+    const restored = await prisma.receiptSequence.findUnique({ where: { tenantId_year: { tenantId, year } } });
     if (!restored || restored.id !== original.id || restored.lastNumber !== original.lastNumber || restored.updatedAt.toISOString() !== original.updatedAt) {
       throw new Error("receipt sequence baseline restoration could not be verified");
     }
+    for (const other of captured.filter(({ year: capturedYear }) => capturedYear !== year)) await assertUnchanged(other, "after receipt-year restoration");
+    return "restored";
   }
 
   async function cleanup() {
@@ -395,10 +468,13 @@ export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tena
       const rows = await delegate.findMany({ where });
       if (rows.length) errors.push(new Error(`unregistered ${kind} residue remains for the acceptance run`));
     }
+    let receiptSequenceProof;
     if (errors.length === 0) {
-      try { await restoreReceiptSequence(); } catch (error) { errors.push(error); }
+      try { receiptSequenceProof = await restoreReceiptSequence(); } catch (error) { errors.push(error); }
     }
     if (errors.length) throw new AggregateError(errors, `acceptance cleanup failed for run ${runId}: ${errors.map((error) => error instanceof Error ? error.message : "unknown cleanup error").join("; ")}`);
+    onPass(receiptSequenceProof === "unchanged" ? "QA_RECEIPT_SEQUENCE_BASELINE_UNCHANGED_PASS" : "QA_RECEIPT_SEQUENCE_RESTORE_PASS");
+    onPass("QA_RECEIPT_SEQUENCE_BASELINE_PROOF_PASS");
     onPass("QA_RUN_MUTABLE_DB_CLEANUP_PASS");
     onPass("QA_RUN_STORAGE_CLEANUP_PASS");
     onPass("QA_AUTH_SESSION_CLEANUP_PASS");
