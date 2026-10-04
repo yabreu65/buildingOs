@@ -6,6 +6,7 @@ import {
   createAcceptanceCleanup,
   decodeRunSessionId,
   restoreGoldenPasswordHashes,
+  formatPrivateRecord,
 } from "./finance-staging-acceptance-cleanup.mjs";
 
 const tenantId = "stg-golden-tenant-auto";
@@ -916,7 +917,9 @@ async function main() {
 const mode = process.argv[2];
 if (mode === "capture-acceptance-baseline") {
   try {
-    process.stdout.write(await captureAcceptanceBaseline(prisma));
+    const fullBaseline = await captureAcceptanceBaseline(prisma);
+    const marker = process.env.FINANCE_ACCEPTANCE_BASELINE_MARKER;
+    process.stdout.write(`${formatPrivateRecord(marker, fullBaseline)}\n`);
   } catch (error) {
     console.error(`GOLDEN_ACCEPTANCE_BASELINE_CAPTURE_FAILED: ${error instanceof Error ? error.message : "unknown error"}`);
     process.exitCode = 1;
@@ -925,10 +928,11 @@ if (mode === "capture-acceptance-baseline") {
   }
 } else if (mode === "restore-golden-passwords") {
   try {
-    let serializedSnapshot = "";
-    for await (const chunk of process.stdin) serializedSnapshot += chunk;
-    await restoreGoldenPasswordHashes(prisma, serializedSnapshot, process.env.FINANCE_ACCEPTANCE_GOLDEN_PASSWORD_HASH);
-    console.log("GOLDEN_PASSWORD_HASH_RESTORE_PASS");
+    let serializedRestore = "";
+    for await (const chunk of process.stdin) serializedRestore += chunk;
+    const restore = JSON.parse(serializedRestore);
+    const result = await restoreGoldenPasswordHashes(prisma, JSON.stringify(restore.baseline), restore.seedPasswordHash);
+    console.log(result === "unchanged" ? "GOLDEN_PASSWORD_HASH_UNCHANGED_PASS" : "GOLDEN_PASSWORD_HASH_RESTORE_PASS");
   } catch (error) {
     console.error(`GOLDEN_PASSWORD_HASH_RESTORE_FAIL: ${error instanceof Error ? error.message : "unknown error"}`);
     process.exitCode = 1;

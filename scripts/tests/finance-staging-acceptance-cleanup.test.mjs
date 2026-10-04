@@ -9,6 +9,9 @@ import {
   ACCEPTANCE_MUTATION_INVENTORY,
   GOLDEN_PASSWORD_USERS,
   restoreGoldenPasswordHashes,
+  projectAcceptanceChildBaseline,
+  projectAcceptanceSeedPasswordHashes,
+  formatPrivateRecord,
 } from "../lib/finance-staging-acceptance-cleanup.mjs";
 
 const tenantId = "stg-golden-tenant-auto";
@@ -182,6 +185,23 @@ test("Golden password hashes are captured privately and atomically restored only
   for (const user of GOLDEN_PASSWORD_USERS) assert.equal((await users.findFirst({ where: { id: user.id } })).passwordHash, `old-${user.id}`);
 });
 
+test("Golden password restoration proves unchanged baseline when failed seed never handed off a hash", async () => {
+  const users = makeDelegate(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
+  const snapshot = JSON.stringify(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
+  const result = await restoreGoldenPasswordHashes({ user: users, $transaction: async (callback) => callback({ user: users }) }, snapshot, null);
+  assert.equal(result, "unchanged");
+  for (const user of GOLDEN_PASSWORD_USERS) assert.equal((await users.findFirst({ where: { id: user.id } })).passwordHash, `old-${user.id}`);
+});
+
+test("Golden password restoration without a seed hash fails closed on a changed concurrent hash", async () => {
+  const users = makeDelegate(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
+  const snapshot = JSON.stringify(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
+  users.values.get(GOLDEN_PASSWORD_USERS[1].id).passwordHash = "concurrent-hash";
+  const before = structuredClone([...users.values]);
+  await assert.rejects(restoreGoldenPasswordHashes({ user: users, $transaction: async (callback) => callback({ user: users }) }, snapshot, null), /concurrent hash preserved/);
+  assert.deepEqual([...users.values], before);
+});
+
 test("Golden password restoration preserves a concurrent hash mismatch and rolls back all users", async () => {
   const users = makeDelegate(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: "exact-seed-hash" })));
   const snapshot = JSON.stringify(GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `old-${user.id}` })));
@@ -264,6 +284,32 @@ test("default acceptance baseline uses the local calendar year across a UTC year
     if (originalTimezone === undefined) delete process.env.TZ;
     else process.env.TZ = originalTimezone;
   }
+});
+
+test("private baseline marker frames exactly one single-line payload", () => {
+  const marker = `__FINANCE_ACCEPTANCE_BASELINE_${"a".repeat(32)}__`;
+  assert.equal(formatPrivateRecord(marker, '{"receiptSequence":{}}'), `${marker}:{"receiptSequence":{}}`);
+  assert.throws(() => formatPrivateRecord(marker, ["first", "second"].join("\n")), /single-line/);
+  assert.throws(() => formatPrivateRecord("not-a-private-marker", "record"), /marker/);
+});
+
+test("seed handoff projection contains only captured password preimages", () => {
+  const passwordHashes = [{ id: "golden-user", email: "qa@example.invalid", passwordHash: "captured-preimage" }];
+  const baseline = { passwordHashes, receiptSequence: { secret: "must-not-reach-seed" } };
+  assert.equal(projectAcceptanceSeedPasswordHashes(baseline), JSON.stringify(passwordHashes));
+  assert.throws(() => projectAcceptanceSeedPasswordHashes({ receiptSequence: {} }), /password preimages/);
+});
+
+test("normal acceptance child baseline contains only the captured ReceiptSequence", () => {
+  const fullBaseline = {
+    passwordHashes: GOLDEN_PASSWORD_USERS.map((user) => ({ ...user, passwordHash: `private-${user.id}` })),
+    receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 7, updatedAt: "2026-01-01T00:00:00.000Z", privateExtra: "not-for-child" }, nextYear: { year: 2027, row: null }, privateExtra: "not-for-child" },
+  };
+  const projected = projectAcceptanceChildBaseline(fullBaseline);
+  assert.deepEqual(JSON.parse(projected), { receiptSequence: { tenantId, year: 2026, row: { id: "seq-1", lastNumber: 7, updatedAt: "2026-01-01T00:00:00.000Z" }, nextYear: { year: 2027, row: null } } });
+  assert.equal(projected.includes("passwordHashes"), false);
+  assert.equal(projected.includes("not-for-child"), false);
+  for (const user of GOLDEN_PASSWORD_USERS) assert.equal(projected.includes(`private-${user.id}`), false);
 });
 
 test("acceptance baseline serializes private Golden hashes and the exact ReceiptSequence preimage", async () => {

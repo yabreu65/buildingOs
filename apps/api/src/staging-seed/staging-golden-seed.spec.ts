@@ -1,7 +1,8 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import * as bcrypt from 'bcrypt';
 
-import { requiredPassword } from '../../prisma/seed-staging-golden';
+import { createAcceptanceSeedHashRecord, requiredPassword, runSeedMode, verifyAcceptanceSeedPasswordHash } from '../../prisma/seed-staging-golden';
 import {
   applyStagingGoldenSeed,
   assertConnectedStagingGoldenTarget,
@@ -9,6 +10,8 @@ import {
   STAGING_GOLDEN_DATASET,
   STAGING_GOLDEN_MARKER,
   StagingGoldenWriteClient,
+  isAcceptanceHashHandoffEnabled,
+  parseAcceptanceSeedHandoff,
 } from '../../prisma/lib/staging-seed/staging-golden-seed';
 
 interface StoredRecord {
@@ -37,6 +40,13 @@ class FakeDelegate {
     const updated = { ...record, ...data } as StoredRecord;
     this.records.splice(this.records.indexOf(record), 1, updated);
     return updated;
+  }
+
+  async updateMany({ where, data }: { readonly where: Readonly<Record<string, unknown>>; readonly data: Readonly<Record<string, unknown>> }): Promise<{ count: number }> {
+    const record = await this.findFirst({ where });
+    if (!record) return { count: 0 };
+    this.records.splice(this.records.indexOf(record), 1, { ...record, ...data } as StoredRecord);
+    return { count: 1 };
   }
 }
 
@@ -70,6 +80,12 @@ const baseEnvironment = {
 };
 
 describe('STG-DATA-01 Golden Dataset safety', () => {
+  it('keeps private marker handoff opt-in for acceptance-only seed runs', () => {
+    expect(isAcceptanceHashHandoffEnabled({})).toBe(false);
+    expect(isAcceptanceHashHandoffEnabled({ FINANCE_ACCEPTANCE_SEED_HASH_HANDOFF: '0' })).toBe(false);
+    expect(isAcceptanceHashHandoffEnabled({ FINANCE_ACCEPTANCE_SEED_HASH_HANDOFF: '1' })).toBe(true);
+  });
+
   it('rejects production', () => {
     expect(() => assertSafeStagingGoldenEnvironment({ ...baseEnvironment, APP_ENV: 'production' })).toThrow();
     expect(() => assertSafeStagingGoldenEnvironment({ ...baseEnvironment, NODE_ENV: 'production' })).toThrow();
@@ -91,6 +107,82 @@ describe('STG-DATA-01 Golden Dataset safety', () => {
     expect(() => requiredPassword({})).toThrow('STAGING_GOLDEN_QA_PASSWORD');
     expect(() => requiredPassword({ STAGING_GOLDEN_QA_PASSWORD: 'too-short' })).toThrow('STAGING_GOLDEN_QA_PASSWORD');
     expect(requiredPassword({ STAGING_GOLDEN_QA_PASSWORD: validPassword })).toBe(validPassword);
+  });
+
+  it('hash-only mode validates staging credentials and exits without invoking the mutating seed', async () => {
+    const password = 'acceptance-qa-password';
+    const marker = `__FINANCE_ACCEPTANCE_HASH_ONLY_${'a'.repeat(32)}__`;
+    const output: string[] = [];
+    let seedRuns = 0;
+
+    await runSeedMode(
+      'hash-acceptance-seed-password',
+      { ...baseEnvironment, STAGING_GOLDEN_QA_PASSWORD: password, FINANCE_ACCEPTANCE_HASH_ONLY_MARKER: marker },
+      (record) => output.push(record),
+      async () => { seedRuns += 1; },
+    );
+
+    expect(seedRuns).toBe(0);
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatch(new RegExp(`^${marker}:\\$2[aby]\\$10\\$[./A-Za-z0-9]{53}\\n$`));
+    const [, hash] = output[0]!.slice(0, -1).split(':');
+    await expect(verifyAcceptanceSeedPasswordHash(hash!, password)).resolves.toBeUndefined();
+    await expect(runSeedMode(
+      'hash-acceptance-seed-password',
+      { ...baseEnvironment, FINANCE_ACCEPTANCE_HASH_ONLY_MARKER: marker },
+      () => { throw new Error('must not output a hash'); },
+      async () => { seedRuns += 1; },
+    )).rejects.toThrow('STAGING_GOLDEN_QA_PASSWORD');
+    await expect(runSeedMode(
+      'hash-acceptance-seed-password',
+      { ...baseEnvironment, APP_ENV: 'production', STAGING_GOLDEN_QA_PASSWORD: password, FINANCE_ACCEPTANCE_HASH_ONLY_MARKER: marker },
+      () => { throw new Error('must not output a hash'); },
+      async () => { seedRuns += 1; },
+    )).rejects.toThrow('APP_ENV=staging');
+    await expect(runSeedMode(
+      'hash-acceptance-seed-password',
+      { ...baseEnvironment, STAGING_GOLDEN_QA_PASSWORD: password, FINANCE_ACCEPTANCE_HASH_ONLY_MARKER: 'invalid-marker' },
+      () => { throw new Error('must not output a hash'); },
+      async () => { seedRuns += 1; },
+    )).rejects.toThrow('marker is missing or invalid');
+    expect(seedRuns).toBe(0);
+    const ordinaryOutput: string[] = [];
+    await runSeedMode(undefined, baseEnvironment, (record) => ordinaryOutput.push(record), async () => { seedRuns += 1; });
+    expect(seedRuns).toBe(1);
+    expect(ordinaryOutput).toHaveLength(0);
+  });
+
+  it('parses acceptance seed handoff and rejects malformed or mismatched bcrypt postimages', async () => {
+    const password = 'acceptance-qa-password';
+    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHashes = STAGING_GOLDEN_DATASET.flatMap((tenant) => tenant.users.map((user) => ({
+      id: user.id,
+      email: user.email,
+      passwordHash: 'captured-preimage',
+    })));
+    const serialized = JSON.stringify({ passwordHashes, seedPasswordHash: passwordHash });
+
+    expect(parseAcceptanceSeedHandoff(serialized)).toEqual({ passwordHashes, seedPasswordHash: passwordHash });
+    await expect(verifyAcceptanceSeedPasswordHash(passwordHash, password)).resolves.toBeUndefined();
+    await expect(verifyAcceptanceSeedPasswordHash(passwordHash, 'different-password')).rejects.toThrow('does not match');
+    await expect(verifyAcceptanceSeedPasswordHash('not-a-bcrypt-hash', password)).rejects.toThrow('invalid');
+    for (const malformed of ['not-json', '{}', JSON.stringify({ passwordHashes: [], seedPasswordHash: 'not-a-bcrypt-hash' }), JSON.stringify({ passwordHashes: {}, seedPasswordHash: passwordHash })]) {
+      expect(() => parseAcceptanceSeedHandoff(malformed)).toThrow('invalid or incomplete');
+    }
+  });
+
+  it('validates the supplied acceptance hash against stdin and QA password before constructing Prisma', () => {
+    const source = readFileSync(join(__dirname, '../../prisma/seed-staging-golden.ts'), 'utf8');
+    const stdinRead = source.indexOf('for await (const chunk of process.stdin)');
+    const parsedHandoff = source.indexOf('parseAcceptanceSeedHandoff(serializedHandoff)');
+    const passwordVerification = source.indexOf('verifyAcceptanceSeedPasswordHash(handoff.seedPasswordHash, password)');
+    const prismaConstruction = source.indexOf('const prisma = new PrismaClient()');
+    expect(stdinRead).toBeGreaterThanOrEqual(0);
+    expect(parsedHandoff).toBeGreaterThan(stdinRead);
+    expect(passwordVerification).toBeGreaterThan(parsedHandoff);
+    expect(passwordVerification).toBeLessThan(prismaConstruction);
+    expect(source).toContain('passwordHash = handoff.seedPasswordHash');
+    expect(source).toContain('passwordHash = await bcrypt.hash(password, 10)');
   });
 
   it('keeps the Golden service profile-gated without requiring its password during Compose interpolation', () => {
@@ -189,6 +281,57 @@ describe('STG-DATA-01 Golden Dataset safety', () => {
     const database = createFakeDatabase();
     database.delegates.user.records.push({ id: 'unowned-user', email: 'owner.autogestionada@staging.buildingos.local', name: 'STG QA Autogestionada Owner', passwordHash: 'redacted' });
     await expect(applyStagingGoldenSeed(database.client, 'hashed-qa-password')).rejects.toThrow('incompatible');
+  });
+
+  it('replaces every captured Golden password hash through the acceptance-mode CAS path', async () => {
+    const database = createFakeDatabase();
+    const tenantUsers = STAGING_GOLDEN_DATASET.flatMap((tenant) => tenant.users);
+    const capturedHash = 'captured-password-hash';
+    const generatedSeedHash = 'generated-seed-password-hash';
+    database.delegates.user.records.push(...tenantUsers.map((user) => ({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      passwordHash: capturedHash,
+    })));
+    const baseline = tenantUsers.map((user) => ({ id: user.id, email: user.email, passwordHash: capturedHash }));
+
+    await applyStagingGoldenSeed(database.client, generatedSeedHash, STAGING_GOLDEN_DATASET, baseline);
+
+    expect(database.delegates.user.records.filter((record) => tenantUsers.some((user) => user.id === record.id))).toEqual(
+      tenantUsers.map((user) => expect.objectContaining({ id: user.id, email: user.email, passwordHash: generatedSeedHash })),
+    );
+  });
+
+  it('fails closed when an existing Golden password hash changed after baseline capture', async () => {
+    const database = createFakeDatabase();
+    const tenantUsers = STAGING_GOLDEN_DATASET[0].users;
+    const concurrentHash = 'concurrent-password-hash';
+    database.delegates.user.records.push(...tenantUsers.map((user, index) => ({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      passwordHash: index === 0 ? concurrentHash : 'captured-password-hash',
+    })));
+    const baseline = tenantUsers.map((user) => ({ id: user.id, email: user.email, passwordHash: 'captured-password-hash' }));
+
+    await expect(applyStagingGoldenSeed(database.client, 'generated-seed-hash', STAGING_GOLDEN_DATASET.slice(0, 1), baseline)).rejects.toThrow('pre-seed password baseline changed');
+    expect(database.delegates.user.records[0].passwordHash).toBe(concurrentHash);
+  });
+
+  it('does not create an existing Golden user missing after baseline capture', async () => {
+    const database = createFakeDatabase();
+    const tenantUsers = STAGING_GOLDEN_DATASET[0].users;
+    database.delegates.user.records.push(...tenantUsers.slice(1).map((user) => ({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      passwordHash: 'captured-password-hash',
+    })));
+    const baseline = tenantUsers.map((user) => ({ id: user.id, email: user.email, passwordHash: 'captured-password-hash' }));
+
+    await expect(applyStagingGoldenSeed(database.client, 'generated-seed-hash', STAGING_GOLDEN_DATASET.slice(0, 1), baseline)).rejects.toThrow('pre-seed password baseline changed');
+    expect(database.delegates.user.records).toHaveLength(3);
   });
 
   it('repairs a missing owned record without broad cleanup', async () => {

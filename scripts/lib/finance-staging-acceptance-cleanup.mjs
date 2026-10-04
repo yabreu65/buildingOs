@@ -89,8 +89,45 @@ export async function captureAcceptanceBaseline(prisma, year = new Date().getFul
   });
 }
 
+export function formatPrivateRecord(marker, payload) {
+  if (typeof marker !== "string" || !/^__FINANCE_ACCEPTANCE_BASELINE_[a-f0-9]{32}__$/.test(marker)) {
+    throw new Error("private baseline marker is invalid");
+  }
+  if (typeof payload !== "string" || /[\r\n]/.test(payload)) {
+    throw new Error("private baseline record must be single-line text");
+  }
+  return `${marker}:${payload}`;
+}
+
+export function projectAcceptanceSeedPasswordHashes(baseline) {
+  if (!Array.isArray(baseline?.passwordHashes)) throw new Error("acceptance seed password preimages are missing");
+  return JSON.stringify(baseline.passwordHashes);
+}
+
+export function projectAcceptanceChildBaseline(baseline) {
+  const receiptSequence = baseline?.receiptSequence;
+  if (!receiptSequence || receiptSequence.tenantId !== ALLOWED_TENANT_ID || !Number.isInteger(receiptSequence.year) || !receiptSequence.nextYear || receiptSequence.nextYear.year !== receiptSequence.year + 1) {
+    throw new Error("acceptance ReceiptSequence baseline is missing or invalid");
+  }
+  const projectRow = (row) => {
+    if (row === null) return null;
+    if (!row || typeof row.id !== "string" || !Number.isInteger(row.lastNumber) || typeof row.updatedAt !== "string") {
+      throw new Error("acceptance ReceiptSequence row preimage is invalid");
+    }
+    return { id: row.id, lastNumber: row.lastNumber, updatedAt: row.updatedAt };
+  };
+  return JSON.stringify({
+    receiptSequence: {
+      tenantId: receiptSequence.tenantId,
+      year: receiptSequence.year,
+      row: projectRow(receiptSequence.row),
+      nextYear: { year: receiptSequence.nextYear.year, row: projectRow(receiptSequence.nextYear.row) },
+    },
+  });
+}
+
 export async function restoreGoldenPasswordHashes(database, serializedSnapshot, seedPasswordHash) {
-  if (typeof seedPasswordHash !== "string" || !seedPasswordHash) throw new Error("exact Golden seed password hash is missing");
+  if (seedPasswordHash !== undefined && seedPasswordHash !== null && (typeof seedPasswordHash !== "string" || !seedPasswordHash)) throw new Error("exact Golden seed password hash is invalid");
   let snapshot;
   try { snapshot = JSON.parse(serializedSnapshot); } catch { throw new Error("Golden password snapshot is invalid"); }
   if (!Array.isArray(snapshot)) snapshot = snapshot?.passwordHashes;
@@ -103,19 +140,27 @@ export async function restoreGoldenPasswordHashes(database, serializedSnapshot, 
       throw new Error("Golden password snapshot identity is invalid");
     }
   }
+  let changed = false;
   await database.$transaction(async (transaction) => {
     for (const entry of snapshot) {
-      const result = await transaction.user.updateMany({
-        where: { id: entry.id, email: entry.email, passwordHash: seedPasswordHash },
-        data: { passwordHash: entry.passwordHash },
-      });
-      if (result.count !== 1) throw new Error("Golden password compare-and-set failed; concurrent hash preserved");
-      const restored = await transaction.user.findFirst({ where: { id: entry.id } });
-      if (restored?.email !== entry.email || restored.passwordHash !== entry.passwordHash) {
+      const current = await transaction.user.findFirst({ where: { id: entry.id, email: entry.email } });
+      if (current?.passwordHash !== entry.passwordHash) {
+        const restored = seedPasswordHash && seedPasswordHash !== entry.passwordHash
+          ? await transaction.user.updateMany({
+            where: { id: entry.id, email: entry.email, passwordHash: seedPasswordHash },
+            data: { passwordHash: entry.passwordHash },
+          })
+          : { count: 0 };
+        if (restored.count !== 1) throw new Error("Golden password compare-and-set failed; concurrent hash preserved");
+        changed = true;
+      }
+      const verified = await transaction.user.findFirst({ where: { id: entry.id, email: entry.email } });
+      if (verified?.passwordHash !== entry.passwordHash) {
         throw new Error("Golden password baseline restore verification failed");
       }
     }
   });
+  return changed ? "restored" : "unchanged";
 }
 
 export function createAcceptanceCleanup({ prisma, storage, runId, baseline, tenantId = ALLOWED_TENANT_ID, buildingId = ALLOWED_BUILDING_ID, qaUserId, onPass = console.log }) {
