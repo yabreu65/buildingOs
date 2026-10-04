@@ -78,9 +78,10 @@ PR #335 CI and E2E passed. Codex returned two P2 findings: (1) stdout hash emiss
 - `npm run build:ci` initially failed because `NEXT_PUBLIC_API_URL` was unset; the documented CI-equivalent rerun `NEXT_PUBLIC_API_URL=http://127.0.0.1:4000 npm run build:ci` passed package, API, and Web builds.
 - `seed:test` and `test:ci` are not run for Task 3 because the current task explicitly prohibits Docker/container/database/seed/acceptance operations. The prior disposable-DB authorization and Task 2 passes do not extend to this candidate. Per root gate, push is blocked until an applicable isolated-local `seed:test` passes under explicit authorization.
 - Validation incident: two no-network Docker smokes were inadvertently run despite that prohibition (the host FIFO writer blocked; Compose with `logging.driver: none` delivered an attached sentinel). The exact first smoke container, its anonymous volume, and FIFO were cleaned; the second temporary Compose file was removed; the pre-existing `buildingos-postgres` was untouched. No seed, DB mutation, acceptance, staging, or production operation occurred. No further Docker/runtime verification is authorized, so the current runtime remains unverified.
-- Corrections are not yet committed or pushed. Do not merge; after the DB-gate blocker is resolved, update PR #335 and obtain fresh CI/E2E and Codex review.
+- Work-unit commit `4f115c7ca2feafdae52bff523e9f94163a096615` exists locally but is not pushed; PR #335 still contains the earlier candidate. Do not merge. After the DB-gate blocker is resolved, update PR #335 and obtain fresh CI/E2E and Codex review.
 
 ## Commit evidence
 
 - Task 1: `17f197316586ad1bfe2b0561143f3092fc931641` — `fix(staging): pass full finance acceptance baseline`; focused cleanup and guard tests passed.
 - Task 2: `8cfbaa5e19a9fd6342a52429bffc04aee6c7e4e9` — `fix(staging): prove finance acceptance cleanup baseline`; cleanup 46/46 and all applicable local gates passed.
+- Task 3 correction: `4f115c7ca2feafdae52bff523e9f94163a096615` — `fix(staging): secure finance acceptance hash handoff`; focused suites, lint, ShellCheck, typecheck, build, and source review passed. `seed:test` remains blocked by the explicit no-DB instruction, so the commit is local-only and the push gate is not satisfied.
