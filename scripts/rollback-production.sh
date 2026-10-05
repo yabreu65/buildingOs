@@ -351,7 +351,10 @@ ROLLBACK_API_QUIESCED=true
 
 current_migration_count="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
 [[ "$current_migration_count" == "$migration_count" ]] || fail "Database migration count changed after compatibility review"
-validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$EXPECTED_CURRENT_SHA"
+PRODUCTION_DB107_MIGRATION_VERIFIER="$APP_DIR/scripts/verify-production-migration-manifest.sh" \
+  validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db \
+    "$PREVIOUS_SHA" \
+    "$EXPECTED_CURRENT_SHA"
 [[ "$ROLLBACK_COMPATIBILITY_BASIS" == 'DB107_PINNED_RUNTIME' ]] \
   || fail 'Rollback pair did not receive the exact DB107 compatibility PASS'
 

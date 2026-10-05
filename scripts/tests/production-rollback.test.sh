@@ -10,6 +10,7 @@ line_number() { awk -v pattern="$1" 'index($0, pattern) { print NR; exit }' "$2"
 fail_test() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 
 EXPECTED_CURRENT_SHA='890b4f67044bbc62328493da01d485822e0beafc'
+export PRODUCTION_DB107_MIGRATION_VERIFIER='/tmp/untrusted-verifier'
 probe_script="[[ \"\$IMAGE_TAG\" == \"\$1\" ]] && [[ \"\$BUILD_REVISION\" == \"\$1\" ]] && [[ \"\$2\" == config && \"\$3\" == --quiet ]]"
 unset IMAGE_TAG BUILD_REVISION
 BUILDINGOS_ROLLBACK_SELECTOR_LIBRARY_ONLY=true source scripts/rollback-production.sh
@@ -17,7 +18,9 @@ rollback_compose_config_preflight "$EXPECTED_CURRENT_SHA" bash -c "$probe_script
 
 rollback_stop_line="$(line_number 'stop --timeout 30 buildingos-api buildingos-web' "$ROLLBACK_SCRIPT")"
 rollback_state_line="$(line_number 'Current Web remained running during rollback compatibility validation' "$ROLLBACK_SCRIPT")"
-rollback_compat_pattern="validate_application_rollback_compatibility \"\$POSTGRES_CONTAINER\" buildingos_db"
+rollback_verifier_pin_pattern="PRODUCTION_DB107_MIGRATION_VERIFIER=\"\$APP_DIR/scripts/verify-production-migration-manifest.sh\" \\"
+rollback_verifier_pin_line="$(line_number "$rollback_verifier_pin_pattern" "$ROLLBACK_SCRIPT")"
+rollback_compat_pattern="validate_application_rollback_compatibility \"\$POSTGRES_CONTAINER\" buildingos_db \\"
 rollback_compat_line="$(line_number "$rollback_compat_pattern" "$ROLLBACK_SCRIPT")"
 rollback_barrier_open_line="$(line_number 'remove_release_a_barrier || fail' "$ROLLBACK_SCRIPT")"
 rollback_start_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$ROLLBACK_SCRIPT")"
@@ -38,6 +41,10 @@ rollback_fail_closed_barrier_line="$(line_number 'ensure_rollback_barrier || pri
 rollback_fail_closed_stop_line="$(line_number 'docker stop --timeout 30 buildingos-api buildingos-web' "$ROLLBACK_SCRIPT")"
 [[ -n "$rollback_stop_line" && -n "$rollback_state_line" && -n "$rollback_compat_line" ]] \
   || fail_test 'rollback must stop both services and verify both remain stopped before compatibility validation'
+[[ -n "$rollback_verifier_pin_line" ]] \
+  || fail_test 'rollback compatibility validation must pin the trusted DB107 migration verifier'
+(( rollback_verifier_pin_line + 1 == rollback_compat_line )) \
+  || fail_test 'trusted DB107 migration verifier must be scoped to the rollback compatibility invocation'
 [[ -n "$rollback_barrier_open_line" && -n "$rollback_start_line" && -n "$rollback_failed_record_line" ]] \
   || fail_test 'rollback must manage the barrier and record failed compatibility validation'
 (( rollback_stop_line < rollback_state_line && rollback_state_line < rollback_compat_line )) \
