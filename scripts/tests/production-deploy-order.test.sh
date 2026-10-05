@@ -34,6 +34,7 @@ recovery_capture_line="$(line_number "PHASE='recovery-point-capture'" "$DEPLOY_S
 recovery_gate_line="$(line_number "recovery_point_validate_capture || fail 'Recovery-point receipt did not prove every required component'" "$DEPLOY_SCRIPT")"
 backup_phase_line="$(line_number "PHASE='backup'" "$DEPLOY_SCRIPT")"
 checkout_phase_line="$(line_number "PHASE='checkout'" "$DEPLOY_SCRIPT")"
+target_checkout_line="$(line_number 'git switch --detach --quiet "$TARGET_SHA"' "$DEPLOY_SCRIPT")"
 build_phase_line="$(line_number "PHASE='build'" "$DEPLOY_SCRIPT")"
 baseline_phase_line="$(line_number "PHASE='migration-baseline'" "$DEPLOY_SCRIPT")"
 migrations_phase_line="$(line_number "PHASE='migrations'" "$DEPLOY_SCRIPT")"
@@ -42,6 +43,8 @@ early_state_line="$(line_number 'validate_database_migration_state "$TARGET_TREE
 later_state_line="$(line_number 'validate_database_migration_state ./scripts/verify-production-migration-manifest.sh' "$DEPLOY_SCRIPT")"
 migrate_line="$(line_number '--profile migrate run --rm --no-deps -T buildingos-migrate' "$DEPLOY_SCRIPT")"
 post_line="$(line_number 'verify-production-migration-manifest.sh verify-db post' "$DEPLOY_SCRIPT")"
+compatibility_binding='PRODUCTION_DB107_MIGRATION_VERIFIER="$APP_DIR/scripts/verify-production-migration-manifest.sh"'
+compatibility_binding_line="$(line_number "$compatibility_binding" "$DEPLOY_SCRIPT")"
 compatibility_line="$(line_number 'validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db' "$DEPLOY_SCRIPT")"
 receipt_line="$(line_number 'generate_rollback_compatibility_receipt' "$DEPLOY_SCRIPT")"
 recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$DEPLOY_SCRIPT")"
@@ -69,7 +72,7 @@ rollback_selector_publish_line="$(line_number 'if ! publish_current_successful_s
 [[ -n "$backup_phase_line" && -n "$checkout_phase_line" && -n "$build_phase_line" ]]
 [[ -n "$baseline_phase_line" && -n "$migrations_phase_line" && -n "$baseline_line" ]]
 [[ -n "$early_state_line" && -n "$later_state_line" && -n "$migrate_line" && -n "$post_line" ]]
-[[ -n "$compatibility_line" && -n "$receipt_line" && -n "$recreate_line" ]]
+[[ -n "$compatibility_binding_line" && -n "$compatibility_line" && -n "$receipt_line" && -n "$recreate_line" ]]
 [[ -n "$checkpoint_line" && -n "$recovery_preflight_line" && -n "$recovery_capture_line" && -n "$recovery_gate_line" ]]
 [[ -n "$rollback_compose_line" && -n "$rollback_quiesce_line" && -n "$rollback_migration_line" && -n "$rollback_compatibility_line" ]] \
   || { printf 'FAIL: rollback main quiesce invocation is missing after compose initialization\n' >&2; exit 1; }
@@ -126,7 +129,7 @@ generic_reject_continue_line="$(line_number_after "$generic_reject_line" 'contin
 (( checkout_phase_line < build_phase_line )) || { printf 'FAIL: checkout must precede build\n' >&2; exit 1; }
 (( build_phase_line < baseline_phase_line && baseline_phase_line < migrations_phase_line )) || { printf 'FAIL: build, migration baseline, and migrations are out of order\n' >&2; exit 1; }
 (( baseline_line < later_state_line && later_state_line < migrate_line && migrate_line < post_line )) || { printf 'FAIL: migration verification commands are out of order\n' >&2; exit 1; }
-(( post_line < compatibility_line && compatibility_line < receipt_line && receipt_line < recreate_line )) || { printf 'FAIL: post-migration compatibility, receipt, and recreate gates are out of order\n' >&2; exit 1; }
+(( checkout_phase_line < target_checkout_line && target_checkout_line < post_line && post_line < compatibility_binding_line && compatibility_binding_line < compatibility_line && compatibility_line < receipt_line && receipt_line < recreate_line )) || { printf 'FAIL: target checkout, post verification, explicit compatibility binding, receipt, and recreate gates are out of order\n' >&2; exit 1; }
 (( previous_sha_line < recovery_preflight_line && recovery_preflight_line < recovery_capture_line && recovery_capture_line < recovery_gate_line && recovery_gate_line < checkpoint_line && checkpoint_line < backup_phase_line )) || { printf 'FAIL: recovery point must be validated before deployment state changes\n' >&2; exit 1; }
 (( rollback_compose_line < rollback_quiesce_line && rollback_quiesce_line < rollback_migration_line && rollback_migration_line < rollback_compatibility_line )) || { printf 'FAIL: rollback must initialize compose, quiesce both services, then validate migrations/compatibility\n' >&2; exit 1; }
 rollback_recreate_line="$(line_number 'up --detach --no-deps --force-recreate buildingos-api buildingos-web' "$ROLLBACK_SCRIPT")"

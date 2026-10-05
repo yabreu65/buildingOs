@@ -142,12 +142,16 @@ run_contract_validation() {
 run_db107_compatibility() {
   local previous_sha="$1"
   local target_sha="$2"
+  local verifier_path="${3:-$ROOT_DIR/scripts/verify-production-migration-manifest.sh}"
   bash -c '
     source "$1"
     SCRIPT_DIR="$2"
+    expected_verifier="$3"
+    calls_file="$4"
     MIGRATION_TARGET_APPLIED=107
     bash() {
-      [[ "$1" == "$SCRIPT_DIR/verify-production-migration-manifest.sh" ]] || return 91
+      [[ "$1" == "$expected_verifier" ]] || return 91
+      printf "%s\\n" "$1" >> "$calls_file"
       if [[ "$2" == verify-files ]]; then
         printf "status=ok\\ttarget=107\\n"
       elif [[ "$2" == verify-db && "$3" == post ]]; then
@@ -164,8 +168,61 @@ run_db107_compatibility() {
         command env "$@"
       fi
     }
-    validate_application_rollback_compatibility mock-postgres buildingos_db "$3" "$4"
-  ' _ "$VALIDATOR" "$ROOT_DIR/scripts" "$previous_sha" "$target_sha"
+    validate_application_rollback_compatibility mock-postgres buildingos_db "$5" "$6"
+  ' _ "$VALIDATOR" "$ROOT_DIR/scripts" "$verifier_path" "$tmp_root/verifier-calls" "$previous_sha" "$target_sha"
+}
+
+run_streamed_control_db107_compatibility() {
+  local previous_sha="$1"
+  local target_sha="$2"
+  local control_dir="$tmp_root/streamed-control/scripts"
+  local verifier_path="$ROOT_DIR/scripts/verify-production-migration-manifest.sh"
+  mkdir -p "$control_dir"
+  cp "$VALIDATOR" "$control_dir/production-security-validate.sh"
+  [[ ! -e "$control_dir/verify-production-migration-manifest.sh" ]] \
+    || fail_test 'streamed control fixture unexpectedly contains the migration verifier'
+  [[ -f "$verifier_path" && ! -L "$verifier_path" ]] || fail_test 'target checkout verifier fixture must be a regular file'
+  bash -c '
+    source "$1"
+    SCRIPT_DIR="$2"
+    expected_verifier="$3"
+    calls_file="$4"
+    PRODUCTION_DB107_MIGRATION_VERIFIER="$expected_verifier"
+    MIGRATION_TARGET_APPLIED=107
+    bash() {
+      [[ "$1" == "$expected_verifier" && -f "$1" && ! -L "$1" ]] || return 91
+      printf "%s\\n" "$1" >> "$calls_file"
+      if [[ "$2" == verify-files ]]; then
+        printf "status=ok\\ttarget=107\\n"
+      elif [[ "$2" == verify-db && "$3" == post ]]; then
+        printf "status=ok\\tphase=post\\ttarget=107\\n"
+      else
+        return 92
+      fi
+    }
+    env() {
+      if [[ "$1" == POSTGRES_CONTAINER=* && "$2" == DATABASE_NAME=* ]]; then
+        shift 3
+        bash "$@"
+      else
+        command env "$@"
+      fi
+    }
+    validate_application_rollback_compatibility mock-postgres buildingos_db "$5" "$6"
+  ' _ "$control_dir/production-security-validate.sh" "$control_dir" "$verifier_path" "$tmp_root/streamed-verifier-calls" "$previous_sha" "$target_sha"
+}
+
+run_invalid_db107_verifier() {
+  local verifier_path="$1"
+  local script_dir="$2"
+  bash -c '
+    source "$1"
+    SCRIPT_DIR="$2"
+    PRODUCTION_DB107_MIGRATION_VERIFIER="$3"
+    MIGRATION_TARGET_APPLIED=107
+    bash() { return 90; }
+    validate_application_rollback_compatibility mock-postgres buildingos_db "$4" "$5"
+  ' _ "$VALIDATOR" "$script_dir" "$verifier_path" "$PREVIOUS_PRODUCTION_APP_SHA" "$(git -C "$ROOT_DIR" rev-parse HEAD)"
 }
 
 expect_output_contains() {
@@ -419,6 +476,30 @@ current_candidate_sha="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 expect_output_contains 'DB107 accepts only the pinned previous runtime after both manifest verifiers pass' \
   'basis=DB107_PINNED_RUNTIME' \
   run_db107_compatibility "$PREVIOUS_PRODUCTION_APP_SHA" "$current_candidate_sha"
+[[ "$(<"$tmp_root/verifier-calls")" == "$ROOT_DIR/scripts/verify-production-migration-manifest.sh"$'\n'"$ROOT_DIR/scripts/verify-production-migration-manifest.sh" ]] \
+  || fail_test 'default DB107 verifier path was not reused for both phases'
+pass 'DB107 default verifier path is reused for both phases'
+
+: > "$tmp_root/streamed-verifier-calls"
+expect_output_contains 'streamed control validator accepts the explicit target-checkout verifier' \
+  'basis=DB107_PINNED_RUNTIME' \
+  run_streamed_control_db107_compatibility "$PREVIOUS_PRODUCTION_APP_SHA" "$current_candidate_sha"
+[[ "$(<"$tmp_root/streamed-verifier-calls")" == "$ROOT_DIR/scripts/verify-production-migration-manifest.sh"$'\n'"$ROOT_DIR/scripts/verify-production-migration-manifest.sh" ]] \
+  || fail_test 'streamed control validation did not use one explicit verifier path for both phases'
+pass 'streamed control validation uses the identical explicit target-checkout verifier for both phases'
+
+missing_default_dir="$tmp_root/missing-default/scripts"
+mkdir -p "$missing_default_dir"
+expect_failure 'DB107 rejects a missing default verifier' \
+  run_invalid_db107_verifier '' "$missing_default_dir"
+symlink_verifier="$tmp_root/symlink-verifier.sh"
+ln -s "$ROOT_DIR/scripts/verify-production-migration-manifest.sh" "$symlink_verifier"
+expect_failure 'DB107 rejects an explicit symlink verifier' \
+  run_invalid_db107_verifier "$symlink_verifier" "$ROOT_DIR/scripts"
+non_regular_verifier="$tmp_root/non-regular-verifier"
+mkdir -p "$non_regular_verifier"
+expect_failure 'DB107 rejects a non-regular verifier path' \
+  run_invalid_db107_verifier "$non_regular_verifier" "$ROOT_DIR/scripts"
 expect_output_contains 'DB107 accepts the exact Release A candidate runtime after both manifest verifiers pass' \
   'basis=DB107_PINNED_RUNTIME' \
   run_db107_compatibility "$current_candidate_sha" "$current_candidate_sha"

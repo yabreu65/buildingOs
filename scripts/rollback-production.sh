@@ -225,6 +225,14 @@ bind_unique_prior_success_recovery_point() {
   return 1
 }
 
+rollback_compose_config_preflight() {
+  local expected_current_sha="$1"
+  shift
+  export IMAGE_TAG="$expected_current_sha"
+  export BUILD_REVISION="$expected_current_sha"
+  "$@" config --quiet
+}
+
 write_rollback_record() {
   local status="$1"
   local temporary_record
@@ -310,7 +318,7 @@ cd "$APP_DIR"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Production checkout is not clean"
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since compatibility review"
 compose=(docker compose --project-name buildingos --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
-"${compose[@]}" config --quiet
+rollback_compose_config_preflight "$EXPECTED_CURRENT_SHA" "${compose[@]}"
 
 PHASE='quiesce'
 ROLLBACK_API_WAS_RUNNING="$(docker inspect --format '{{.State.Running}}' buildingos-api)" \
