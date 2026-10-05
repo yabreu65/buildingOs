@@ -59,7 +59,8 @@ readonly PROJECT_NAME='buildingos'
 readonly ENV_FILE='/opt/pawtech/env/buildingos.env'
 readonly BACKUP_ROOT='/opt/pawtech/backups/tmp'
 readonly POSTGRES_CONTAINER='pawtech-postgres'
-readonly RECOVERY_POINT_OBJECT_BACKUP_ENV='/etc/buildingos/object-backup.env'
+readonly RECOVERY_POINT_RCLONE_CONFIG='/etc/buildingos/object-backup-rclone.conf'
+readonly RECOVERY_POINT_OBJECT_BACKUP_DESTINATION='backup:buildingos-production-backup'
 readonly RECOVERY_POINT_STATE_PARENT='/opt/pawtech/backups/recovery-points'
 readonly RECOVERY_POINT_DOCKER_NETWORK='pawtech_public'
 readonly DEPLOYMENTS_DIR="$PRODUCTION_ROOT/deployments"
@@ -102,8 +103,6 @@ RECOVERY_POINT_FENCE_EVIDENCE=''
 RECOVERY_POINT_SOURCE_BUCKET=''
 RECOVERY_POINT_POSTGRES_USER=''
 RECOVERY_POINT_RCLONE_BIN=''
-RECOVERY_POINT_RCLONE_CONFIG=''
-RECOVERY_POINT_OBJECT_BACKUP_DESTINATION=''
 RECOVERY_POINT_REMOTE_ROOT=''
 RECOVERY_POINT_ID=''
 RECORD_SUCCESS=false
@@ -443,21 +442,6 @@ check_ignored_sensitive_files() {
   done < <(git ls-files --others --ignored --exclude-standard)
 }
 
-recovery_point_read_selected_config() {
-  local file="$1" expected_name="$2" line name value count=0
-  [[ -f "$file" && ! -L "$file" && -r "$file" ]] || return 1
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ "$line" == "$expected_name"=* ]] || continue
-    name="${line%%=*}"
-    value="${line#*=}"
-    [[ "$name" == "$expected_name" && -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
-    count=$((count + 1))
-    [[ "$count" -eq 1 ]] || return 1
-    printf '%s' "$value"
-  done < "$file"
-  [[ "$count" -eq 1 ]]
-}
-
 recovery_point_read_container_env() {
   local container="$1" expected_name="$2" line name value count=0
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -708,9 +692,6 @@ recovery_point_preflight() {
   grep -Eq '^[[:space:]]*pawtech_public:[[:space:]]*$' "$COMPOSE_FILE" || return 1
   docker network inspect "$RECOVERY_POINT_DOCKER_NETWORK" >/dev/null
   recovery_point_postgres_snapshot_require_runtime "$POSTGRES_CONTAINER" || return 1
-  s3_fence_private_readable_file "$RECOVERY_POINT_OBJECT_BACKUP_ENV" || return 1
-  RECOVERY_POINT_RCLONE_CONFIG="$(recovery_point_read_selected_config "$RECOVERY_POINT_OBJECT_BACKUP_ENV" RCLONE_CONFIG)" || return 1
-  RECOVERY_POINT_OBJECT_BACKUP_DESTINATION="$(recovery_point_read_selected_config "$RECOVERY_POINT_OBJECT_BACKUP_ENV" OBJECT_BACKUP_DESTINATION)" || return 1
   [[ "$RECOVERY_POINT_RCLONE_CONFIG" =~ ^/[A-Za-z0-9._/-]+$ && "$RECOVERY_POINT_RCLONE_CONFIG" != *'..'* && "$RECOVERY_POINT_RCLONE_CONFIG" != *'//' ]] || return 1
   recovery_point_rclone_safe_remote_root "$RECOVERY_POINT_OBJECT_BACKUP_DESTINATION" || return 1
   RECOVERY_POINT_RCLONE_BIN="$(command -v rclone)" || return 1

@@ -10,7 +10,6 @@ AUDIT="$TEST_ROOT/audit"
 STATE="$TEST_ROOT/api-state"
 EVIDENCE="$TEST_ROOT/evidence"
 DIGEST='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-SHA='0123456789abcdef0123456789abcdef01234567'
 PASS=0
 FAIL=0
 
@@ -50,16 +49,50 @@ DOCKER
 chmod +x "$BIN/docker"
 
 preflight_line="$(line_number "PHASE='recovery-point-preflight'")"
+s3_fence_preflight_line="$(line_number "s3_fence_preflight \"\$PREVIOUS_API_DIGEST\"")"
 quiesce_line="$(line_number 's3_fence_run_recovery_point')"
 capture_line="$(line_number 'recovery_point_capture_under_fence')"
 gate_line="$(line_number "recovery_point_validate_capture || fail 'Recovery-point receipt did not prove every required component'")"
 checkpoint_line="$(line_number 'write_record IN_PROGRESS')"
 backup_line="$(line_number "PHASE='backup'")"
 migration_line="$(line_number "PHASE='migrations'")"
-[[ -n "$preflight_line" && -n "$quiesce_line" && -n "$capture_line" && -n "$gate_line" && -n "$checkpoint_line" && -n "$backup_line" && -n "$migration_line" ]] && pass 'recovery-point stages are explicit' || fail 'recovery-point stages are explicit'
-(( preflight_line < quiesce_line && quiesce_line < gate_line && gate_line < checkpoint_line && checkpoint_line < backup_line && backup_line < migration_line )) && pass 'preflight and fenced capture precede checkpoint backup and migrations' || fail 'preflight and fenced capture precede checkpoint backup and migrations'
+if [[ -n "$preflight_line" && -n "$s3_fence_preflight_line" && -n "$quiesce_line" && -n "$capture_line" && -n "$gate_line" && -n "$checkpoint_line" && -n "$backup_line" && -n "$migration_line" ]]; then
+  pass 'recovery-point stages are explicit'
+else
+  fail 'recovery-point stages are explicit'
+fi
+if (( s3_fence_preflight_line < quiesce_line && preflight_line < quiesce_line && quiesce_line < gate_line && gate_line < checkpoint_line && checkpoint_line < backup_line && backup_line < migration_line )); then
+  pass 'S3 fence preflight precedes quiescence and recovery precedes checkpoint backup and migrations'
+else
+  fail 'S3 fence preflight precedes quiescence and recovery precedes checkpoint backup and migrations'
+fi
+if grep -Fq '/etc/buildingos/object-backup.env' "$DEPLOY_SCRIPT" || grep -Fq 'RECOVERY_POINT_OBJECT_BACKUP_ENV' "$DEPLOY_SCRIPT"; then
+  fail 'root:root 0600 object-backup.env is not a deploy-time dependency'
+else
+  pass 'root:root 0600 object-backup.env is not a deploy-time dependency'
+fi
+if grep -Fq "readonly RECOVERY_POINT_RCLONE_CONFIG='/etc/buildingos/object-backup-rclone.conf'" "$DEPLOY_SCRIPT" && grep -Fq "readonly RECOVERY_POINT_OBJECT_BACKUP_DESTINATION='backup:buildingos-production-backup'" "$DEPLOY_SCRIPT"; then
+  pass 'trusted recovery config and destination are pinned to approved constants'
+else
+  fail 'trusted recovery config and destination are pinned to approved constants'
+fi
+if grep -Fq "recovery_point_rclone_require_download_check \"\$RECOVERY_POINT_RCLONE_BIN\" \"\$RECOVERY_POINT_RCLONE_CONFIG\"" "$DEPLOY_SCRIPT"; then
+  pass 'private rclone config remains a required capability'
+else
+  fail 'private rclone config remains a required capability'
+fi
+if grep -Fq "recovery_point_validate_backup_destination \"\$RECOVERY_POINT_SOURCE_BUCKET\" \"\$RECOVERY_POINT_OBJECT_BACKUP_DESTINATION\" \"\$RECOVERY_POINT_REMOTE_ROOT\"" "$DEPLOY_SCRIPT"; then
+  pass 'pinned destination still passes separation and namespace validation'
+else
+  fail 'pinned destination still passes separation and namespace validation'
+fi
+if grep -E '(^|[[:space:]])(sudo|root|chmod|chown)([[:space:]]|$)' "$DEPLOY_SCRIPT" | grep -E 'rclone|object-backup'; then
+  fail 'recovery config permissions are not changed with privilege or ownership commands'
+else
+  pass 'recovery config permissions are not changed with privilege or ownership commands'
+fi
 grep -F 'recovery_point_preflight || fail' "$DEPLOY_SCRIPT" >/dev/null && grep -F 'recovery_point_capture_under_fence recovery_point_resume_api' "$DEPLOY_SCRIPT" >/dev/null && pass 'capture is only the deny-fence callback' || fail 'capture is only the deny-fence callback'
-grep -F 'recovery_point_postgres_snapshot_require_runtime' "$DEPLOY_SCRIPT" >/dev/null && grep -F 'recovery_point_rclone_require_download_check' "$DEPLOY_SCRIPT" >/dev/null && grep -F 's3_fence_preflight "$PREVIOUS_API_DIGEST"' "$DEPLOY_SCRIPT" >/dev/null && pass 'all SDK rclone and PostgreSQL capabilities preflight before quiescence' || fail 'all SDK rclone and PostgreSQL capabilities preflight before quiescence'
+grep -F 'recovery_point_postgres_snapshot_require_runtime' "$DEPLOY_SCRIPT" >/dev/null && grep -F 'recovery_point_rclone_require_download_check' "$DEPLOY_SCRIPT" >/dev/null && grep -F "s3_fence_preflight \"\$PREVIOUS_API_DIGEST\"" "$DEPLOY_SCRIPT" >/dev/null && pass 'all SDK rclone and PostgreSQL capabilities preflight before quiescence' || fail 'all SDK rclone and PostgreSQL capabilities preflight before quiescence'
 grep -F 'recovery_point_read_container_env buildingos-api S3_BUCKET' "$DEPLOY_SCRIPT" >/dev/null && ! grep -Fq 'source "$ENV_FILE"' "$DEPLOY_SCRIPT" && pass 'source bucket is selected from runtime without sourcing API env' || fail 'source bucket is selected from runtime without sourcing API env'
 
 CONTAINER_ENV="$TEST_ROOT/container-env"
@@ -202,6 +235,7 @@ API_ENV="$TEST_ROOT/api.env"
         '
     }
     ok 'backup destination bucket is isolated and namespace stays under it' validate_destination_case source-bucket backup:recovery-bucket/buildingos backup:recovery-bucket/buildingos/recovery-points/sha/id
+    bad 'malformed backup destination syntax is rejected' validate_destination_case source-bucket backup:recovery//bucket/buildingos backup:recovery//bucket/buildingos/recovery-points/sha/id
     bad 'backup destination bucket cannot equal source bucket' validate_destination_case source-bucket backup:source-bucket/buildingos backup:source-bucket/buildingos/recovery-points/sha/id
     bad 'recovery namespace cannot escape dedicated backup destination' validate_destination_case source-bucket backup:recovery-bucket/buildingos backup:other-bucket/recovery-points/sha/id
 
