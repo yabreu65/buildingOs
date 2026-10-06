@@ -9,7 +9,7 @@ readonly PRIVILEGED_LAUNCHER="$ROOT_DIR/infra/production/launchers/buildingos-pr
 readonly SUDOERS_POLICY="$ROOT_DIR/infra/production/sudoers/buildingos-production-backup-preflight"
 readonly PRIVCTL_LAUNCHER="$ROOT_DIR/infra/production/launchers/buildingos-privctl"
 readonly PRIVCTL_SUDOERS="$ROOT_DIR/infra/production/sudoers/buildingos-privctl"
-readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-backup-preflight.XXXXXX")"
+readonly TEST_ROOT="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/buildingos-backup-preflight.XXXXXX")" && pwd -P)"
 readonly BIN_DIR="$TEST_ROOT/bin"
 readonly ENV_FILE="$TEST_ROOT/object-backup.env"
 readonly APP_DIR="$TEST_ROOT/app"
@@ -17,7 +17,17 @@ readonly RCLONE_CONFIG_FILE="$TEST_ROOT/object-backup-rclone.conf"
 readonly RECEIPT_FILE="$TEST_ROOT/object-backup-receipt.json"
 readonly ACTIVATION_STATE_DIR="$TEST_ROOT/buildingos-backup-preflight-state"
 readonly ACTIVATION_MARKER_FILE="$ACTIVATION_STATE_DIR/object-backup-activation.state"
+readonly DEPLOYMENTS_DIR="$TEST_ROOT/deployments"
+readonly SUCCESS_SELECTOR="$DEPLOYMENTS_DIR/current-successful-deployment.v1"
+readonly SUCCESS_RECORD="$DEPLOYMENTS_DIR/rollback-record.txt"
 readonly GIT_LOG="$TEST_ROOT/git.log"
+readonly NORMAL_SHA='2ac603be8018ffc3df67fb4e84149aea4f780cea'
+readonly RECOVERED_CHECKOUT_SHA='890b4f67044bbc62328493da01d485822e0beafc'
+readonly RECOVERED_RUNTIME_SHA='db82d3d37fc6184a6d4063709b9a15b923371695'
+API_IMAGE_DIGEST="sha256:$(printf '%064d' 1)"
+readonly API_IMAGE_DIGEST
+WEB_IMAGE_DIGEST="sha256:$(printf '%064d' 2)"
+readonly WEB_IMAGE_DIGEST
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 PASS_COUNT=0
@@ -38,7 +48,7 @@ assert_absent() {
 assert_success() { local name="$1"; [[ "$RUN_RC" -eq 0 ]] && pass "$name" || fail_test "$name"; }
 assert_failure() { local name="$1"; [[ "$RUN_RC" -ne 0 ]] && pass "$name" || fail_test "$name"; }
 
-mkdir -p "$BIN_DIR" "$APP_DIR/.git" "$ACTIVATION_STATE_DIR"
+mkdir -p "$BIN_DIR" "$APP_DIR/.git" "$ACTIVATION_STATE_DIR" "$DEPLOYMENTS_DIR"
 chmod 0755 "$ACTIVATION_STATE_DIR"
 printf '%s\n' '**/.env' > "$APP_DIR/.dockerignore"
 for command_name in awk bash cmp date; do
@@ -74,6 +84,16 @@ case "$path" in
     owner="${MOCK_RECEIPT_OWNER:-yoryi}"
     group="${MOCK_RECEIPT_GROUP:-yoryi}"
     mode="${MOCK_RECEIPT_MODE:-600}"
+    ;;
+  *current-successful-deployment.v1|*rollback-record.txt)
+    owner="${MOCK_PROOF_OWNER:-root}"
+    group="${MOCK_PROOF_GROUP:-root}"
+    mode="${MOCK_PROOF_MODE:-600}"
+    ;;
+  *deployments)
+    owner="${MOCK_DEPLOYMENTS_OWNER:-root}"
+    group="${MOCK_DEPLOYMENTS_GROUP:-root}"
+    mode="${MOCK_DEPLOYMENTS_MODE:-700}"
     ;;
   *buildingos-backup-preflight.*)
     owner="${MOCK_RECEIPT_DIR_OWNER:-yoryi}"
@@ -288,11 +308,36 @@ write_receipt() {
 }
 
 run_preflight() {
-  local runtime_sha="${1-2ac603be8018ffc3df67fb4e84149aea4f780cea}"
+  local runtime_sha="${1-$NORMAL_SHA}"
+  run_preflight_with_identities "$NORMAL_SHA" "$runtime_sha"
+}
+
+run_preflight_with_identities() {
+  local expected_checkout_sha="${1-$NORMAL_SHA}" expected_runtime_sha="${2-$NORMAL_SHA}"
+  run_preflight_with_args "$expected_checkout_sha" "$expected_runtime_sha"
+}
+
+run_preflight_with_args() {
   set +e
-  RUN_OUTPUT="$(PATH="$BIN_DIR" MOCK_GIT_LOG="$GIT_LOG" BUILDINGOS_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY PREFLIGHT_APP_DIR="$APP_DIR" PREFLIGHT_ENV_FILE="$ENV_FILE" PREFLIGHT_RCLONE_CONFIG_FILE="$RCLONE_CONFIG_FILE" PREFLIGHT_RECEIPT_FILE="$RECEIPT_FILE" PREFLIGHT_ACTIVATION_MARKER_FILE="$ACTIVATION_MARKER_FILE" /bin/bash "$PREFLIGHT" 2>&1 "$runtime_sha")"
+  RUN_OUTPUT="$(PATH="$BIN_DIR" MOCK_GIT_LOG="$GIT_LOG" BUILDINGOS_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY PREFLIGHT_APP_DIR="$APP_DIR" PREFLIGHT_ENV_FILE="$ENV_FILE" PREFLIGHT_RCLONE_CONFIG_FILE="$RCLONE_CONFIG_FILE" PREFLIGHT_RECEIPT_FILE="$RECEIPT_FILE" PREFLIGHT_ACTIVATION_MARKER_FILE="$ACTIVATION_MARKER_FILE" PREFLIGHT_DEPLOYMENTS_DIR="$DEPLOYMENTS_DIR" /bin/bash "$PREFLIGHT" "$@" 2>&1)"
   RUN_RC=$?
   set -e
+}
+
+write_success_proof() {
+  local from_sha="${1-$RECOVERED_CHECKOUT_SHA}"
+  local target_sha="${2-$RECOVERED_RUNTIME_SHA}"
+  local api_digest="${3-$API_IMAGE_DIGEST}"
+  local web_digest="${4-$WEB_IMAGE_DIGEST}"
+  local migration_count="${5-107}"
+  local selector_target_sha="${6-$target_sha}"
+  local status="${7-SUCCESS}"
+  printf 'status=%s\nfrom_sha=%s\ntarget_sha=%s\nmigration_count=%s\napi_digest=%s\nweb_digest=%s\n' \
+    "$status" "$from_sha" "$target_sha" "$migration_count" "$api_digest" "$web_digest" > "$SUCCESS_RECORD"
+  chmod 0600 "$SUCCESS_RECORD"
+  printf 'format=buildingos-current-successful-deployment/v1\nrecord_path=%s\ntarget_sha=%s\n' \
+    "$SUCCESS_RECORD" "$selector_target_sha" > "$SUCCESS_SELECTOR"
+  chmod 0600 "$SUCCESS_SELECTOR"
 }
 
 write_env
@@ -348,6 +393,72 @@ assert_contains 'PostgreSQL timer future trigger is accepted' 'POSTGRES_BACKUP_T
 assert_contains 'PostgreSQL service inactive is accepted' 'POSTGRES_BACKUP_SERVICE_STATE=inactive' "$RUN_OUTPUT"
 assert_contains 'runtime checkout is clean' 'PRODUCTION_CHECKOUT_STATUS=CLEAN' "$RUN_OUTPUT"
 assert_contains 'runtime identity is consistent' 'RUNTIME_IDENTITY=CONSISTENT' "$RUN_OUTPUT"
+BASELINE_RUN_OUTPUT="$RUN_OUTPUT"
+BASELINE_RUN_RC="$RUN_RC"
+run_preflight_with_identities "$NORMAL_SHA" "$NORMAL_SHA"
+assert_success 'normal two-SHA identity passes'
+assert_contains 'normal output identifies the production checkout SHA' "PRODUCTION_CHECKOUT_SHA=$NORMAL_SHA" "$RUN_OUTPUT"
+assert_contains 'normal two-SHA identity is explicitly consistent' 'RUNTIME_IDENTITY=CONSISTENT' "$RUN_OUTPUT"
+write_success_proof
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+if [[ "$RUN_RC" -ne 0 ]]; then
+  printf 'official recovered checkout/runtime split failed: RUN_RC=%s\nRUN_OUTPUT:\n%s\n' "$RUN_RC" "$RUN_OUTPUT" >&2
+fi
+assert_success 'official recovered checkout/runtime split passes with selector and SUCCESS rollback proof'
+assert_contains 'recovered split output identifies the production checkout SHA' "PRODUCTION_CHECKOUT_SHA=$RECOVERED_CHECKOUT_SHA" "$RUN_OUTPUT"
+assert_absent 'recovered checkout SHA is not mislabeled as production runtime SHA' "PRODUCTION_RUNTIME_SHA=$RECOVERED_CHECKOUT_SHA" "$RUN_OUTPUT"
+assert_contains 'proven split is explicitly classified' 'RUNTIME_IDENTITY=RECOVERED_SPLIT' "$RUN_OUTPUT"
+rm "$SUCCESS_SELECTOR"
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'split with matching API/Web runtime but no official selector proof is rejected'
+write_success_proof
+write_success_proof 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$RECOVERED_RUNTIME_SHA"
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'split proof with wrong from_sha is rejected'
+write_success_proof "$RECOVERED_CHECKOUT_SHA" 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$API_IMAGE_DIGEST" "$WEB_IMAGE_DIGEST" 107 "$RECOVERED_RUNTIME_SHA"
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'rollback record with wrong target_sha is rejected while selector matches runtime'
+write_success_proof "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA" "$API_IMAGE_DIGEST" "$WEB_IMAGE_DIGEST" 107 "$RECOVERED_RUNTIME_SHA" 'FAIL'
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'rollback record without SUCCESS status is rejected'
+write_success_proof "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA" "$API_IMAGE_DIGEST" "$WEB_IMAGE_DIGEST" 107 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'selector with target_sha different from rollback record is rejected'
+write_success_proof
+mv "$SUCCESS_RECORD" "$SUCCESS_RECORD.saved"
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'selector referencing a missing rollback record is rejected'
+mv "$SUCCESS_RECORD.saved" "$SUCCESS_RECORD"
+write_success_proof "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA" 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$WEB_IMAGE_DIGEST"
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'split proof with wrong API digest is rejected'
+write_success_proof "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA" "$API_IMAGE_DIGEST" 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'split proof with wrong Web digest is rejected'
+write_success_proof "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA" "$API_IMAGE_DIGEST" "$WEB_IMAGE_DIGEST" 106
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'split proof with wrong migration count is rejected'
+write_success_proof
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$NORMAL_SHA" \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'proven split still rejects API/Web revision mismatch'
+MOCK_CHECKOUT_SHA="$RECOVERED_CHECKOUT_SHA" MOCK_API_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_WEB_REVISION="$RECOVERED_RUNTIME_SHA" MOCK_DIRTY=YES \
+  run_preflight_with_identities "$RECOVERED_CHECKOUT_SHA" "$RECOVERED_RUNTIME_SHA"
+assert_failure 'proven split does not bypass dirty checkout rejection'
+unset MOCK_CHECKOUT_SHA MOCK_API_REVISION MOCK_WEB_REVISION MOCK_DIRTY
+RUN_OUTPUT="$BASELINE_RUN_OUTPUT"
+RUN_RC="$BASELINE_RUN_RC"
+write_success_proof
 assert_contains 'every Git command pins the exact checkout safe.directory' "-c safe.directory=$APP_DIR" "$(< "$GIT_LOG")"
 assert_absent 'Git commands never trust wildcard safe.directory' 'safe.directory=*' "$(< "$GIT_LOG")"
 assert_absent 'Git commands never mutate global configuration' 'config --global' "$(< "$GIT_LOG")"
@@ -721,12 +832,14 @@ assert_contains 'launcher closes caller stdin' '</dev/null' "$launcher_text"
 assert_contains 'launcher pins installed control directory' "CONTROL_DIR='/usr/local/libexec/buildingos-backup-preflight'" "$launcher_text"
 assert_contains 'launcher requires the generated manifest' "MANIFEST='/usr/local/libexec/buildingos-backup-preflight/manifest'" "$launcher_text"
 assert_contains 'launcher verifies installed release hashes through the manifest' 'assert_manifest_matches' "$launcher_text"
-assert_contains 'launcher requires external tooling source SHA' 'EXPECTED_TOOLING_SOURCE_SHA="$1"' "$launcher_text"
-assert_contains 'launcher passes only runtime SHA to the protected control' '"$PREFLIGHT_SCRIPT" "$EXPECTED_RUNTIME_SHA"' "$launcher_text"
+assert_contains 'launcher requires external tooling source SHA first' 'EXPECTED_TOOLING_SOURCE_SHA="$1"' "$launcher_text"
+assert_contains 'launcher accepts expected checkout SHA second' 'EXPECTED_CHECKOUT_SHA="$2"' "$launcher_text"
+assert_contains 'launcher accepts expected runtime SHA third' 'EXPECTED_RUNTIME_SHA="$3"' "$launcher_text"
+assert_contains 'launcher forwards expected checkout then runtime to protected control' '"$PREFLIGHT_SCRIPT" "$EXPECTED_CHECKOUT_SHA" "$EXPECTED_RUNTIME_SHA"' "$launcher_text"
 assert_contains 'launcher includes the privctl launcher in its manifest payload' 'privctl_launcher_path=/usr/local/sbin/buildingos-privctl' "$launcher_text"
 assert_contains 'launcher includes the privctl sudoers policy in its manifest payload' 'privctl_sudoers_path=/etc/sudoers.d/buildingos-privctl' "$launcher_text"
-assert_contains 'launcher checks privctl launcher metadata' 'assert_metadata "$PRIVCTL_LAUNCHER" 755' "$launcher_text"
-assert_contains 'launcher checks privctl sudoers metadata' 'assert_metadata "$PRIVCTL_SUDOERS" 440' "$launcher_text"
+assert_contains 'launcher checks privctl launcher metadata' "assert_metadata \"\$PRIVCTL_LAUNCHER\" 755" "$launcher_text"
+assert_contains 'launcher checks privctl sudoers metadata' "assert_metadata \"\$PRIVCTL_SUDOERS\" 440" "$launcher_text"
 assert_absent 'launcher does not create a temporary manifest during validation' 'mktemp' "$launcher_text"
 assert_absent 'launcher does not remove protected manifest validation files' 'rm -f' "$launcher_text"
 assert_contains 'launcher clears BASH_ENV' 'unset BASH_ENV ENV' "$launcher_text"
@@ -737,9 +850,9 @@ assert_absent 'launcher does not evaluate caller input' 'eval ' "$launcher_text"
 workflow_text="$(< "$WORKFLOW")"
 assert_contains 'workflow is manually dispatched' 'workflow_dispatch:' "$workflow_text"
 assert_contains 'workflow names the tooling source input separately' 'tooling_source_sha:' "$workflow_text"
-assert_contains 'workflow names the runtime input separately' 'runtime_sha:' "$workflow_text"
-assert_contains 'workflow forwards the expected tooling source SHA' 'quoted_tooling' "$workflow_text"
-assert_contains 'workflow forwards the expected runtime SHA' 'quoted_runtime' "$workflow_text"
+assert_contains 'workflow names the expected checkout input separately' 'expected_checkout_sha:' "$workflow_text"
+assert_contains 'workflow names the expected runtime input separately' 'expected_runtime_sha:' "$workflow_text"
+assert_contains 'workflow forwards tooling, checkout, and runtime SHA values in order' "sudo -n /usr/local/sbin/buildingos-production-backup-preflight \$quoted_tooling \$quoted_checkout \$quoted_runtime" "$workflow_text"
 assert_absent 'workflow does not use the retired candidate variable' 'CANDIDATE_SHA' "$workflow_text"
 assert_absent 'workflow has no push trigger' 'push:' "$workflow_text"
 assert_absent 'workflow has no scheduled trigger' 'schedule:' "$workflow_text"
