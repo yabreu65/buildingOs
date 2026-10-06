@@ -7,8 +7,12 @@ on:
         description: SHA of the tooling release installed on production
         required: true
         type: string
-      runtime_sha:
-        description: Certified runtime SHA under preflight review
+      expected_checkout_sha:
+        description: Expected clean production checkout SHA
+        required: true
+        type: string
+      expected_runtime_sha:
+        description: Expected API and Web runtime SHA under preflight review
         required: true
         type: string
 
@@ -27,7 +31,8 @@ jobs:
     environment: production
     env:
       TOOLING_SOURCE_SHA: ${{ inputs.tooling_source_sha }}
-      EXPECTED_RUNTIME_SHA: ${{ inputs.runtime_sha }}
+      EXPECTED_CHECKOUT_SHA: ${{ inputs.expected_checkout_sha }}
+      EXPECTED_RUNTIME_SHA: ${{ inputs.expected_runtime_sha }}
       SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
       SSH_USER: ${{ secrets.PRODUCTION_SSH_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
@@ -47,6 +52,7 @@ jobs:
           set -Eeuo pipefail
           [[ "$GITHUB_REF" == "refs/heads/main" ]]
           [[ "$TOOLING_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_CHECKOUT_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
           [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
@@ -76,6 +82,7 @@ jobs:
             -p "$SSH_PORT"
           )
           printf -v quoted_tooling '%q' "$TOOLING_SOURCE_SHA"
+          printf -v quoted_checkout '%q' "$EXPECTED_CHECKOUT_SHA"
           printf -v quoted_runtime '%q' "$EXPECTED_RUNTIME_SHA"
           ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" \
-            "sudo -n /usr/local/sbin/buildingos-production-backup-preflight $quoted_tooling $quoted_runtime"
+            "sudo -n /usr/local/sbin/buildingos-production-backup-preflight $quoted_tooling $quoted_checkout $quoted_runtime"

@@ -51,8 +51,9 @@ make_source() {
   cat > "$SOURCE_ROOT/scripts/production-backup-preflight.sh" <<'CONTROL'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-[[ "$1" == 1111111111111111111111111111111111111111 ]] || exit 1
-printf 'CONTROL_INVOKED=%s\n' "$1"
+[[ "$1" == 2222222222222222222222222222222222222222 ]] || exit 1
+[[ "$2" == 1111111111111111111111111111111111111111 ]] || exit 1
+printf 'CONTROL_INVOKED_CHECKOUT=%s\nCONTROL_INVOKED_RUNTIME=%s\n' "$1" "$2"
 CONTROL
   chmod 0755 "$SOURCE_ROOT/scripts/production-backup-preflight.sh"
   git -c core.hooksPath=/dev/null -C "$SOURCE_ROOT" init -q
@@ -121,9 +122,13 @@ protected_tree_state() {
 }
 
 run_launcher() {
-  local tooling_sha="$1" runtime_sha="$2"
+  local tooling_sha="$1" checkout_sha='2222222222222222222222222222222222222222' runtime_sha="$2"
+  if [[ "$#" -ge 3 ]]; then
+    checkout_sha="$2"
+    runtime_sha="$3"
+  fi
   env BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY BUILDINGOS_PREFLIGHT_LAUNCHER_TEST_ROOT="$DEST_ROOT" \
-    "$DEST_ROOT/usr/local/sbin/buildingos-production-backup-preflight" "$tooling_sha" "$runtime_sha"
+    "$DEST_ROOT/usr/local/sbin/buildingos-production-backup-preflight" "$tooling_sha" "$checkout_sha" "$runtime_sha"
 }
 
 make_legacy_release() {
@@ -278,8 +283,10 @@ assert_equal 'trusted sudoers parent remains mode 0750 after rejection tests' "$
 chmod 0775 "$DEST_ROOT/usr/local/sbin"
 assert_failure 'writable privileged launcher parent is rejected' run_install "$CANDIDATE_ONE"
 chmod 0755 "$DEST_ROOT/usr/local/sbin"
-assert_success 'tooling match and older runtime identity reach the protected control' \
-  run_launcher "$CANDIDATE_ONE" 1111111111111111111111111111111111111111
+assert_success 'tooling, expected checkout, and expected runtime identities reach the protected control in order' \
+  run_launcher "$CANDIDATE_ONE" 2222222222222222222222222222222222222222 1111111111111111111111111111111111111111
+assert_contains 'protected control receives the expected checkout SHA first' 'CONTROL_INVOKED_CHECKOUT=2222222222222222222222222222222222222222' "$TEST_ROOT/output"
+assert_contains 'protected control receives the expected runtime SHA second' 'CONTROL_INVOKED_RUNTIME=1111111111111111111111111111111111111111' "$TEST_ROOT/output"
 assert_failure 'tooling source SHA mismatch fails closed before runtime preflight' \
   run_launcher aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1111111111111111111111111111111111111111
 LAUNCHER_TREE_BEFORE="$(protected_tree_state)"
