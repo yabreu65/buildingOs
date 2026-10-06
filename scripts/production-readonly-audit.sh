@@ -99,19 +99,20 @@ container_health() {
 }
 
 checkout_has_only_approved_ignored_files() {
+  local app_dir="${1:-$APP_DIR}"
   local path pattern status_output ignored_paths
   local runtime_env_excluded=false
 
-  [[ -f "$APP_DIR/.dockerignore" ]] || return 1
+  [[ -f "$app_dir/.dockerignore" ]] || return 1
   while IFS= read -r pattern; do
     [[ "$pattern" =~ ^[[:space:]]*! ]] && return 1
     if [[ "$pattern" == '**/.env' || "$pattern" == 'infra/docker/.env' ]]; then
       runtime_env_excluded=true
     fi
-  done < "$APP_DIR/.dockerignore"
+  done < "$app_dir/.dockerignore"
   [[ "$runtime_env_excluded" == true ]] || return 1
 
-  if ! ignored_paths="$(git -C "$APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null)"; then
+  if ! ignored_paths="$(git -C "$app_dir" ls-files --others --ignored --exclude-standard 2>/dev/null)"; then
     return 1
   fi
   if [[ -n "$ignored_paths" ]]; then
@@ -295,16 +296,21 @@ public_readyz_status() {
 }
 
 report_runtime_identity() {
+  local app_dir="${1:-$APP_DIR}"
+  local selector="${2:-$CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR}"
+  local deployments_root="${3:-$DEPLOYMENTS_ROOT}"
   local production_sha='UNKNOWN'
   local api_revision='UNKNOWN'
   local web_revision='UNKNOWN'
   local checkout_status='UNKNOWN'
-  local status_output
+  local identity='UNKNOWN'
+  local status_output from_sha migration_count
 
-  if [[ -d "$APP_DIR/.git" ]]; then
-    production_sha="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
+  RUNTIME_APP_SHA='UNKNOWN'
+  if [[ -d "$app_dir/.git" ]]; then
+    production_sha="$(git -C "$app_dir" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
     if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]]; then
-      if status_output="$(git -C "$APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" && [[ -z "$status_output" ]] && checkout_has_only_approved_ignored_files; then
+      if status_output="$(git -C "$app_dir" status --porcelain --untracked-files=all 2>/dev/null)" && [[ -z "$status_output" ]] && checkout_has_only_approved_ignored_files "$app_dir"; then
         checkout_status='CLEAN'
       else
         checkout_status='DIRTY'
@@ -319,14 +325,28 @@ report_runtime_identity() {
   printf 'CANDIDATE_SHA=%s\n' "$CANDIDATE_SHA"
   printf 'PRODUCTION_CHECKOUT_SHA=%s\n' "$production_sha"
   printf 'PRODUCTION_CHECKOUT_STATUS=%s\n' "$checkout_status"
+  printf 'RUNTIME_API_SHA=%s\n' "$api_revision"
+  printf 'RUNTIME_WEB_SHA=%s\n' "$web_revision"
   printf 'API_REVISION=%s\n' "$api_revision"
   printf 'WEB_REVISION=%s\n' "$web_revision"
-  if [[ "$checkout_status" == 'CLEAN' && "$production_sha" =~ ^[0-9a-f]{40}$ && "$production_sha" == "$api_revision" && "$api_revision" == "$web_revision" ]]; then
-    RUNTIME_APP_SHA="$production_sha"
-    printf 'RUNTIME_IDENTITY=CONSISTENT\n'
-  else
-    RUNTIME_APP_SHA='UNKNOWN'
-    printf 'RUNTIME_IDENTITY=UNKNOWN\n'
+
+  if [[ "$checkout_status" == 'CLEAN' && "$production_sha" =~ ^[0-9a-f]{40}$ && "$api_revision" =~ ^[0-9a-f]{40}$ && "$web_revision" =~ ^[0-9a-f]{40}$ && "$api_revision" == "$web_revision" ]]; then
+    if [[ "$production_sha" == "$api_revision" ]]; then
+      RUNTIME_APP_SHA="$api_revision"
+      identity='CONSISTENT'
+    elif validate_current_successful_deployment_selector_binding "$selector" "$deployments_root" "$api_revision" "$RUNTIME_API_IMAGE_ID" "$RUNTIME_WEB_IMAGE_ID"; then
+      from_sha="$(strict_key_value "$SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD" from_sha 2>/dev/null || true)"
+      migration_count="$(strict_key_value "$SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD" migration_count 2>/dev/null || true)"
+      if [[ "$from_sha" == "$production_sha" && "$migration_count" == '107' ]]; then
+        RUNTIME_APP_SHA="$api_revision"
+        identity='RECOVERED_SPLIT'
+      fi
+    fi
+  fi
+
+  printf 'RUNTIME_APP_SHA=%s\n' "$RUNTIME_APP_SHA"
+  printf 'RUNTIME_IDENTITY=%s\n' "$identity"
+  if [[ "$identity" == 'UNKNOWN' ]]; then
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
   fi
 }
