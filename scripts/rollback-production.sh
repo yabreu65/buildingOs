@@ -225,6 +225,14 @@ bind_unique_prior_success_recovery_point() {
   return 1
 }
 
+rollback_compose_config_preflight() {
+  local expected_current_sha="$1"
+  shift
+  export IMAGE_TAG="$expected_current_sha"
+  export BUILD_REVISION="$expected_current_sha"
+  "$@" config --quiet
+}
+
 write_rollback_record() {
   local status="$1"
   local temporary_record
@@ -310,7 +318,7 @@ cd "$APP_DIR"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "Production checkout is not clean"
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since compatibility review"
 compose=(docker compose --project-name buildingos --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
-"${compose[@]}" config --quiet
+rollback_compose_config_preflight "$EXPECTED_CURRENT_SHA" "${compose[@]}"
 
 PHASE='quiesce'
 ROLLBACK_API_WAS_RUNNING="$(docker inspect --format '{{.State.Running}}' buildingos-api)" \
@@ -343,7 +351,10 @@ ROLLBACK_API_QUIESCED=true
 
 current_migration_count="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "$POSTGRES_USER" -d buildingos_db -c '\''SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL'\''')"
 [[ "$current_migration_count" == "$migration_count" ]] || fail "Database migration count changed after compatibility review"
-validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$EXPECTED_CURRENT_SHA"
+PRODUCTION_DB107_MIGRATION_VERIFIER="$APP_DIR/scripts/verify-production-migration-manifest.sh" \
+  validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db \
+    "$PREVIOUS_SHA" \
+    "$EXPECTED_CURRENT_SHA"
 [[ "$ROLLBACK_COMPATIBILITY_BASIS" == 'DB107_PINNED_RUNTIME' ]] \
   || fail 'Rollback pair did not receive the exact DB107 compatibility PASS'
 

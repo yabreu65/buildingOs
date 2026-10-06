@@ -563,6 +563,7 @@ validate_application_rollback_compatibility() {
   local previous_sha="${3:-}"
   local target_sha="${4:-}"
   local result migration_validation
+  local migration_verifier="${PRODUCTION_DB107_MIGRATION_VERIFIER:-${SCRIPT_DIR:-}/verify-production-migration-manifest.sh}"
 
   [[ "$#" -eq 4 ]] || security_fail 'Application rollback compatibility requires previous and target SHAs'
   ROLLBACK_COMPATIBILITY_BASIS=''
@@ -574,12 +575,12 @@ validate_application_rollback_compatibility() {
       || security_fail 'DB107 compatibility is restricted to the pinned old runtime or the Release A candidate itself'
     [[ "$(git rev-parse HEAD 2>/dev/null)" == "$target_sha" ]] \
       || security_fail 'DB107 compatibility target is not the checked-out candidate'
-    [[ -f "$SCRIPT_DIR/verify-production-migration-manifest.sh" && ! -L "$SCRIPT_DIR/verify-production-migration-manifest.sh" ]] \
+    [[ -f "$migration_verifier" && ! -L "$migration_verifier" ]] \
       || security_fail 'Trusted DB107 manifest verifier is missing or invalid'
-    bash "$SCRIPT_DIR/verify-production-migration-manifest.sh" verify-files \
+    bash "$migration_verifier" verify-files \
       || security_fail 'DB107 migration manifest verification failed'
     migration_validation="$(env POSTGRES_CONTAINER="$postgres_container" DATABASE_NAME="$database_name" \
-      bash "$SCRIPT_DIR/verify-production-migration-manifest.sh" verify-db post 2>&1)" \
+      bash "$migration_verifier" verify-db post 2>&1)" \
       || security_fail 'DB107 database migration verification failed'
     [[ "$migration_validation" == *$'target=107'* ]] \
       || security_fail 'DB107 database migration verifier did not prove target 107'

@@ -854,7 +854,8 @@ MIGRATION_COUNT="$(docker exec "$POSTGRES_CONTAINER" sh -lc 'exec psql -qAt -U "
 [[ "$MIGRATION_COUNT" == "$MIGRATION_TARGET_APPLIED" ]] || fail 'Final migration count is not exactly the verified target'
 
 PHASE='rollback-compatibility'
-validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$TARGET_SHA"
+PRODUCTION_DB107_MIGRATION_VERIFIER="$APP_DIR/scripts/verify-production-migration-manifest.sh" \
+  validate_application_rollback_compatibility "$POSTGRES_CONTAINER" buildingos_db "$PREVIOUS_SHA" "$TARGET_SHA"
 ROLLBACK_RECEIPT="$(generate_rollback_compatibility_receipt \
   "$TARGET_SHA" "$PREVIOUS_SHA" "$PREVIOUS_API_DIGEST" "$PREVIOUS_WEB_DIGEST" "$MIGRATION_COUNT")"
 
