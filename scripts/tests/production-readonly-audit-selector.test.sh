@@ -155,9 +155,13 @@ proven_runtime_evidence_case() {
   [[ "$(container_revision buildingos-api)" == "$TARGET_SHA" ]]
   [[ "$(container_image_id buildingos-api)" == "$API_DIGEST" ]]
   AUDIT_EVIDENCE_FAILURES=0
+  AUDIT_ACTIVE_FINISHED_MIGRATIONS=107
+  AUDIT_FAILED_MIGRATIONS=0
   CANDIDATE_SHA="$TARGET_SHA"
   report_runtime_identity "$runtime_checkout" "$SELECTOR" "$TEST_DEPLOYMENTS_ROOT" > "$runtime_output_file"
   [[ "$(<"$runtime_output_file")" == *"RUNTIME_IDENTITY=RECOVERED_SPLIT"* ]]
+  [[ "$AUDIT_ACTIVE_FINISHED_MIGRATIONS" == 107 ]]
+  [[ "$AUDIT_FAILED_MIGRATIONS" == 0 ]]
   [[ "$(<"$runtime_output_file")" == *"RUNTIME_APP_SHA=$TARGET_SHA"* ]]
   [[ "$(<"$runtime_output_file")" == *"CANDIDATE_SHA=$CANDIDATE_SHA"* ]]
   report_recovery_point_selector "$SELECTOR" "$TEST_DEPLOYMENTS_ROOT" "$TEST_RECOVERY_ROOT" "" "$API_DIGEST" "$WEB_DIGEST" > "$output_file"

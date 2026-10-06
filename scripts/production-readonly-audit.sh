@@ -73,6 +73,8 @@ audit_unexpected_error() {
 AUDIT_QUERY_FAILURES=0
 AUDIT_EVIDENCE_FAILURES=0
 AUDIT_INTERNAL_FAILURES=0
+AUDIT_ACTIVE_FINISHED_MIGRATIONS='UNKNOWN'
+AUDIT_FAILED_MIGRATIONS='UNKNOWN'
 AUDIT_STAGE='STARTUP'
 AUDIT_FAILURE_CLASS='AUDITOR_ERROR'
 AUDIT_FAILURE_REASON='UNKNOWN'
@@ -244,10 +246,18 @@ report_query_stdin() {
   local rc
 
   if value="$(readonly_query_stdin 2>/dev/null)"; then
+    case "$key" in
+      ACTIVE_FINISHED_MIGRATIONS) AUDIT_ACTIVE_FINISHED_MIGRATIONS="$value" ;;
+      FAILED_MIGRATIONS) AUDIT_FAILED_MIGRATIONS="$value" ;;
+    esac
     printf '%s=%s\n' "$key" "$value"
   else
     rc=$?
     record_query_failure "$rc"
+    case "$key" in
+      ACTIVE_FINISHED_MIGRATIONS) AUDIT_ACTIVE_FINISHED_MIGRATIONS='UNKNOWN' ;;
+      FAILED_MIGRATIONS) AUDIT_FAILED_MIGRATIONS='UNKNOWN' ;;
+    esac
     printf '%s=UNKNOWN\n' "$key"
   fi
 }
@@ -337,7 +347,11 @@ report_runtime_identity() {
     elif validate_current_successful_deployment_selector_binding "$selector" "$deployments_root" "$api_revision" "$RUNTIME_API_IMAGE_ID" "$RUNTIME_WEB_IMAGE_ID"; then
       from_sha="$(strict_key_value "$SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD" from_sha 2>/dev/null || true)"
       migration_count="$(strict_key_value "$SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD" migration_count 2>/dev/null || true)"
-      if [[ "$from_sha" == "$production_sha" && "$migration_count" == '107' ]]; then
+      if [[ "$from_sha" == "$production_sha" && "$migration_count" == '107' \
+        && "$AUDIT_ACTIVE_FINISHED_MIGRATIONS" =~ ^(0|[1-9][0-9]*)$ \
+        && "$AUDIT_ACTIVE_FINISHED_MIGRATIONS" == '107' \
+        && "$AUDIT_FAILED_MIGRATIONS" =~ ^(0|[1-9][0-9]*)$ \
+        && "$AUDIT_FAILED_MIGRATIONS" == '0' ]]; then
         RUNTIME_APP_SHA="$api_revision"
         identity='RECOVERED_SPLIT'
       fi
@@ -1384,10 +1398,10 @@ main() {
   AUDIT_QUERY_FAILURES=0
   AUDIT_EVIDENCE_FAILURES=0
   AUDIT_INTERNAL_FAILURES=0
-  AUDIT_STAGE='RUNTIME_IDENTITY'
-  printf 'PRODUCTION_READONLY_AUDIT\n'
-  report_runtime_identity
+  AUDIT_ACTIVE_FINISHED_MIGRATIONS='UNKNOWN'
+  AUDIT_FAILED_MIGRATIONS='UNKNOWN'
   AUDIT_STAGE='CONTAINER_HEALTH'
+  printf 'PRODUCTION_READONLY_AUDIT\n'
   report_container_health API "$API_CONTAINER"
   report_container_health WEB "$WEB_CONTAINER"
   report_container_health POSTGRES "$POSTGRES_CONTAINER"
@@ -1401,6 +1415,8 @@ main() {
   report_safe_runtime_config
   AUDIT_STAGE='MIGRATIONS'
   report_migrations_and_schema
+  AUDIT_STAGE='RUNTIME_IDENTITY'
+  report_runtime_identity
   AUDIT_STAGE='FINANCE_COUNTS'
   report_finance_counts
   AUDIT_STAGE='FINANCE_INTEGRITY'
