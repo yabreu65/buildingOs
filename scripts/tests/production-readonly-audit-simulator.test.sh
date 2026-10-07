@@ -114,9 +114,9 @@ assert_runtime_identity_field() {
 run_runtime_identity_case() {
   local case_name="$1" checkout_sha="$2" api_sha="$3" web_sha="$4" expected_identity="$5" expected_app_sha="$6"
   local history_count="${7-107}" active_count="${8-107}" failed_count="${9-0}" migration_case="${10-valid}"
-  local runtime_tree_count="${11-107}"
+  local runtime_tree_count="${11-97}"
   local fixture_auditor output_file output failures=0 expected_evidence_failures field expected field_value
-  local deployments_root selector record api_image_id web_image_id migration_rows='' migration_name migration_sql migration_hash i migration_query_seen_file
+  local deployments_root selector record api_image_id web_image_id migration_rows='' migration_name migration_hash i migration_query_seen_file first_migration second_migration
   fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-readonly-audit-checkout.XXXXXX")"
   fixture_root="$(cd -P -- "$fixture_root" && pwd -P)"
   trap 'rm -rf -- "$fixture_root"' EXIT
@@ -159,12 +159,15 @@ run_runtime_identity_case() {
       *) return 1 ;;
     esac
   }
-  for i in $(seq 1 107); do
-    migration_name="migration_$(printf '%03d' "$i")"
-    migration_sql="contents for apps/api/prisma/migrations/$migration_name/migration.sql"
-    migration_hash="$(printf '%s\n' "$migration_sql" | sha256sum | awk '{print $1}')"
-    migration_rows+="$migration_name"$'\t'"$migration_hash"$'\t1\t1\t0\n'
-  done
+  while IFS='|' read -r migration_name migration_hash; do
+    [[ -n "$first_migration" ]] || first_migration="$migration_name"
+    if [[ -n "$first_migration" && "$migration_name" != "$first_migration" && -z "$second_migration" ]]; then second_migration="$migration_name"; fi
+    if [[ "$migration_name" == '20260719000000_add_receipt_sequence' ]]; then
+      migration_rows+="$migration_name"$'\t'"$migration_hash"$'\t1\t1\t0\t0\n'
+    else
+      migration_rows+="$migration_name"$'\t'"$migration_hash"$'\t1\t1\t0\t1\n'
+    fi
+  done < <(expected_migration_rows)
   migration_query_seen_file="$fixture_root/migration-query-used"
   # shellcheck disable=SC2329 # The sourced runtime verifier invokes this query callback indirectly.
   readonly_query_stdin() {
@@ -172,32 +175,51 @@ run_runtime_identity_case() {
     query="$(< /dev/stdin)"
     [[ "$query" == *'BEGIN READ ONLY;'* && "$query" == *'COMMIT;'* ]] || return 64
     [[ "$query" == *'started_at'* && "$query" == *'finished_at'* && "$query" == *'rolled_back_at'* \
-      && "$query" == *'checksum'* && "$query" == *'"_prisma_migrations"'* ]] || return 1
+      && "$query" == *'checksum'* && "$query" == *'applied_steps_count'* && "$query" == *'"_prisma_migrations"'* ]] || return 1
     printf 'rows-returned\n' > "$migration_query_seen_file"
     case "$migration_case" in
       query-failure) printf 'transport-failure\n' > "$migration_query_seen_file"; return 1 ;;
       unknown) printf 'unknown-payload\n' > "$migration_query_seen_file"; printf 'UNKNOWN\n' ;;
-      replacement) printf '%s' "${migration_rows/migration_001/migration_replaced}" ;;
+      replacement) printf '%s' "${migration_rows/$first_migration/migration_replaced}" ;;
       checksum)
         migration_hash="$(printf '%064d' 1)"
-        printf 'migration_001\t%s\t1\t1\t0\n' "$migration_hash"
+        printf '%s\t%s\t1\t1\t0\t1\n' "$first_migration" "$migration_hash"
         printf '%s' "${migration_rows#*$'\n'}"
         ;;
-      malformed-checksum) printf 'migration_001\tbad\t1\t1\t0\n'; printf '%s' "${migration_rows#*$'\n'}" ;;
+      malformed-checksum) printf '%s\tbad\t1\t1\t0\t1\n' "$first_migration"; printf '%s' "${migration_rows#*$'\n'}" ;;
       extra-field|empty-sixth|missing-field)
-        migration_hash="$(printf '%s\n' 'contents for apps/api/prisma/migrations/migration_001/migration.sql' | sha256sum | awk '{print $1}')"
+        migration_hash="${migration_rows#*$'\t'}"
+        migration_hash="${migration_hash%%$'\t'*}"
         case "$migration_case" in
-          extra-field) printf 'migration_001\t%s\t1\t1\t0\textra\n' "$migration_hash" ;;
-          empty-sixth) printf 'migration_001\t%s\t1\t1\t0\t\n' "$migration_hash" ;;
-          missing-field) printf 'migration_001\t%s\t1\t1\n' "$migration_hash" ;;
+          extra-field) printf '%s\t%s\t1\t1\t0\t1\textra\n' "$first_migration" "$migration_hash" ;;
+          empty-sixth) printf '%s\t%s\t1\t1\t0\t\n' "$first_migration" "$migration_hash" ;;
+          missing-field) printf '%s\t%s\t1\t1\t0\n' "$first_migration" "$migration_hash" ;;
         esac
         printf '%s' "${migration_rows#*$'\n'}"
         ;;
-      duplicate-missing) printf '%s' "${migration_rows/migration_002/migration_001}" ;;
+      duplicate-missing) printf '%s' "${migration_rows/$second_migration/$first_migration}" ;;
       invalid-state)
-        migration_hash="$(printf '%s\n' 'contents for apps/api/prisma/migrations/migration_001/migration.sql' | sha256sum | awk '{print $1}')"
-        printf 'migration_001\t%s\t0\t1\t0\n' "$migration_hash"
+        migration_hash="${migration_rows#*$'\t'}"
+        migration_hash="${migration_hash%%$'\t'*}"
+        printf '%s\t%s\t0\t1\t0\t1\n' "$first_migration" "$migration_hash"
         printf '%s' "${migration_rows#*$'\n'}"
+        ;;
+      zero-normal) printf '%s' "${migration_rows/$'\t1\n'/$'\t0\n'}" ;;
+      multiple-steps) printf '%s' "${migration_rows/$'\t1\n'/$'\t2\n'}" ;;
+      malformed-steps) printf '%s' "${migration_rows/$'\t1\n'/$'\t01x\n'}" ;;
+      exception-checksum|exception-multiple-steps)
+        local exception_row exception_name exception_hash
+        exception_row="$(printf '%s' "$migration_rows" | grep '^20260719000000_add_receipt_sequence')"
+        exception_name="${exception_row%%$'\t'*}"
+        exception_hash="${exception_row#*$'\t'}"; exception_hash="${exception_hash%%$'\t'*}"
+        if [[ "$migration_case" == exception-checksum ]]; then
+          printf '%s' "${migration_rows/$exception_name$'\t'$exception_hash/$exception_name$'\t'$(printf '%064d' 2)}"
+        else
+          local exception_pattern exception_replacement
+          exception_pattern="$exception_name"$'\t'"$exception_hash"$'\t1\t1\t0\t0'
+          exception_replacement="$exception_name"$'\t'"$exception_hash"$'\t1\t1\t0\t2'
+          printf '%s' "${migration_rows/$exception_pattern/$exception_replacement}"
+        fi
         ;;
       *) printf '%s' "$migration_rows" ;;
     esac
@@ -255,24 +277,15 @@ SQL
   if [[ "$checkout_sha" != "$api_sha" && "$api_sha" == "$web_sha" ]]; then
     local expected_set_status='NOT_EVALUATED'
     if [[ "$case_name" != unproven-split && "$history_count" == 107 && "$active_count" == 107 && "$failed_count" == 0 ]]; then
-      if [[ "$runtime_tree_count" != 107 ]]; then
-        expected_set_status='UNKNOWN'
-      else
-        [[ "$migration_case" == valid ]] && expected_set_status='PASS' || expected_set_status='UNKNOWN'
-      fi
+      [[ "$migration_case" == valid || "$migration_case" == missing-tree ]] && expected_set_status='PASS' || expected_set_status='UNKNOWN'
     fi
-    if [[ "$output" != *"RUNTIME_MIGRATION_SET=$expected_set_status"* ]]; then
-      printf 'FAIL: runtime identity case %s expected RUNTIME_MIGRATION_SET=%s; actual report:\n%s\n' \
+    if [[ "$output" != *"DATABASE_MIGRATION_SET=$expected_set_status"* ]]; then
+      printf 'FAIL: runtime identity case %s expected DATABASE_MIGRATION_SET=%s; actual report:\n%s\n' \
         "$case_name" "$expected_set_status" "$output" >&2
       failures=$((failures + 1))
     fi
-    if [[ "$expected_set_status" != NOT_EVALUATED && "$migration_case" != missing-tree \
-      && "$runtime_tree_count" == 107 && ! -f "$migration_query_seen_file" ]]; then
+    if [[ "$expected_set_status" != NOT_EVALUATED && ! -f "$migration_query_seen_file" ]]; then
       printf 'FAIL: exact migration rows did not use readonly_query_stdin\n' >&2
-      failures=$((failures + 1))
-    fi
-    if [[ "$runtime_tree_count" != 107 && -f "$migration_query_seen_file" ]]; then
-      printf 'FAIL: invalid runtime migration tree reached readonly_query_stdin\n' >&2
       failures=$((failures + 1))
     fi
     if [[ "$output" == *'migration_001'* || "$output" == *'wrongchecksum'* ]]; then
@@ -306,7 +319,7 @@ SQL
     web_sha="$checkout_sha"
     report_runtime_identity "$fixture_root" "$selector" "$deployments_root" > "$output_file"
     output="$(< "$output_file")"
-    if [[ "$output" != *'RUNTIME_IDENTITY=CONSISTENT'* || "$output" != *'RUNTIME_MIGRATION_SET=NOT_EVALUATED'* ]]; then
+    if [[ "$output" != *'RUNTIME_IDENTITY=CONSISTENT'* || "$output" != *'DATABASE_MIGRATION_SET=NOT_EVALUATED'* ]]; then
       printf 'FAIL: later consistent identity inherited stale migration-set status; report:\n%s\n' "$output" >&2
       failures=$((failures + 1))
     fi
@@ -332,8 +345,8 @@ run_runtime_identity_split_rejections() {
   local revision='db82d3d37fc6184a6d4063709b9a15b923371695'
   local failures=0
   if ! (run_runtime_identity_case current-108 "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 108 0); then failures=$((failures + 1)); fi
-  if ! (run_runtime_identity_case runtime-tree-106 "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 valid 106); then failures=$((failures + 1)); fi
-  if ! (run_runtime_identity_case runtime-tree-108 "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 valid 108); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case runtime-tree-106 "$checkout" "$revision" "$revision" RECOVERED_SPLIT "$revision" 107 107 0 valid 106); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case runtime-tree-108 "$checkout" "$revision" "$revision" RECOVERED_SPLIT "$revision" 107 107 0 valid 108); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case current-failed "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 1); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case historical-108 "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 108 107 0); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case current-unknown "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 UNKNOWN 0); then failures=$((failures + 1)); fi
@@ -349,7 +362,12 @@ run_runtime_identity_split_rejections() {
   if ! (run_runtime_identity_case set-missing-field "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 missing-field); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case set-duplicate-missing "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 duplicate-missing); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case set-invalid-state "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 invalid-state); then failures=$((failures + 1)); fi
-  if ! (run_runtime_identity_case set-missing-runtime-tree "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 missing-tree); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-zero-normal-steps "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 zero-normal); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-multiple-steps "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 multiple-steps); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-malformed-steps "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 malformed-steps); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-exception-checksum "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 exception-checksum); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-exception-multiple-steps "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 exception-multiple-steps); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-missing-runtime-tree "$checkout" "$revision" "$revision" RECOVERED_SPLIT "$revision" 107 107 0 missing-tree); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case set-query-unknown "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 unknown); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case set-query-failure "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 query-failure); then failures=$((failures + 1)); fi
   [[ "$failures" -eq 0 ]]

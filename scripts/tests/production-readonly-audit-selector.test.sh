@@ -20,6 +20,20 @@ sed "s|^readonly APP_DIR=.*$|readonly APP_DIR='$TEST_APP_DIR'|" "$AUDIT_SCRIPT" 
 # callers use only the fixed production constants defined in the audit script.
 source "$TEST_AUDIT_SCRIPT"
 
+inventory_count="$(expected_migration_rows | wc -l | tr -d ' ')"
+[[ "$inventory_count" == 107 ]] || {
+  printf 'FAIL: expected 107 immutable migration name/checksum rows in the trusted audit control, found %s\n' "$inventory_count" >&2
+  exit 1
+}
+grep -Fq '# Frozen name|SHA256 inventory verified from approved base c9d9a47c30215d0ac61b5c46b9cf6c6519658545.' "$TEST_AUDIT_SCRIPT" || {
+  printf 'FAIL: immutable migration inventory source commit is not declared\n' >&2
+  exit 1
+}
+grep -Fq 'applied_steps_count' "$TEST_AUDIT_SCRIPT" || {
+  printf 'FAIL: migration audit does not inspect applied_steps_count\n' >&2
+  exit 1
+}
+
 declare -F validate_current_successful_deployment_selector >/dev/null || {
   printf 'FAIL: audit selector parser is unavailable\n' >&2
   exit 1
@@ -139,22 +153,24 @@ proven_runtime_evidence_case() {
       *'status --porcelain --untracked-files=all'*) ;;
       *'ls-files --others --ignored'*) ;;
       *'ls-tree -r --name-only'*)
-        for i in $(seq 1 107); do printf 'apps/api/prisma/migrations/migration_%03d/migration.sql\n' "$i"; done
+        for i in $(seq 1 97); do printf 'apps/api/prisma/migrations/migration_%03d/migration.sql\n' "$i"; done
         ;;
       *'show '*':apps/api/prisma/migrations/'*) printf 'runtime migration\n' ;;
       *) return 1 ;;
     esac
   }
-  migration_hash="$(printf 'runtime migration\n' | sha256sum | awk '{print $1}')"
-  for i in $(seq 1 107); do
-    migration_name="migration_$(printf '%03d' "$i")"
-    migration_rows+="$migration_name"$'\t'"$migration_hash"$'\t1\t1\t0\n'
-  done
+  while IFS='|' read -r migration_name migration_hash; do
+    if [[ "$migration_name" == '20260719000000_add_receipt_sequence' ]]; then
+      migration_rows+="$migration_name"$'\t'"$migration_hash"$'\t1\t1\t0\t0\n'
+    else
+      migration_rows+="$migration_name"$'\t'"$migration_hash"$'\t1\t1\t0\t1\n'
+    fi
+  done < <(expected_migration_rows)
   # shellcheck disable=SC2329 # The sourced runtime verifier invokes this query callback indirectly.
   readonly_query_stdin() {
     local query
     query="$(< /dev/stdin)"
-    [[ "$query" == *'BEGIN READ ONLY;'* && "$query" == *'COMMIT;'* && "$query" == *'"_prisma_migrations"'* ]] || return 1
+    [[ "$query" == *'BEGIN READ ONLY;'* && "$query" == *'COMMIT;'* && "$query" == *'"_prisma_migrations"'* && "$query" == *'applied_steps_count'* ]] || return 1
     printf '%s' "$migration_rows"
   }
   container_revision() {
@@ -162,6 +178,8 @@ proven_runtime_evidence_case() {
       buildingos-api|buildingos-web) printf '%s' "$TARGET_SHA" ;;
     esac
   }
+  [[ "$(git -C "$runtime_checkout" ls-tree -r --name-only "$TARGET_SHA" -- apps/api/prisma/migrations | wc -l | tr -d ' ')" == 97 ]]
+  [[ "$(printf '%s' "$migration_rows" | awk 'END { print NR }')" == 107 ]]
   container_image_id() {
     case "$1" in
       buildingos-api) printf '%s' "$API_DIGEST" ;;
