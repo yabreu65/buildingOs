@@ -219,12 +219,115 @@ storage_backend_from_host() {
   esac
 }
 
+readonly_query_body_is_safe() {
+  local body="$1"
+  local length="${#body}"
+  local index=0 char next token first_token='' case_depth=0
+
+  while (( index < length )); do
+    char="${body:index:1}"
+    next="${body:index+1:1}"
+    case "$char" in
+      "'")
+        index=$((index + 1))
+        while (( index < length )); do
+          char="${body:index:1}"
+          if [[ "$char" == "'" ]]; then
+            next="${body:index+1:1}"
+            if [[ "$next" == "'" ]]; then
+              index=$((index + 2))
+              continue
+            fi
+            break
+          fi
+          index=$((index + 1))
+        done
+        (( index < length )) || return 1
+        index=$((index + 1))
+        ;;
+      '"')
+        index=$((index + 1))
+        while (( index < length )); do
+          char="${body:index:1}"
+          if [[ "$char" == '"' ]]; then
+            next="${body:index+1:1}"
+            if [[ "$next" == '"' ]]; then
+              index=$((index + 2))
+              continue
+            fi
+            break
+          fi
+          index=$((index + 1))
+        done
+        (( index < length )) || return 1
+        index=$((index + 1))
+        ;;
+      ';')
+        index=$((index + 1))
+        while (( index < length )); do
+          char="${body:index:1}"
+          case "$char" in
+            [[:space:]]) index=$((index + 1)) ;;
+            *) return 1 ;;
+          esac
+        done
+        break
+        ;;
+      '-')
+        [[ "$next" == '-' ]] && return 1
+        index=$((index + 1))
+        ;;
+      '/')
+        [[ "$next" == '*' ]] && return 1
+        index=$((index + 1))
+        ;;
+      [[:alpha:]_])
+        token=''
+        while (( index < length )); do
+          char="${body:index:1}"
+          case "$char" in
+            [[:alnum:]_]) ;;
+            *) break ;;
+          esac
+          token+="$char"
+          index=$((index + 1))
+        done
+        [[ -n "$first_token" ]] || first_token="$token"
+        case "$token" in
+          [Cc][Aa][Ss][Ee]) case_depth=$((case_depth + 1)) ;;
+          [Ee][Nn][Dd])
+            if (( case_depth > 0 )); then
+              case_depth=$((case_depth - 1))
+            else
+              return 1
+            fi
+            ;;
+          [Bb][Ee][Gg][Ii][Nn]|[Cc][Oo][Mm][Mm][Ii][Tt]|[Rr][Oo][Ll][Ll][Bb][Aa][Cc][Kk]|[Aa][Bb][Oo][Rr][Tt]|[Pp][Rr][Ee][Pp][Aa][Rr][Ee]|[Ss][Tt][Aa][Rr][Tt])
+            return 1
+            ;;
+        esac
+        ;;
+      *)
+        index=$((index + 1))
+        ;;
+    esac
+  done
+
+  case "$first_token" in
+    [Ss][Ee][Ll][Ee][Cc][Tt]|[Ww][Ii][Tt][Hh]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 readonly_query_stdin() {
-  local query
+  local query body
 
   query="$(< /dev/stdin)"
-  [[ "$query" == *'BEGIN READ ONLY;'* ]] || return 64
-  [[ "$query" == *'COMMIT;'* ]] || return 64
+  [[ "$query" == $'BEGIN READ ONLY;\n'* ]] || return 64
+  [[ "$query" == *$'\nCOMMIT;' ]] || return 64
+  body="${query#*$'\n'}"
+  body="${body%$'\n'COMMIT;}"
+  readonly_query_body_is_safe "$body" || return 64
   printf '%s\n' "$query" | docker exec -i "$POSTGRES_CONTAINER" sh -lc \
     'exec psql -v ON_ERROR_STOP=1 -qAt -U "$POSTGRES_USER" -d "$1"' \
     sh "$DATABASE_NAME"
@@ -233,7 +336,7 @@ readonly_query_stdin() {
 record_query_failure() {
   if [[ "$1" -eq 64 ]]; then
     AUDIT_INTERNAL_FAILURES=$((AUDIT_INTERNAL_FAILURES + 1))
-    AUDIT_FAILURE_REASON='SQL payload is missing BEGIN READ ONLY or COMMIT'
+    AUDIT_FAILURE_REASON='SQL payload is not a single SELECT/WITH statement in the required read-only envelope'
     printf 'ERROR: %s\n' "$AUDIT_FAILURE_REASON" >&2
   else
     AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
@@ -245,7 +348,15 @@ report_query_stdin() {
   local value
   local rc
 
-  if value="$(readonly_query_stdin 2>/dev/null)"; then
+  if value="$(readonly_query_stdin 2>/dev/null; rc=$?; printf '\034'; exit "$rc")"; then
+    value="${value%$'\034'}"
+    value="${value%$'\n'}"
+    if [[ "$value" =~ [[:cntrl:]] ]]; then
+      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+      value='UNKNOWN'
+    elif [[ "$value" == 'UNKNOWN' && ( "$key" == 'MIGRATIONS_AFTER_KNOWN_BASELINE' || "$key" == 'FILE_BUCKET_COUNTS' ) ]]; then
+      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+    fi
     case "$key" in
       ACTIVE_FINISHED_MIGRATIONS) AUDIT_ACTIVE_FINISHED_MIGRATIONS="$value" ;;
       FAILED_MIGRATIONS) AUDIT_FAILED_MIGRATIONS="$value" ;;
@@ -433,12 +544,75 @@ validate_database_migration_set() {
 
   if rows="$(readonly_query_stdin 2>/dev/null <<'SQL'
 BEGIN READ ONLY;
-SELECT COALESCE(migration_name, '<NULL>') || E'\t' || COALESCE(checksum, '<NULL>')
+WITH receipt_sequence_baseline AS (
+  SELECT
+    (
+      SELECT count(*) = 6
+        AND count(*) FILTER (WHERE column_name = 'id' AND data_type = 'text' AND is_nullable = 'NO' AND column_default IS NULL) = 1
+        AND count(*) FILTER (WHERE column_name = 'tenantId' AND data_type = 'text' AND is_nullable = 'NO' AND column_default IS NULL) = 1
+        AND count(*) FILTER (WHERE column_name = 'year' AND data_type = 'integer' AND is_nullable = 'NO' AND column_default IS NULL) = 1
+        AND count(*) FILTER (WHERE column_name = 'lastNumber' AND data_type = 'integer' AND is_nullable = 'NO' AND column_default = '0') = 1
+        AND count(*) FILTER (WHERE column_name = 'createdAt' AND data_type = 'timestamp without time zone' AND datetime_precision = 3 AND is_nullable = 'NO' AND column_default = 'CURRENT_TIMESTAMP') = 1
+        AND count(*) FILTER (WHERE column_name = 'updatedAt' AND data_type = 'timestamp without time zone' AND datetime_precision = 3 AND is_nullable = 'NO' AND column_default IS NULL) = 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'ReceiptSequence'
+    )
+    AND (
+      SELECT count(*) = 6
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'ReceiptSequence'
+    )
+    AND (
+      SELECT count(*) = 2
+      FROM pg_constraint
+      WHERE conrelid = 'public."ReceiptSequence"'::regclass
+    )
+    AND (
+      SELECT count(*) = 1 AND bool_and(
+        conname = 'ReceiptSequence_pkey' AND convalidated
+        AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."ReceiptSequence"'::regclass AND attname = 'id' AND NOT attisdropped)]::smallint[]
+      )
+      FROM pg_constraint
+      WHERE conrelid = 'public."ReceiptSequence"'::regclass AND contype = 'p'
+    )
+    AND (
+      SELECT count(*) = 1 AND bool_and(
+        conname = 'ReceiptSequence_tenantId_fkey' AND convalidated
+        AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."ReceiptSequence"'::regclass AND attname = 'tenantId' AND NOT attisdropped)]::smallint[]
+        AND confrelid = 'public."Tenant"'::regclass
+        AND confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."Tenant"'::regclass AND attname = 'id' AND NOT attisdropped)]::smallint[]
+        AND confdeltype = 'c' AND confupdtype = 'c'
+      )
+      FROM pg_constraint
+      WHERE conrelid = 'public."ReceiptSequence"'::regclass AND contype = 'f'
+    )
+    AND (
+      SELECT count(*) = 3
+        AND bool_and(i.indisvalid AND i.indisready AND i.indislive AND i.indpred IS NULL AND i.indexprs IS NULL)
+        AND count(*) FILTER (WHERE c.relname = 'ReceiptSequence_pkey' AND i.indisunique AND i.indkey::text = '1') = 1
+        AND count(*) FILTER (WHERE c.relname = 'ReceiptSequence_tenantId_year_key' AND i.indisunique AND i.indkey::text = '2 3') = 1
+        AND count(*) FILTER (WHERE c.relname = 'ReceiptSequence_tenantId_idx' AND NOT i.indisunique AND i.indkey::text = '2') = 1
+      FROM pg_index i
+      JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE i.indrelid = 'public."ReceiptSequence"'::regclass
+    ) AS ok
+)
+SELECT CASE WHEN migration_name IS NULL THEN '<NULL>'
+            WHEN migration_name ~ '[[:cntrl:]]' THEN '<CONTROL_CHARACTER>'
+            ELSE migration_name END
+       || E'\t' || CASE WHEN checksum IS NULL THEN '<NULL>'
+                         WHEN checksum ~ '[[:cntrl:]]' THEN '<CONTROL_CHARACTER>'
+                         ELSE checksum END
        || E'\t' || CASE WHEN started_at IS NOT NULL THEN '1' ELSE '0' END
        || E'\t' || CASE WHEN finished_at IS NOT NULL THEN '1' ELSE '0' END
        || E'\t' || CASE WHEN rolled_back_at IS NOT NULL THEN '1' ELSE '0' END
-       || E'\t' || COALESCE(applied_steps_count::text, '<NULL>')
+       || E'\t' || CASE WHEN migration_name = '20260719000000_add_receipt_sequence'
+                              AND checksum = '93c6d2c0b8c4468fea26489cfb4875bfdc6763ec0056487c21094eae0dbcb257'
+                              AND applied_steps_count = 0 AND receipt_sequence_baseline.ok IS NOT TRUE
+                         THEN 'BASELINE_FAIL'
+                         ELSE COALESCE(applied_steps_count::text, '<NULL>') END
 FROM "_prisma_migrations"
+CROSS JOIN receipt_sequence_baseline
 ORDER BY migration_name;
 COMMIT;
 SQL
@@ -601,7 +775,16 @@ COMMIT;
 SQL
   report_query_stdin 'MIGRATIONS_AFTER_KNOWN_BASELINE' <<SQL
 BEGIN READ ONLY;
-SELECT COALESCE(string_agg(migration_name, ',' ORDER BY finished_at, migration_name), 'NONE')
+SELECT CASE
+  WHEN EXISTS (
+    SELECT 1 FROM "_prisma_migrations"
+    WHERE migration_name > '$KNOWN_PRODUCTION_BASELINE'
+      AND finished_at IS NOT NULL
+      AND rolled_back_at IS NULL
+      AND migration_name ~ '[,[:cntrl:]]'
+  ) THEN 'UNKNOWN'
+  ELSE COALESCE(string_agg(migration_name, ',' ORDER BY finished_at, migration_name), 'NONE')
+END
 FROM "_prisma_migrations"
 WHERE migration_name > '$KNOWN_PRODUCTION_BASELINE'
   AND finished_at IS NOT NULL
@@ -951,7 +1134,13 @@ SQL
 report_storage_database_buckets() {
   report_query_stdin 'FILE_BUCKET_COUNTS' <<'SQL'
 BEGIN READ ONLY;
-SELECT COALESCE(string_agg(bucket || ':' || row_count::text, ',' ORDER BY bucket), 'NONE')
+SELECT CASE
+  WHEN EXISTS (
+    SELECT 1 FROM "File"
+    WHERE bucket ~ '[,:[:cntrl:]]'
+  ) THEN 'UNKNOWN'
+  ELSE COALESCE(string_agg(bucket || ':' || row_count::text, ',' ORDER BY bucket), 'NONE')
+END
 FROM (SELECT bucket, count(*) AS row_count FROM "File" GROUP BY bucket) bucket_counts;
 COMMIT;
 SQL

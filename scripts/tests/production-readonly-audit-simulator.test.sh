@@ -55,6 +55,80 @@ run_s3_incomplete() {
   [[ "$AUDIT_EVIDENCE_FAILURES" -eq 1 ]]
 }
 
+run_report_query_rejects_control_characters() {
+  # shellcheck disable=SC1090 # AUDITOR is an exact test fixture path selected at runtime.
+  source "$AUDITOR"
+  local hostile output_file output key
+  for key in MIGRATIONS_AFTER_KNOWN_BASELINE FILE_BUCKET_COUNTS; do
+    for hostile in $'bad\nline' $'bad\tfield' $'bad\033escape'; do
+      # shellcheck disable=SC2329 # report_query_stdin invokes this callback indirectly.
+      readonly_query_stdin() { printf '%s' "$hostile"; }
+      AUDIT_EVIDENCE_FAILURES=0
+      output_file="$(mktemp "${TMPDIR:-/tmp}/buildingos-readonly-audit-simulator.XXXXXX")"
+      report_query_stdin "$key" <<'SQL' > "$output_file"
+BEGIN READ ONLY;
+SELECT 'simulated';
+COMMIT;
+SQL
+      output="$(< "$output_file")"
+      rm -f "$output_file"
+      [[ "$output" == "$key=UNKNOWN" ]]
+      [[ "$AUDIT_EVIDENCE_FAILURES" -eq 1 ]]
+    done
+  done
+}
+
+run_report_aggregate_rejects_delimiter_collisions() {
+  # shellcheck disable=SC1090 # AUDITOR is an exact test fixture path selected at runtime.
+  source "$AUDITOR"
+  local query output_file output key rejected auditor_source
+  auditor_source="$(< "$AUDITOR")"
+  [[ "$auditor_source" == *"migration_name ~ '[,[:cntrl:]]'"* \
+    && "$auditor_source" == *"bucket ~ '[,:[:cntrl:]]'"* \
+    && "$auditor_source" == *"string_agg(migration_name, ','"* \
+    && "$auditor_source" == *"string_agg(bucket || ':' || row_count::text, ','"* ]]
+  for key in MIGRATIONS_AFTER_KNOWN_BASELINE FILE_BUCKET_COUNTS; do
+    local -a rejected_values=(comma)
+    [[ "$key" == 'FILE_BUCKET_COUNTS' ]] && rejected_values+=(colon)
+    for rejected in "${rejected_values[@]}"; do
+      # shellcheck disable=SC2329 # report_query_stdin invokes this callback indirectly.
+      readonly_query_stdin() {
+        query="$(< /dev/stdin)"
+        case "$key:$rejected" in
+          MIGRATIONS_AFTER_KNOWN_BASELINE:comma)
+            [[ "$query" == *"migration_name ~ '[,[:cntrl:]]'"* ]] || return 1
+            printf 'UNKNOWN'
+            ;;
+          FILE_BUCKET_COUNTS:comma|FILE_BUCKET_COUNTS:colon)
+            [[ "$query" == *"bucket ~ '[,:[:cntrl:]]'"* ]] || return 1
+            printf 'UNKNOWN'
+            ;;
+          *) return 1 ;;
+        esac
+      }
+      AUDIT_EVIDENCE_FAILURES=0
+      output_file="$(mktemp "${TMPDIR:-/tmp}/buildingos-readonly-audit-simulator.XXXXXX")"
+      if [[ "$key" == 'MIGRATIONS_AFTER_KNOWN_BASELINE' ]]; then
+        report_query_stdin "$key" <<'SQL' > "$output_file"
+BEGIN READ ONLY;
+SELECT migration_name ~ '[,[:cntrl:]]' FROM "_prisma_migrations";
+COMMIT;
+SQL
+      else
+        report_query_stdin "$key" <<'SQL' > "$output_file"
+BEGIN READ ONLY;
+SELECT bucket ~ '[,:[:cntrl:]]' FROM "File";
+COMMIT;
+SQL
+      fi
+      output="$(< "$output_file")"
+      rm -f "$output_file"
+      [[ "$output" == "$key=UNKNOWN" ]]
+      [[ "$AUDIT_EVIDENCE_FAILURES" -eq 1 ]]
+    done
+  done
+}
+
 run_db_failure() {
   source "$AUDITOR"
   docker() { return 1; }
@@ -176,9 +250,41 @@ run_runtime_identity_case() {
     [[ "$query" == *'BEGIN READ ONLY;'* && "$query" == *'COMMIT;'* ]] || return 64
     [[ "$query" == *'started_at'* && "$query" == *'finished_at'* && "$query" == *'rolled_back_at'* \
       && "$query" == *'checksum'* && "$query" == *'applied_steps_count'* && "$query" == *'"_prisma_migrations"'* ]] || return 1
+    [[ "$query" == *"CASE WHEN migration_name IS NULL THEN '<NULL>'"* \
+      && "$query" == *"WHEN migration_name ~ '[[:cntrl:]]' THEN '<CONTROL_CHARACTER>'"* \
+      && "$query" == *"CASE WHEN checksum IS NULL THEN '<NULL>'"* \
+      && "$query" == *"WHEN checksum ~ '[[:cntrl:]]' THEN '<CONTROL_CHARACTER>'"* \
+      && "$query" == *'column_name = '\''lastNumber'\'''* \
+      && "$query" == *"column_default = 'CURRENT_TIMESTAMP'"* \
+      && "$query" == *'SELECT count(*) = 2'* \
+      && "$query" == *'count(*) = 6'* \
+      && "$query" == *'count(*) = 3'* \
+      && "$query" == *'column_name = '\''id'\'' AND data_type = '\''text'\'' AND is_nullable = '\''NO'\'' AND column_default IS NULL'* \
+      && "$query" == *'column_name = '\''tenantId'\'' AND data_type = '\''text'\'' AND is_nullable = '\''NO'\'' AND column_default IS NULL'* \
+      && "$query" == *'column_name = '\''year'\'' AND data_type = '\''integer'\'' AND is_nullable = '\''NO'\'' AND column_default IS NULL'* \
+      && "$query" == *'column_name = '\''lastNumber'\'' AND data_type = '\''integer'\'' AND is_nullable = '\''NO'\'' AND column_default = '\''0'\'''* \
+      && "$query" == *'column_name = '\''createdAt'\'' AND data_type = '\''timestamp without time zone'\'' AND datetime_precision = 3 AND is_nullable = '\''NO'\'' AND column_default = '\''CURRENT_TIMESTAMP'\'''* \
+      && "$query" == *'column_name = '\''updatedAt'\'' AND data_type = '\''timestamp without time zone'\'' AND datetime_precision = 3 AND is_nullable = '\''NO'\'' AND column_default IS NULL'* \
+      && "$query" == *'conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = '\''public."ReceiptSequence"'\''::regclass AND attname = '\''id'\'' AND NOT attisdropped)]::smallint[]'* \
+      && "$query" == *'conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = '\''public."ReceiptSequence"'\''::regclass AND attname = '\''tenantId'\'' AND NOT attisdropped)]::smallint[]'* \
+      && "$query" == *'confrelid = '\''public."Tenant"'\''::regclass'* \
+      && "$query" == *'confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = '\''public."Tenant"'\''::regclass AND attname = '\''id'\'' AND NOT attisdropped)]::smallint[]'* \
+      && "$query" == *"confdeltype = 'c' AND confupdtype = 'c'"* \
+      && "$query" == *'i.indkey::text = '\''1'\'''* \
+      && "$query" == *'i.indkey::text = '\''2 3'\'''* \
+      && "$query" == *'i.indkey::text = '\''2'\'''* \
+      && "$query" == *"c.relname = 'ReceiptSequence_pkey' AND i.indisunique"* \
+      && "$query" == *"c.relname = 'ReceiptSequence_tenantId_year_key' AND i.indisunique"* \
+      && "$query" == *"c.relname = 'ReceiptSequence_tenantId_idx' AND NOT i.indisunique"* \
+      && "$query" == *"conname = 'ReceiptSequence_pkey' AND convalidated"* \
+      && "$query" == *"conname = 'ReceiptSequence_tenantId_fkey' AND convalidated"* \
+      && "$query" == *'ReceiptSequence_pkey'* && "$query" == *'ReceiptSequence_tenantId_fkey'* \
+      && "$query" == *'ReceiptSequence_tenantId_year_key'* && "$query" == *'ReceiptSequence_tenantId_idx'* \
+      && "$query" == *'i.indisvalid'* && "$query" == *'i.indisready'* && "$query" == *'i.indislive'* \
+      && "$query" == *'i.indpred IS NULL'* && "$query" == *'i.indexprs IS NULL'* ]] || return 1
     printf 'rows-returned\n' > "$migration_query_seen_file"
     case "$migration_case" in
-      query-failure) printf 'transport-failure\n' > "$migration_query_seen_file"; return 1 ;;
+      query-failure|baseline-query-failure) printf 'transport-failure\n' > "$migration_query_seen_file"; return 1 ;;
       unknown) printf 'unknown-payload\n' > "$migration_query_seen_file"; printf 'UNKNOWN\n' ;;
       replacement) printf '%s' "${migration_rows/$first_migration/migration_replaced}" ;;
       checksum)
@@ -207,6 +313,35 @@ run_runtime_identity_case() {
       zero-normal) printf '%s' "${migration_rows/$'\t1\n'/$'\t0\n'}" ;;
       multiple-steps) printf '%s' "${migration_rows/$'\t1\n'/$'\t2\n'}" ;;
       malformed-steps) printf '%s' "${migration_rows/$'\t1\n'/$'\t01x\n'}" ;;
+      control-name-tab|control-name-newline|control-name-escape|control-checksum-tab|control-checksum-newline|control-checksum-escape)
+        local control_name control_hash control_value
+        control_name="$first_migration"
+        control_hash="${migration_rows#*$'\t'}"; control_hash="${control_hash%%$'\t'*}"
+        case "$migration_case" in
+          control-name-tab) control_name=$'bad\tname' ;;
+          control-name-newline) control_name=$'bad\nname' ;;
+          control-name-escape) control_name=$'bad\033name' ;;
+          control-checksum-tab) control_value=$'bad\tchecksum' ;;
+          control-checksum-newline) control_value=$'bad\nchecksum' ;;
+          control-checksum-escape) control_value=$'bad\033checksum' ;;
+          *) control_value="$control_hash" ;;
+        esac
+        if [[ "$migration_case" == control-name-* ]]; then
+          control_name='<CONTROL_CHARACTER>'
+          control_value="$control_hash"
+        else
+          control_value='<CONTROL_CHARACTER>'
+        fi
+        printf '%s\t%s\t1\t1\t0\t1\n' "$control_name" "$control_value"
+        printf '%s' "${migration_rows#*$'\n'}"
+        ;;
+      baseline-non-ok)
+        local baseline_row baseline_name baseline_hash
+        baseline_row="$(printf '%s' "$migration_rows" | grep '^20260719000000_add_receipt_sequence')"
+        baseline_name="${baseline_row%%$'\t'*}"
+        baseline_hash="${baseline_row#*$'\t'}"; baseline_hash="${baseline_hash%%$'\t'*}"
+        printf '%s' "${migration_rows/$baseline_name$'\t'$baseline_hash$'\t1\t1\t0\t0'/$baseline_name$'\t'$baseline_hash$'\t1\t1\t0\tBASELINE_FAIL'}"
+        ;;
       exception-checksum|exception-multiple-steps)
         local exception_row exception_name exception_hash
         exception_row="$(printf '%s' "$migration_rows" | grep '^20260719000000_add_receipt_sequence')"
@@ -277,7 +412,7 @@ SQL
   if [[ "$checkout_sha" != "$api_sha" && "$api_sha" == "$web_sha" ]]; then
     local expected_set_status='NOT_EVALUATED'
     if [[ "$case_name" != unproven-split && "$history_count" == 107 && "$active_count" == 107 && "$failed_count" == 0 ]]; then
-      [[ "$migration_case" == valid || "$migration_case" == missing-tree ]] && expected_set_status='PASS' || expected_set_status='UNKNOWN'
+      [[ "$migration_case" == valid || "$migration_case" == missing-tree || "$migration_case" == baseline-ok ]] && expected_set_status='PASS' || expected_set_status='UNKNOWN'
     fi
     if [[ "$output" != *"DATABASE_MIGRATION_SET=$expected_set_status"* ]]; then
       printf 'FAIL: runtime identity case %s expected DATABASE_MIGRATION_SET=%s; actual report:\n%s\n' \
@@ -293,12 +428,28 @@ SQL
       failures=$((failures + 1))
     fi
   fi
-  if [[ "$case_name" == set-query-failure && "$(< "$migration_query_seen_file")" != transport-failure ]]; then
-    printf 'FAIL: query-failure fixture did not exercise transport failure\n' >&2
-    failures=$((failures + 1))
+  if [[ "$case_name" == set-query-failure ]]; then
+    if [[ ! -f "$migration_query_seen_file" || "$(< "$migration_query_seen_file")" != transport-failure ]]; then
+      printf 'FAIL: query-failure fixture did not exercise transport failure\n' >&2
+      failures=$((failures + 1))
+    fi
+    if [[ "$AUDIT_QUERY_FAILURES" -ne 1 ]]; then
+      printf 'FAIL: query transport failure was not counted\n' >&2
+      failures=$((failures + 1))
+    fi
   fi
-  if [[ "$case_name" == set-query-failure && "$AUDIT_QUERY_FAILURES" -ne 1 ]]; then
-    printf 'FAIL: query transport failure was not counted\n' >&2
+  if [[ "$migration_case" == baseline-query-failure ]]; then
+    if [[ ! -f "$migration_query_seen_file" || "$(< "$migration_query_seen_file")" != transport-failure ]]; then
+      printf 'FAIL: baseline query-failure fixture did not exercise transport failure\n' >&2
+      failures=$((failures + 1))
+    fi
+    if [[ "$AUDIT_QUERY_FAILURES" -ne 1 ]]; then
+      printf 'FAIL: baseline query transport failure was not counted\n' >&2
+      failures=$((failures + 1))
+    fi
+  fi
+  if [[ "$migration_case" == baseline-non-ok && ( "$output" != *'DATABASE_MIGRATION_SET=UNKNOWN'* || "$output" != *'RUNTIME_IDENTITY=UNKNOWN'* || "$AUDIT_QUERY_FAILURES" -ne 0 ) ]]; then
+    printf 'FAIL: non-OK ReceiptSequence baseline was not distinguished from query failure and rejected\n' >&2
     failures=$((failures + 1))
   fi
   if [[ "$migration_case" == unknown && "$(< "$migration_query_seen_file")" != unknown-payload ]]; then
@@ -367,6 +518,15 @@ run_runtime_identity_split_rejections() {
   if ! (run_runtime_identity_case set-malformed-steps "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 malformed-steps); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case set-exception-checksum "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 exception-checksum); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case set-exception-multiple-steps "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 exception-multiple-steps); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-exception-zero-baseline-ok "$checkout" "$revision" "$revision" RECOVERED_SPLIT "$revision" 107 107 0 baseline-ok); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-exception-zero-baseline-non-ok "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 baseline-non-ok); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-exception-zero-baseline-query-failure "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 baseline-query-failure); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-control-name-tab "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 control-name-tab); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-control-name-newline "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 control-name-newline); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-control-name-escape "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 control-name-escape); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-control-checksum-tab "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 control-checksum-tab); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-control-checksum-newline "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 control-checksum-newline); then failures=$((failures + 1)); fi
+  if ! (run_runtime_identity_case set-control-checksum-escape "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 control-checksum-escape); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case set-missing-runtime-tree "$checkout" "$revision" "$revision" RECOVERED_SPLIT "$revision" 107 107 0 missing-tree); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case set-query-unknown "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 unknown); then failures=$((failures + 1)); fi
   if ! (run_runtime_identity_case set-query-failure "$checkout" "$revision" "$revision" UNKNOWN UNKNOWN 107 107 0 query-failure); then failures=$((failures + 1)); fi
@@ -407,6 +567,8 @@ run_runtime_identity_suite() {
 (run_readyz_degraded)
 (run_s3_incomplete)
 (run_db_failure)
+(run_report_query_rejects_control_characters)
+(run_report_aggregate_rejects_delimiter_collisions)
 (run_db_migration_count_capture)
 (run_runtime_identity_suite)
 
