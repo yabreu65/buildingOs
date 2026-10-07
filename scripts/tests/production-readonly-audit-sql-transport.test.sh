@@ -42,7 +42,7 @@ SELECT CASE WHEN count(*) = 6 THEN 'YES' ELSE 'NO' END
        || 'READY' || 'PENDING' || 'FAILED'
        || 'SUBMITTED' || 'APPROVED' || 'RECONCILED' || 'RECEIPT_GENERATED'
 FROM information_schema.columns
-WHERE table_schema = 'public' AND table_name = 'Payment'
+WHERE table_schema = 'public' AND table_name = 'Payment';
 COMMIT;
 SQL
 
@@ -112,6 +112,8 @@ assert_rejected_before_docker 'literal-only transaction spoof' $'SELECT \'BEGIN 
 assert_rejected_before_docker 'internal ROLLBACK statement' $'BEGIN READ ONLY;\nSELECT 1;\nROLLBACK;\nCOMMIT;\n'
 assert_rejected_before_docker 'internal COMMIT statement' $'BEGIN READ ONLY;\nSELECT 1;\nCOMMIT;\nCOMMIT;\n'
 assert_rejected_before_docker 'multiple SELECT statements' $'BEGIN READ ONLY;\nSELECT 1;\nSELECT 2;\nCOMMIT;\n'
+assert_rejected_before_docker 'SELECT without terminating semicolon' $'BEGIN READ ONLY;\nSELECT 1\nCOMMIT;\n'
+assert_rejected_before_docker 'WITH query without terminating semicolon' $'BEGIN READ ONLY;\nWITH rows AS (SELECT 1)\nSELECT * FROM rows\nCOMMIT;\n'
 assert_rejected_before_docker 'block-comment transaction spoof' $'/* BEGIN READ ONLY; */\nSELECT 1;\n/* COMMIT; */\n'
 assert_rejected_before_docker 'trailing SQL statement' $'BEGIN READ ONLY;\nSELECT 1;\nCOMMIT;\nSELECT 2;\n'
 assert_rejected_before_docker 'trailing SQL comment' $'BEGIN READ ONLY;\nSELECT 1;\nCOMMIT;\n-- trailing comment\n'

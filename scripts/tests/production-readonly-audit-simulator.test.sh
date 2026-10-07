@@ -276,8 +276,9 @@ run_runtime_identity_case() {
       && "$query" == *"c.relname = 'ReceiptSequence_pkey' AND i.indisunique"* \
       && "$query" == *"c.relname = 'ReceiptSequence_tenantId_year_key' AND i.indisunique"* \
       && "$query" == *"c.relname = 'ReceiptSequence_tenantId_idx' AND NOT i.indisunique"* \
-      && "$query" == *"conname = 'ReceiptSequence_pkey' AND convalidated"* \
-      && "$query" == *"conname = 'ReceiptSequence_tenantId_fkey' AND convalidated"* \
+      && "$query" == *"conname = 'ReceiptSequence_pkey' AND convalidated"*'AND NOT condeferrable AND NOT condeferred'* \
+      && "$query" == *"conname = 'ReceiptSequence_tenantId_fkey' AND convalidated"*'AND NOT condeferrable AND NOT condeferred'* \
+      && "$query" == *"conname = 'ReceiptSequence_tenantId_fkey' AND convalidated"*"confmatchtype = 's'"* \
       && "$query" == *'ReceiptSequence_pkey'* && "$query" == *'ReceiptSequence_tenantId_fkey'* \
       && "$query" == *'ReceiptSequence_tenantId_year_key'* && "$query" == *'ReceiptSequence_tenantId_idx'* \
       && "$query" == *'i.indisvalid'* && "$query" == *'i.indisready'* && "$query" == *'i.indislive'* \

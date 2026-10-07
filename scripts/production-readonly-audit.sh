@@ -222,7 +222,7 @@ storage_backend_from_host() {
 readonly_query_body_is_safe() {
   local body="$1"
   local length="${#body}"
-  local index=0 char next token first_token='' case_depth=0
+  local index=0 char next token first_token='' case_depth=0 statement_terminated=false
 
   while (( index < length )); do
     char="${body:index:1}"
@@ -263,6 +263,7 @@ readonly_query_body_is_safe() {
         index=$((index + 1))
         ;;
       ';')
+        statement_terminated=true
         index=$((index + 1))
         while (( index < length )); do
           char="${body:index:1}"
@@ -313,6 +314,7 @@ readonly_query_body_is_safe() {
     esac
   done
 
+  [[ "$statement_terminated" == true ]] || return 1
   case "$first_token" in
     [Ss][Ee][Ll][Ee][Cc][Tt]|[Ww][Ii][Tt][Hh]) return 0 ;;
     *) return 1 ;;
@@ -570,6 +572,7 @@ WITH receipt_sequence_baseline AS (
     AND (
       SELECT count(*) = 1 AND bool_and(
         conname = 'ReceiptSequence_pkey' AND convalidated
+        AND NOT condeferrable AND NOT condeferred
         AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."ReceiptSequence"'::regclass AND attname = 'id' AND NOT attisdropped)]::smallint[]
       )
       FROM pg_constraint
@@ -578,8 +581,10 @@ WITH receipt_sequence_baseline AS (
     AND (
       SELECT count(*) = 1 AND bool_and(
         conname = 'ReceiptSequence_tenantId_fkey' AND convalidated
+        AND NOT condeferrable AND NOT condeferred
         AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."ReceiptSequence"'::regclass AND attname = 'tenantId' AND NOT attisdropped)]::smallint[]
         AND confrelid = 'public."Tenant"'::regclass
+        AND confmatchtype = 's'
         AND confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."Tenant"'::regclass AND attname = 'id' AND NOT attisdropped)]::smallint[]
         AND confdeltype = 'c' AND confupdtype = 'c'
       )
