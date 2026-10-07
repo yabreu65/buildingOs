@@ -128,6 +128,7 @@ proven_runtime_evidence_case() {
   local output_file="$TEST_ROOT/recovery-audit-output"
   local runtime_output_file="$TEST_ROOT/runtime-identity-output"
   local runtime_checkout="$TEST_ROOT/runtime-checkout"
+  local migration_rows='' migration_hash migration_name i
   mkdir -m 700 "$runtime_checkout"
   mkdir -m 700 "$runtime_checkout/.git"
   printf '**/.env\n' > "$runtime_checkout/.dockerignore"
@@ -137,8 +138,24 @@ proven_runtime_evidence_case() {
       *'rev-parse HEAD') printf '%s' "$SOURCE_SHA" ;;
       *'status --porcelain --untracked-files=all'*) ;;
       *'ls-files --others --ignored'*) ;;
+      *'ls-tree -r --name-only'*)
+        for i in $(seq 1 107); do printf 'apps/api/prisma/migrations/migration_%03d/migration.sql\n' "$i"; done
+        ;;
+      *'show '*':apps/api/prisma/migrations/'*) printf 'runtime migration\n' ;;
       *) return 1 ;;
     esac
+  }
+  migration_hash="$(printf 'runtime migration\n' | sha256sum | awk '{print $1}')"
+  for i in $(seq 1 107); do
+    migration_name="migration_$(printf '%03d' "$i")"
+    migration_rows+="$migration_name"$'\t'"$migration_hash"$'\t1\t1\t0\n'
+  done
+  # shellcheck disable=SC2329 # The sourced runtime verifier invokes this query callback indirectly.
+  readonly_query_stdin() {
+    local query
+    query="$(< /dev/stdin)"
+    [[ "$query" == *'BEGIN READ ONLY;'* && "$query" == *'COMMIT;'* && "$query" == *'"_prisma_migrations"'* ]] || return 1
+    printf '%s' "$migration_rows"
   }
   container_revision() {
     case "$1" in

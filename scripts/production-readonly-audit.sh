@@ -305,6 +305,81 @@ public_readyz_status() {
   fi
 }
 
+validate_runtime_migration_set() {
+  local app_dir="$1" runtime_sha="$2" tree_paths path name checksum rows line started finished rolled_back extra without_tabs tab_count query_rc
+  local active=0 expected_count=0 duplicate found
+  local -a paths=() expected_rows=() seen_names=()
+
+  AUDIT_RUNTIME_MIGRATION_SET='UNKNOWN'
+  [[ "$runtime_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  tree_paths="$(git -C "$app_dir" ls-tree -r --name-only "$runtime_sha" -- apps/api/prisma/migrations 2>/dev/null)" || return 1
+  [[ -n "$tree_paths" ]] || return 1
+  while IFS= read -r path; do paths+=("$path"); done <<< "$tree_paths"
+  for path in "${paths[@]}"; do
+    [[ "$path" =~ ^apps/api/prisma/migrations/([A-Za-z0-9][A-Za-z0-9_-]*)/migration\.sql$ ]] || return 1
+    name="${BASH_REMATCH[1]}"
+    for line in "${expected_rows[@]:-}"; do [[ "${line%%|*}" != "$name" ]] || return 1; done
+    checksum="$(git -C "$app_dir" show "$runtime_sha:$path" 2>/dev/null | sha256sum | awk '{print $1}')" || return 1
+    [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || return 1
+    expected_rows+=("$name|$checksum")
+    expected_count=$((expected_count + 1))
+  done
+  [[ "$expected_count" -eq 107 ]] || return 1
+
+  if rows="$(readonly_query_stdin 2>/dev/null <<'SQL'
+BEGIN READ ONLY;
+SELECT COALESCE(migration_name, '<NULL>') || E'\t' || COALESCE(checksum, '<NULL>')
+       || E'\t' || CASE WHEN started_at IS NOT NULL THEN '1' ELSE '0' END
+       || E'\t' || CASE WHEN finished_at IS NOT NULL THEN '1' ELSE '0' END
+       || E'\t' || CASE WHEN rolled_back_at IS NOT NULL THEN '1' ELSE '0' END
+FROM "_prisma_migrations"
+ORDER BY migration_name;
+COMMIT;
+SQL
+)"; then
+    :
+  else
+    query_rc=$?
+    if [[ "$query_rc" -eq 64 ]]; then
+      record_query_failure "$query_rc"
+    else
+      AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
+    fi
+    return 1
+  fi
+  [[ -n "$rows" ]] || return 1
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || return 1
+    without_tabs="${line//$'\t'/}"
+    tab_count=$((${#line} - ${#without_tabs}))
+    [[ "$tab_count" -eq 4 && "$line" != $'\t'* && "$line" != *$'\t' && "$line" != *$'\t\t'* ]] || return 1
+    IFS=$'\t' read -r name checksum started finished rolled_back extra <<< "$line"
+    [[ -n "$name" && -n "$checksum" && -z "${extra:-}" ]] || return 1
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ && "$checksum" =~ ^[0-9a-f]{64}$ ]] || return 1
+    [[ "$started" == 1 && ( ( "$finished" == 1 && "$rolled_back" == 0 ) || ( "$finished" == 0 && "$rolled_back" == 1 ) ) ]] || return 1
+    duplicate=false
+    for line in "${seen_names[@]:-}"; do [[ "$line" != "$name" ]] || duplicate=true; done
+    [[ "$duplicate" == false ]] || return 1
+    seen_names+=("$name")
+    if [[ "$finished" == 1 ]]; then
+      found=false
+      for line in "${expected_rows[@]:-}"; do
+        if [[ "$line" == "$name|$checksum" ]]; then found=true; break; fi
+      done
+      [[ "$found" == true ]] || return 1
+      active=$((active + 1))
+    fi
+  done <<< "$rows"
+  [[ "$active" -eq 107 ]] || return 1
+  for line in "${expected_rows[@]:-}"; do
+    name="${line%%|*}"
+    found=false
+    for checksum in "${seen_names[@]}"; do [[ "$checksum" != "$name" ]] || found=true; done
+    [[ "$found" == true ]] || return 1
+  done
+  AUDIT_RUNTIME_MIGRATION_SET='PASS'
+}
+
 report_runtime_identity() {
   local app_dir="${1:-$APP_DIR}"
   local selector="${2:-$CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR}"
@@ -317,6 +392,7 @@ report_runtime_identity() {
   local status_output from_sha migration_count
 
   RUNTIME_APP_SHA='UNKNOWN'
+  AUDIT_RUNTIME_MIGRATION_SET='NOT_EVALUATED'
   if [[ -d "$app_dir/.git" ]]; then
     production_sha="$(git -C "$app_dir" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
     if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]]; then
@@ -352,14 +428,17 @@ report_runtime_identity() {
         && "$AUDIT_ACTIVE_FINISHED_MIGRATIONS" == '107' \
         && "$AUDIT_FAILED_MIGRATIONS" =~ ^(0|[1-9][0-9]*)$ \
         && "$AUDIT_FAILED_MIGRATIONS" == '0' ]]; then
-        RUNTIME_APP_SHA="$api_revision"
-        identity='RECOVERED_SPLIT'
+        if validate_runtime_migration_set "$app_dir" "$api_revision"; then
+          RUNTIME_APP_SHA="$api_revision"
+          identity='RECOVERED_SPLIT'
+        fi
       fi
     fi
   fi
 
   printf 'RUNTIME_APP_SHA=%s\n' "$RUNTIME_APP_SHA"
   printf 'RUNTIME_IDENTITY=%s\n' "$identity"
+  printf 'RUNTIME_MIGRATION_SET=%s\n' "${AUDIT_RUNTIME_MIGRATION_SET:-NOT_EVALUATED}"
   if [[ "$identity" == 'UNKNOWN' ]]; then
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
   fi
