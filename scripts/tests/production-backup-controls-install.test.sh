@@ -4,7 +4,8 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly ROOT_DIR
 readonly INSTALLER="$ROOT_DIR/scripts/install-production-backup-controls.sh"
-readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-backup-controls.XXXXXX")"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-backup-controls.XXXXXX")"
+readonly TEST_ROOT
 readonly SOURCE_ROOT="$TEST_ROOT/source"
 readonly DEST_ROOT="$TEST_ROOT/dest"
 readonly LEGACY_BASE_SHA='26f9f4c44d20aded9639fe473c56850122fc06f6'
@@ -20,8 +21,22 @@ skip_test() { SKIP_COUNT=$((SKIP_COUNT + 1)); printf 'skip %s - %s\n' "$SKIP_COU
 fail_test() { FAIL_COUNT=$((FAIL_COUNT + 1)); printf 'not ok %s - %s\n' "$FAIL_COUNT" "$1" >&2; }
 assert_success() { local name="$1"; shift; if "$@" >"$TEST_ROOT/output" 2>&1; then pass "$name"; else fail_test "$name"; command cat "$TEST_ROOT/output" >&2; fi; }
 assert_failure() { local name="$1"; shift; if "$@" >"$TEST_ROOT/output" 2>&1; then fail_test "$name (unexpected success)"; else pass "$name"; fi; }
-assert_equal() { local name="$1" actual="$2" expected="$3"; [[ "$actual" == "$expected" ]] && pass "$name" || fail_test "$name"; }
-assert_contains() { local name="$1" value="$2" file="$3"; grep -Fq -- "$value" "$file" && pass "$name" || fail_test "$name"; }
+assert_equal() {
+  local name="$1" actual="$2" expected="$3"
+  if [[ "$actual" == "$expected" ]]; then
+    pass "$name"
+  else
+    fail_test "$name"
+  fi
+}
+assert_contains() {
+  local name="$1" value="$2" file="$3"
+  if grep -Fq -- "$value" "$file"; then
+    pass "$name"
+  else
+    fail_test "$name"
+  fi
+}
 assert_not_contains() { local name="$1" value="$2" file="$3"; if grep -Fq -- "$value" "$file"; then fail_test "$name"; else pass "$name"; fi; }
 metadata_for() { stat -c '%u:%g:%a' -- "$1" 2>/dev/null || stat -f '%u:%g:%Lp' -- "$1"; }
 
@@ -175,7 +190,11 @@ assert_failure 'isolated test mode cannot target the production root' \
 CHECK_DEST="$TEST_ROOT/check-dest"
 assert_success 'read-only check accepts a valid source release without creating destination' \
   "$INSTALLER" --source-root "$SOURCE_ROOT" --dest-root "$CHECK_DEST" --tooling-source-sha "$CANDIDATE_ONE" --test-mode local-unprivileged --check
-[[ ! -e "$CHECK_DEST" ]] && pass 'read-only check does not create destination paths' || fail_test 'read-only check does not create destination paths'
+if [[ ! -e "$CHECK_DEST" ]]; then
+  pass 'read-only check does not create destination paths'
+else
+  fail_test 'read-only check does not create destination paths'
+fi
 EMPTY_DEST="$TEST_ROOT/empty-dest"
 mkdir -p "$EMPTY_DEST"
 EMPTY_DEST_STATE="$(find "$EMPTY_DEST" -mindepth 1 -print | sort)"
@@ -398,7 +417,11 @@ assert_failure 'post-publish failure restores the previous coherent release' run
 assert_equal 'partial publish restores protected files directories metadata and absence' "$(protected_tree_state)" "$OLD_STATE"
 assert_success 'upgrade publishes the next coherent release' run_install "$CANDIDATE_TWO" --replace-existing
 SNAPSHOT="$(awk -F= '/^ROLLBACK_SNAPSHOT=/{print $2}' "$TEST_ROOT/output")"
-[[ -n "$SNAPSHOT" && -d "$SNAPSHOT" ]] && pass 'upgrade emits a rollback snapshot path' || fail_test 'upgrade emits a rollback snapshot path'
+if [[ -n "$SNAPSHOT" && -d "$SNAPSHOT" ]]; then
+  pass 'upgrade emits a rollback snapshot path'
+else
+  fail_test 'upgrade emits a rollback snapshot path'
+fi
 CORRUPT_SNAPSHOT="${SNAPSHOT}.corrupt"
 cp -a "$SNAPSHOT" "$CORRUPT_SNAPSHOT"
 printf 'corrupt\n' >> "$CORRUPT_SNAPSHOT/launcher"
