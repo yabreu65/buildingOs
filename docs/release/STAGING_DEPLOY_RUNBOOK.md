@@ -1,6 +1,11 @@
 # Staging deployment runbook
 
-The `Deploy main to staging` workflow is intentionally **manual only** (`workflow_dispatch`). It deploys one exact commit already reachable from `origin/main`; there is no `push` trigger.
+The `Deploy main to staging` workflow has two triggers:
+
+- `push` to `main`: automatically deploys the pushed commit (`github.sha`).
+- `workflow_dispatch` from `main`: deploys the supplied exact 40-character SHA, or the dispatch SHA when the input is omitted.
+
+Both paths require the target commit to be reachable from `origin/main` and use the same deployment gates. **Merging to `main` automatically deploys to staging; opening or updating a PR does not.**
 
 ## GitHub Environment `staging`
 
@@ -33,4 +38,4 @@ The runner checks out the trusted workflow commit (`github.sha`) only. Separatel
 
 After success, verify the external record and `git rev-parse HEAD` in the remote checkout. For an application rollback, dispatch a previously known-good SHA through the same gates. Database recovery is a separate approved procedure; Prisma does not provide automatic rollback of applied migrations.
 
-Production is out of scope. Enabling a future `push` to `main` trigger requires a separate reviewed change after manual runs, secret/variable verification, and operational approval.
+Production is out of scope. The `push` to `main` trigger is active; any change to this trigger policy requires a separate reviewed change. Verify staging readiness and required secrets/variables before authorizing a merge that will deploy.
