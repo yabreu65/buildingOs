@@ -424,6 +424,117 @@ Stop on any installation or validation failure. Do not fall back to granting
 passwordless access to `bash`, `sh`, `env`, `systemctl`, Docker, or checkout
 scripts.
 
+## 5B. REPLACE AN INSTALLED BACKUP-CONTROLS BUNDLE
+
+Replacing a recognized installation is a separate, explicitly approved
+operator action. The CI SSH identity described above is authorized only for the
+fixed preflight launcher; it is **not** an installer route. Use a separately
+authorized operator/root execution path, and obtain separate approval before
+any systemd daemon reload. The installer itself does not invoke the preflight,
+reload systemd, or restart services.
+
+Before replacement, select the exact tooling commit SHA that was explicitly
+approved. It may differ from both the deployed production checkout `HEAD` and
+the running application SHA. Leave the deployed checkout unchanged: fetch the
+remote ref, verify the approved commit exists and is an ancestor of
+`origin/main`, then use a detached temporary worktree at that exact commit as
+the installer source. Do not require or alter the deployed checkout `HEAD`.
+Review the selected commit and replacement scope before proceeding. These
+commands document the procedure only; this repository change does not execute
+them.
+
+Create and verify the temporary source worktree, then run the read-only check
+without `--replace-existing`:
+
+```bash
+set -Eeuo pipefail
+readonly app_dir='/opt/pawtech/apps/buildingos/buildingos-app'
+readonly approved_tooling_sha='<exact-explicitly-approved-40-character-commit-sha>'
+[[ "$approved_tooling_sha" =~ ^[0-9a-f]{40}$ ]]
+active_checkout_head="$(git -C "$app_dir" rev-parse HEAD)"
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+git -C "$app_dir" fetch --no-tags origin main
+git -C "$app_dir" rev-parse --verify "$approved_tooling_sha^{commit}" >/dev/null
+git -C "$app_dir" merge-base --is-ancestor "$approved_tooling_sha" origin/main
+source_tree="$(mktemp -d /tmp/buildingos-backup-controls-source.XXXXXX)"
+rmdir -- "$source_tree"
+git -C "$app_dir" worktree add --detach "$source_tree" "$approved_tooling_sha"
+test "$(git -C "$source_tree" rev-parse HEAD)" = "$approved_tooling_sha"
+test -z "$(git -C "$source_tree" status --porcelain --untracked-files=all)"
+test "$(git -C "$app_dir" rev-parse HEAD)" = "$active_checkout_head"
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+sudo "$source_tree/scripts/install-production-backup-controls.sh" \
+  --source-root "$source_tree" --dest-root / \
+  --tooling-source-sha "$approved_tooling_sha" --check
+test "$(git -C "$app_dir" rev-parse HEAD)" = "$active_checkout_head"
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+```
+
+Record the exact `source_tree` path and preserve that worktree through the
+separately approved apply or rollback and verification. It has no automatic
+cleanup on shell exit. If continuing in a new shell, rebind the recorded path
+and revalidate it before use; also capture and revalidate the active checkout
+HEAD and clean status. Do not substitute a newly resolved or different source
+path.
+
+For example, in a new shell, rebind and verify the exact recorded source path
+and confirm the active checkout remains unchanged:
+
+```bash
+readonly app_dir='/opt/pawtech/apps/buildingos/buildingos-app'
+readonly approved_tooling_sha='<same-exact-approved-40-character-commit-sha>'
+readonly active_checkout_head='<recorded-active-production-checkout-HEAD>'
+readonly source_tree='<exact-recorded-/tmp/buildingos-backup-controls-source-path>'
+test "$(git -C "$source_tree" rev-parse HEAD)" = "$approved_tooling_sha"
+test -z "$(git -C "$source_tree" status --porcelain --untracked-files=all)"
+test "$(git -C "$app_dir" rev-parse HEAD)" = "$active_checkout_head"
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+```
+
+Proceed only when the check passes and the destination is the intended,
+validated recognized layout. With the same verified temporary source worktree
+and approved SHA, an authorized operator may explicitly apply the replacement:
+
+```bash
+sudo "$source_tree/scripts/install-production-backup-controls.sh" \
+  --source-root "$source_tree" --dest-root / \
+  --tooling-source-sha "$approved_tooling_sha" --apply --replace-existing
+test "$(git -C "$app_dir" rev-parse HEAD)" = "$active_checkout_head"
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+```
+
+`--apply --replace-existing` replaces the **full managed bundle**: the
+privileged launcher, preflight control and helper, manifest, Object Storage
+backup executable, both sudoers files, and the Object Storage service and timer
+files. It validates the recognized current layout, creates a rollback snapshot,
+then prepares, stages, validates, publishes, and post-validates the replacement.
+The installer publishes the manifest last. On success, record the exact
+`ROLLBACK_SNAPSHOT` path printed by the installer as change evidence. Do not
+infer or substitute a snapshot path.
+
+If an approved rollback is needed, use that exact snapshot path with explicit
+rollback; rollback does not use `--replace-existing`:
+
+```bash
+sudo "$source_tree/scripts/install-production-backup-controls.sh" \
+  --dest-root / --apply --rollback '<exact-ROLLBACK_SNAPSHOT-path>'
+test "$(git -C "$app_dir" rev-parse HEAD)" = "$active_checkout_head"
+test -z "$(git -C "$app_dir" status --porcelain --untracked-files=all)"
+```
+
+Stop on any check, apply, or rollback failure and preserve its output and
+snapshot for the authorized operator. After all approved work and verification
+are complete, remove the temporary worktree without force:
+
+```bash
+git -C "$app_dir" worktree remove "$source_tree"
+```
+
+If removal fails or the source worktree is dirty, do not force-remove it; retain
+its recorded path and inspect/preserve it for the authorized operator. A systemd
+daemon reload, if separately approved and needed, is a distinct operation
+outside this installer procedure.
+
 ## 6. DEPLOY APPROVED SHA
 
 Preconditions: normal production deploy checklist, database backup preflight,

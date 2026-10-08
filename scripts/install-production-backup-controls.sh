@@ -29,6 +29,7 @@ SOURCE_ROOT=''
 DEST_ROOT=''
 TOOLING_SOURCE_SHA=''
 ACTION='check'
+REPLACE_EXISTING=false
 ROLLBACK_SNAPSHOT=''
 TEST_MODE=''
 TEST_FAIL_AFTER_PUBLISH=false
@@ -97,7 +98,7 @@ clear_staged_path() {
 }
 
 usage() {
-  printf '%s\n' "Usage: ${0##*/} --source-root <path> --dest-root <path> --tooling-source-sha <sha> [--check|--apply] [--test-mode local-unprivileged]"
+  printf '%s\n' "Usage: ${0##*/} --source-root <path> --dest-root <path> --tooling-source-sha <sha> [--check|--apply] [--replace-existing] [--test-mode local-unprivileged]"
   printf '%s\n' "       ${0##*/} --dest-root <path> --rollback <snapshot> --apply [--test-mode local-unprivileged]"
 }
 
@@ -810,6 +811,7 @@ parse_args() {
       --test-fail-during-stage-release) TEST_FAIL_DURING_STAGE_RELEASE=true; shift ;;
       --check) ACTION='check'; shift ;;
       --apply) ACTION='apply'; shift ;;
+      --replace-existing) REPLACE_EXISTING=true; shift ;;
       --rollback) ROLLBACK_SNAPSHOT="${2:-}"; shift 2 ;;
       --test-mode) TEST_MODE="${2:-}"; shift 2 ;;
       --test-fail-after-publish) TEST_FAIL_AFTER_PUBLISH=true; shift ;;
@@ -827,8 +829,12 @@ parse_args() {
     [[ "$EXPECTED_UID:$EXPECTED_GID" == '0:0' ]] || fail 'production owner policy is root:root'
     [[ "$ACTION" != apply || "$(id -u)" -eq 0 ]] || fail 'production apply requires root'
   fi
+  if [[ "$REPLACE_EXISTING" == true ]]; then
+    [[ "$ACTION" == apply ]] || fail '--replace-existing requires --apply'
+  fi
   if [[ -n "$ROLLBACK_SNAPSHOT" ]]; then
     [[ "$ACTION" == apply ]] || fail 'rollback requires --apply'
+    [[ "$REPLACE_EXISTING" == false ]] || fail '--replace-existing cannot be combined with --rollback'
     [[ -z "$SOURCE_ROOT" && -z "$TOOLING_SOURCE_SHA" ]] || fail 'rollback does not accept source release arguments'
     [[ "$TEST_FAIL_AFTER_PUBLISH" == false && "$TEST_FAIL_AFTER_PREPARE_DESTINATION" == false && "$TEST_FAIL_DURING_STAGE_RELEASE" == false && "$TEST_FORCE_CROSS_DEVICE" == false ]] || fail 'test publication flags are not valid for rollback'
   else
@@ -855,6 +861,11 @@ main() {
   if [[ "$ACTION" == check ]]; then
     printf 'CHECK_STATUS=PASS\n'
     return
+  fi
+  if [[ "$EXISTING_LAYOUT" == empty ]]; then
+    [[ "$REPLACE_EXISTING" == false ]] || fail '--replace-existing is only valid for a recognized existing layout'
+  else
+    [[ "$REPLACE_EXISTING" == true ]] || fail 'recognized existing layout requires --replace-existing for --apply'
   fi
   create_snapshot
   TRANSACTION_ACTIVE=true
