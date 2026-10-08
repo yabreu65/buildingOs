@@ -3,6 +3,8 @@ set -Eeuo pipefail
 set +x
 
 readonly DEFAULT_APP_DIR='/opt/pawtech/apps/buildingos/buildingos-app'
+readonly DEFAULT_DEPLOYMENTS_DIR='/opt/pawtech/apps/buildingos/deployments'
+readonly CURRENT_SUCCESSFUL_SELECTOR_NAME='current-successful-deployment.v1'
 readonly POSTGRES_BACKUP_SERVICE='pawtech-postgres-backup.service'
 readonly POSTGRES_BACKUP_TIMER='pawtech-postgres-backup.timer'
 readonly OBJECT_BACKUP_SERVICE='pawtech-buildingos-object-backup.service'
@@ -30,6 +32,9 @@ OBJECT_BACKUP_RECEIPT_FILE="$OBJECT_BACKUP_RECEIPT"
 OBJECT_BACKUP_ACTIVATION_MARKER_FILE="$OBJECT_BACKUP_ACTIVATION_MARKER"
 OBJECT_BACKUP_ACTIVATION_MARKER_STATUS='UNKNOWN'
 OBJECT_BACKUP_TIMER_PHASE=''
+DEPLOYMENTS_DIR="$DEFAULT_DEPLOYMENTS_DIR"
+API_IMAGE_DIGEST='UNKNOWN'
+WEB_IMAGE_DIGEST='UNKNOWN'
 
 if ! declare -F endpoint_identity >/dev/null 2>&1; then
   helper_dir="${BASH_SOURCE[0]%/*}"
@@ -77,6 +82,36 @@ receipt_has_one_line() {
     receipt_line="$line"
   done < "$file"
   [[ "$count" -eq 1 && -n "$receipt_line" ]]
+}
+
+strict_key_value() {
+  local file="$1"
+  local key="$2"
+  awk -F '=' -v key="$key" '
+    /^[A-Za-z_][A-Za-z0-9_]*=/ {
+      name=$1
+      value=substr($0, length(name) + 2)
+      if (name in seen || value == "") invalid=1
+      seen[name]=1
+      if (name == key) { count++; selected=value }
+      next
+    }
+    { invalid=1 }
+    END { if (invalid || count != 1) exit 1; print selected }
+  ' "$file"
+}
+
+private_canonical_file() {
+  local file="$1"
+  local root="$2"
+  local file_owner_name file_group_name root_owner root_group
+  [[ "$file" == "$root/"* && "$file" != *//* && "$file" != */../* && "$file" != */./* ]] || return 1
+  file_is_regular_non_symlink "$file" || return 1
+  file_owner_name="$(file_owner "$file" 2>/dev/null)" || return 1
+  file_group_name="$(file_group "$file" 2>/dev/null)" || return 1
+  root_owner="$(file_owner "$root" 2>/dev/null)" || return 1
+  root_group="$(file_group "$root" 2>/dev/null)" || return 1
+  [[ "$(file_mode "$file" 2>/dev/null)" == 600 && "$file_owner_name" == "$root_owner" && "$file_group_name" == "$root_group" ]]
 }
 
 receipt_json_is_valid() {
@@ -430,6 +465,42 @@ systemd_daily_calendar_present() {
   [[ "$calendar" == daily || "$calendar" == *'*-*-*'* ]]
 }
 
+recovered_split_is_proven() {
+  local selector="$DEPLOYMENTS_DIR/$CURRENT_SUCCESSFUL_SELECTOR_NAME"
+  local selector_format record_path selector_target record_status record_target from_sha migration_count record_api_digest record_web_digest
+  RECOVERED_SPLIT_FAILURE_REASON='deployments-directory'
+  [[ -d "$DEPLOYMENTS_DIR" && ! -L "$DEPLOYMENTS_DIR" ]] || return 1
+  RECOVERED_SPLIT_FAILURE_REASON='selector-path'
+  [[ "$DEPLOYMENTS_DIR" == /* && "$DEPLOYMENTS_DIR" != *'/../'* && "$DEPLOYMENTS_DIR" != */.. && "$DEPLOYMENTS_DIR" != *'/./'* && "$DEPLOYMENTS_DIR" != */. && "$DEPLOYMENTS_DIR" != *//* ]] || return 1
+  RECOVERED_SPLIT_FAILURE_REASON='selector-file'
+  file_is_regular_non_symlink "$selector" || return 1
+  RECOVERED_SPLIT_FAILURE_REASON='selector-permissions'
+  private_canonical_file "$selector" "$DEPLOYMENTS_DIR" || return 1
+  RECOVERED_SPLIT_FAILURE_REASON='selector-binding'
+  selector_format="$(strict_key_value "$selector" format)" || return 1
+  record_path="$(strict_key_value "$selector" record_path)" || return 1
+  selector_target="$(strict_key_value "$selector" target_sha)" || return 1
+  [[ "$selector_format" == buildingos-current-successful-deployment/v1 && "$selector_target" == "$EXPECTED_RUNTIME_SHA" ]] || return 1
+  RECOVERED_SPLIT_FAILURE_REASON='selector-path'
+  [[ "${record_path%/*}" == "$DEPLOYMENTS_DIR" && "$record_path" != *'/../'* && "$record_path" != */.. && "$record_path" != *'/./'* && "$record_path" != */. && "$record_path" != *//* ]] || return 1
+  RECOVERED_SPLIT_FAILURE_REASON='record-file'
+  private_canonical_file "$record_path" "$DEPLOYMENTS_DIR" || return 1
+  RECOVERED_SPLIT_FAILURE_REASON='record-binding'
+  record_status="$(strict_key_value "$record_path" status)" || return 1
+  from_sha="$(strict_key_value "$record_path" from_sha)" || return 1
+  record_target="$(strict_key_value "$record_path" target_sha)" || return 1
+  migration_count="$(strict_key_value "$record_path" migration_count)" || return 1
+  record_api_digest="$(strict_key_value "$record_path" api_digest)" || return 1
+  record_web_digest="$(strict_key_value "$record_path" web_digest)" || return 1
+  [[ "$record_status" == SUCCESS && "$record_target" == "$EXPECTED_RUNTIME_SHA" && "$from_sha" == "$EXPECTED_CHECKOUT_SHA" ]] || return 1
+  [[ "$migration_count" == 107 ]] || return 1
+  RECOVERED_SPLIT_FAILURE_REASON='image-binding'
+  [[ "$record_api_digest" =~ ^sha256:[0-9a-f]{64}$ && "$record_web_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ "$API_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$WEB_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ "$record_api_digest" == "$API_IMAGE_DIGEST" && "$record_web_digest" == "$WEB_IMAGE_DIGEST" ]] || return 1
+  [[ "$API_REVISION_VALUE" == "$EXPECTED_RUNTIME_SHA" && "$WEB_REVISION_VALUE" == "$EXPECTED_RUNTIME_SHA" ]]
+}
+
 inspect_runtime() {
   local production_sha='UNKNOWN' api_revision='UNKNOWN' web_revision='UNKNOWN' checkout_status='DIRTY'
   local api_image web_image status_output
@@ -444,18 +515,30 @@ inspect_runtime() {
   if command -v docker >/dev/null 2>&1; then
     api_image="$(docker inspect --type container --format '{{.Image}}' buildingos-api 2>/dev/null || true)"
     web_image="$(docker inspect --type container --format '{{.Image}}' buildingos-web 2>/dev/null || true)"
-    [[ "$api_image" =~ ^sha256:[0-9a-f]{64}$ ]] && api_revision="$(docker image inspect "$api_image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || printf 'UNKNOWN')"
-    [[ "$web_image" =~ ^sha256:[0-9a-f]{64}$ ]] && web_revision="$(docker image inspect "$web_image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || printf 'UNKNOWN')"
+    [[ "$api_image" =~ ^sha256:[0-9a-f]{64}$ ]] && API_IMAGE_DIGEST="$api_image"
+    [[ "$web_image" =~ ^sha256:[0-9a-f]{64}$ ]] && WEB_IMAGE_DIGEST="$web_image"
+    [[ "$API_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] && api_revision="$(docker image inspect "$API_IMAGE_DIGEST" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || printf 'UNKNOWN')"
+    [[ "$WEB_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] && web_revision="$(docker image inspect "$WEB_IMAGE_DIGEST" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || printf 'UNKNOWN')"
   fi
-  printf 'PRODUCTION_RUNTIME_SHA=%s\n' "$(safe_output "$production_sha")"
+  API_REVISION_VALUE="$api_revision"
+  WEB_REVISION_VALUE="$web_revision"
+  printf 'PRODUCTION_CHECKOUT_SHA=%s\n' "$(safe_output "$production_sha")"
   printf 'API_REVISION=%s\n' "$(safe_output "$api_revision")"
   printf 'WEB_REVISION=%s\n' "$(safe_output "$web_revision")"
   printf 'PRODUCTION_CHECKOUT_STATUS=%s\n' "$checkout_status"
-  if [[ "$production_sha" == "$EXPECTED_RUNTIME_SHA" && "$api_revision" == "$EXPECTED_RUNTIME_SHA" && "$web_revision" == "$EXPECTED_RUNTIME_SHA" && "$checkout_status" == CLEAN ]]; then
-    printf 'RUNTIME_IDENTITY=CONSISTENT\n'
+  if [[ "$production_sha" == "$EXPECTED_CHECKOUT_SHA" && "$api_revision" == "$EXPECTED_RUNTIME_SHA" && "$web_revision" == "$EXPECTED_RUNTIME_SHA" && "$checkout_status" == CLEAN ]]; then
+    if [[ "$EXPECTED_CHECKOUT_SHA" == "$EXPECTED_RUNTIME_SHA" ]]; then
+      printf 'RUNTIME_IDENTITY=CONSISTENT\n'
+    elif recovered_split_is_proven; then
+      printf 'RUNTIME_IDENTITY=RECOVERED_SPLIT\n'
+    else
+      printf 'RUNTIME_IDENTITY=INCONSISTENT\n'
+      printf 'RUNTIME_IDENTITY_FAILURE=%s\n' "$RECOVERED_SPLIT_FAILURE_REASON"
+      fail_check 'production checkout/runtime split lacks the required official SUCCESS proof'
+    fi
   else
     printf 'RUNTIME_IDENTITY=INCONSISTENT\n'
-    fail_check 'production runtime identity is not the expected clean, matching revision'
+    fail_check 'production runtime identity is not the expected clean checkout and matching runtime revisions'
   fi
 }
 
@@ -863,11 +946,11 @@ inspect_concurrency() {
 main() {
   local command_name missing_dependency=false
   local required_commands=(awk bash cmp date docker git stat systemctl)
-  local runtime_app_dir
 
-  [[ $# -eq 1 ]] || { printf 'Usage: %s <expected_runtime_sha>\n' "${0##*/}" >&2; return 64; }
-  [[ "$1" =~ ^[0-9a-f]{40}$ ]] || { printf 'ERROR: expected runtime SHA is not exactly 40 lowercase hexadecimal characters\n' >&2; return 1; }
-  readonly EXPECTED_RUNTIME_SHA="$1"
+  [[ $# -eq 2 ]] || { printf 'Usage: %s <expected_checkout_sha> <expected_runtime_sha>\n' "${0##*/}" >&2; return 64; }
+  [[ "$1" =~ ^[0-9a-f]{40}$ && "$2" =~ ^[0-9a-f]{40}$ ]] || { printf 'ERROR: expected checkout and runtime SHAs must be exactly 40 lowercase hexadecimal characters\n' >&2; return 1; }
+  readonly EXPECTED_CHECKOUT_SHA="$1"
+  readonly EXPECTED_RUNTIME_SHA="$2"
 
   OBJECT_BACKUP_ENV_FILE="$DEFAULT_OBJECT_BACKUP_ENV_FILE"
   OBJECT_BACKUP_RCLONE_CONFIG="$DEFAULT_OBJECT_BACKUP_RCLONE_CONFIG"
@@ -879,6 +962,7 @@ main() {
     OBJECT_BACKUP_RCLONE_CONFIG="${PREFLIGHT_RCLONE_CONFIG_FILE:?}"
     OBJECT_BACKUP_RECEIPT_FILE="${PREFLIGHT_RECEIPT_FILE:?}"
     OBJECT_BACKUP_ACTIVATION_MARKER_FILE="${PREFLIGHT_ACTIVATION_MARKER_FILE:?}"
+    DEPLOYMENTS_DIR="${PREFLIGHT_DEPLOYMENTS_DIR:-$DEFAULT_DEPLOYMENTS_DIR}"
   fi
 
   for command_name in "${required_commands[@]}"; do
@@ -888,7 +972,7 @@ main() {
     fi
   done
 
-  printf 'PRODUCTION_BACKUP_PREFLIGHT\nEXPECTED_RUNTIME_SHA=%s\n' "$EXPECTED_RUNTIME_SHA"
+  printf 'PRODUCTION_BACKUP_PREFLIGHT\nEXPECTED_CHECKOUT_SHA=%s\nEXPECTED_RUNTIME_SHA=%s\n' "$EXPECTED_CHECKOUT_SHA" "$EXPECTED_RUNTIME_SHA"
   if [[ "$missing_dependency" == true ]]; then
     printf 'DEPENDENCIES_READY=NO\nPOSTGRES_BACKUP_TOPOLOGY=FAIL\nOBJECT_BACKUP_TOPOLOGY=FAIL\nOBJECT_BACKUP_ENV=FAIL\nBACKUP_CONCURRENCY_SAFE=NO\n'
   else

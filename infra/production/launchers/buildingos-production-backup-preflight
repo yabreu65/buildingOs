@@ -134,10 +134,11 @@ if [ "${BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE:-}" = LOCAL_ISOLATED_ONLY ]; then
   TEST_MODE=true
 fi
 
-[ "$#" -eq 2 ] || fail 'expected tooling source SHA and expected runtime SHA are required'
+[ "$#" -eq 3 ] || fail 'expected tooling source, checkout, and runtime SHAs are required'
 EXPECTED_TOOLING_SOURCE_SHA="$1"
-EXPECTED_RUNTIME_SHA="$2"
-for expected_sha in "$EXPECTED_TOOLING_SOURCE_SHA" "$EXPECTED_RUNTIME_SHA"; do
+EXPECTED_CHECKOUT_SHA="$2"
+EXPECTED_RUNTIME_SHA="$3"
+for expected_sha in "$EXPECTED_TOOLING_SOURCE_SHA" "$EXPECTED_CHECKOUT_SHA" "$EXPECTED_RUNTIME_SHA"; do
   [ "${#expected_sha}" -eq 40 ] || fail 'expected SHA must be exactly 40 lowercase hexadecimal characters'
   case "$expected_sha" in
     *[!0-9a-f]*) fail 'expected SHA must be exactly 40 lowercase hexadecimal characters' ;;
@@ -186,7 +187,7 @@ if [ "$TEST_MODE" = true ]; then
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE=LOCAL_ISOLATED_ONLY \
-    /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$EXPECTED_RUNTIME_SHA" </dev/null
+    /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$EXPECTED_CHECKOUT_SHA" "$EXPECTED_RUNTIME_SHA" </dev/null
 fi
 
 unset BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE BUILDINGOS_PREFLIGHT_LAUNCHER_TEST_ROOT
@@ -197,4 +198,4 @@ exec /usr/bin/env -i \
   LOGNAME=root \
   LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
-  /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$EXPECTED_RUNTIME_SHA" </dev/null
+  /bin/bash --noprofile --norc "$PREFLIGHT_SCRIPT" "$EXPECTED_CHECKOUT_SHA" "$EXPECTED_RUNTIME_SHA" </dev/null
