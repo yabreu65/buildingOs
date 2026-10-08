@@ -22,6 +22,7 @@ assert_success() { local name="$1"; shift; if "$@" >"$TEST_ROOT/output" 2>&1; th
 assert_failure() { local name="$1"; shift; if "$@" >"$TEST_ROOT/output" 2>&1; then fail_test "$name (unexpected success)"; else pass "$name"; fi; }
 assert_equal() { local name="$1" actual="$2" expected="$3"; [[ "$actual" == "$expected" ]] && pass "$name" || fail_test "$name"; }
 assert_contains() { local name="$1" value="$2" file="$3"; grep -Fq -- "$value" "$file" && pass "$name" || fail_test "$name"; }
+assert_not_contains() { local name="$1" value="$2" file="$3"; if grep -Fq -- "$value" "$file"; then fail_test "$name"; else pass "$name"; fi; }
 metadata_for() { stat -c '%u:%g:%a' -- "$1" 2>/dev/null || stat -f '%u:%g:%Lp' -- "$1"; }
 
 has_chown_capability() {
@@ -67,8 +68,14 @@ source_sha() {
   git -c safe.directory="$SOURCE_ROOT" -C "$SOURCE_ROOT" rev-parse HEAD
 }
 
+run_install_at() {
+  local dest_root="$1"
+  shift
+  "$INSTALLER" --source-root "$SOURCE_ROOT" --dest-root "$dest_root" --tooling-source-sha "$1" --test-mode local-unprivileged --apply "${@:2}"
+}
+
 run_install() {
-  "$INSTALLER" --source-root "$SOURCE_ROOT" --dest-root "$DEST_ROOT" --tooling-source-sha "$1" --test-mode local-unprivileged --apply "${@:2}"
+  run_install_at "$DEST_ROOT" "$@"
 }
 
 run_check() {
@@ -169,10 +176,21 @@ CHECK_DEST="$TEST_ROOT/check-dest"
 assert_success 'read-only check accepts a valid source release without creating destination' \
   "$INSTALLER" --source-root "$SOURCE_ROOT" --dest-root "$CHECK_DEST" --tooling-source-sha "$CANDIDATE_ONE" --test-mode local-unprivileged --check
 [[ ! -e "$CHECK_DEST" ]] && pass 'read-only check does not create destination paths' || fail_test 'read-only check does not create destination paths'
+EMPTY_DEST="$TEST_ROOT/empty-dest"
+mkdir -p "$EMPTY_DEST"
+EMPTY_DEST_STATE="$(find "$EMPTY_DEST" -mindepth 1 -print | sort)"
+assert_failure 'empty destination rejects replace-existing' run_install_at "$EMPTY_DEST" "$CANDIDATE_ONE" --replace-existing
+assert_equal 'rejected replace-existing on empty destination leaves it unchanged' "$(find "$EMPTY_DEST" -mindepth 1 -print | sort)" "$EMPTY_DEST_STATE"
+assert_success 'empty destination installs without replace-existing' run_install_at "$EMPTY_DEST" "$CANDIDATE_ONE"
 
 make_legacy_release_with_sudoers
 REAL_LEGACY_STATE="$(protected_tree_state)"
 assert_success 'real legacy plus sudoers release passes read-only validation' run_check "$CANDIDATE_ONE"
+assert_equal 'check without replace-existing is read-only for recognized release' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
+assert_failure 'recognized release rejects apply without replace-existing' run_install "$CANDIDATE_ONE"
+assert_equal 'rejected recognized release apply leaves protected tree unchanged' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
+assert_contains 'rejected recognized release apply explains replace-existing requirement' 'replace-existing' "$TEST_ROOT/output"
+assert_not_contains 'rejected recognized release apply emits no snapshot' 'ROLLBACK_SNAPSHOT=' "$TEST_ROOT/output"
 assert_equal 'real legacy sudoers fixture keeps the audited hash' "$(shasum -a 256 "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" | awk '{print $1}')" "$LEGACY_SUDOERS_SHA"
 assert_equal 'real legacy sudoers fixture keeps root mode 0440' "$(stat -c '%a' "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" 2>/dev/null || stat -f '%Lp' "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight")" '440'
 SUDOERS="$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight"
@@ -197,16 +215,20 @@ rm "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
 mv "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh" "$TEST_ROOT/helper.saved"
 assert_failure 'real legacy plus sudoers missing a required artifact is rejected' run_check "$CANDIDATE_ONE"
 mv "$TEST_ROOT/helper.saved" "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh"
-assert_success 'real legacy plus sudoers migrates to canonical' run_install "$CANDIDATE_ONE"
+assert_success 'real legacy plus sudoers migrates to canonical' run_install "$CANDIDATE_ONE" --replace-existing
 REAL_LEGACY_SNAPSHOT="$(awk -F= '/^ROLLBACK_SNAPSHOT=/{print $2}' "$TEST_ROOT/output")"
 assert_contains 'real legacy snapshot records explicit layout classification' 'layout=legacy_with_sudoers' "$REAL_LEGACY_SNAPSHOT/layout"
+CANONICAL_STATE_BEFORE_REJECTED_REPLACE_ROLLBACK="$(protected_tree_state)"
+assert_failure 'replace-existing cannot be combined with explicit rollback' \
+  "$INSTALLER" --dest-root "$DEST_ROOT" --test-mode local-unprivileged --apply --replace-existing --rollback "$REAL_LEGACY_SNAPSHOT"
+assert_equal 'rejected replace-existing rollback leaves canonical tree unchanged' "$(protected_tree_state)" "$CANONICAL_STATE_BEFORE_REJECTED_REPLACE_ROLLBACK"
 assert_success 'canonical release rolls back to real legacy plus sudoers' "$INSTALLER" --dest-root "$DEST_ROOT" --test-mode local-unprivileged --apply --rollback "$REAL_LEGACY_SNAPSHOT"
 assert_equal 'real legacy rollback restores bytes metadata and absence exactly' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
-assert_failure 'real legacy failure after destination preparation rolls back exactly' run_install "$CANDIDATE_ONE" --test-fail-after-prepare-destination
+assert_failure 'real legacy failure after destination preparation rolls back exactly' run_install "$CANDIDATE_ONE" --replace-existing --test-fail-after-prepare-destination
 assert_equal 'real legacy prepare failure restores exact state' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
-assert_failure 'real legacy failure during stage rolls back exactly' run_install "$CANDIDATE_ONE" --test-fail-during-stage-release
+assert_failure 'real legacy failure during stage rolls back exactly' run_install "$CANDIDATE_ONE" --replace-existing --test-fail-during-stage-release
 assert_equal 'real legacy stage failure restores exact state' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
-assert_failure 'real legacy failure after publish rolls back exactly' run_install "$CANDIDATE_ONE" --test-fail-after-publish
+assert_failure 'real legacy failure after publish rolls back exactly' run_install "$CANDIDATE_ONE" --replace-existing --test-fail-after-publish
 assert_equal 'real legacy publish failure restores exact state' "$(protected_tree_state)" "$REAL_LEGACY_STATE"
 rm "$SUDOERS"
 make_legacy_release
@@ -220,7 +242,7 @@ printf 'unexpected\n' > "$DEST_ROOT/usr/local/libexec/buildingos-backup-prefligh
 chmod 0644 "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
 assert_failure 'unknown partial protected release is rejected' run_check "$CANDIDATE_ONE"
 rm "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
-assert_success 'legacy release migrates to a coherent canonical release' run_install "$CANDIDATE_ONE"
+assert_success 'legacy release migrates to a coherent canonical release' run_install "$CANDIDATE_ONE" --replace-existing
 LEGACY_SNAPSHOT="$(awk -F= '/^ROLLBACK_SNAPSHOT=/{print $2}' "$TEST_ROOT/output")"
 assert_contains 'legacy snapshot records explicit layout classification' 'layout=legacy' "$LEGACY_SNAPSHOT/layout"
 assert_contains 'legacy snapshot binds legacy control metadata' 'metadata=' "$LEGACY_SNAPSHOT/control.meta"
@@ -237,7 +259,7 @@ assert_equal 'release Object Storage directory remains root-owned mode 0755' "$(
 SUDOERS_PARENT="$DEST_ROOT/etc/sudoers.d"
 chmod 0750 "$SUDOERS_PARENT"
 SUDOERS_PARENT_0750_METADATA="$(metadata_for "$SUDOERS_PARENT")"
-assert_success 'existing trusted sudoers parent mode 0750 permits apply' run_install "$CANDIDATE_ONE"
+assert_success 'existing trusted sudoers parent mode 0750 permits apply' run_install "$CANDIDATE_ONE" --replace-existing
 assert_equal 'apply preserves existing trusted sudoers parent mode 0750' "$(metadata_for "$SUDOERS_PARENT")" "$SUDOERS_PARENT_0750_METADATA"
 chmod 0755 "$SUDOERS_PARENT"
 assert_success 'existing trusted sudoers parent mode 0755 passes validation' run_check "$CANDIDATE_ONE"
@@ -246,7 +268,7 @@ chmod 0750 "$SUDOERS_PARENT"
 UNSAFE_PARENT_TREE="$(protected_tree_state)"
 chmod 0775 "$SUDOERS_PARENT"
 UNSAFE_PARENT_METADATA="$(metadata_for "$SUDOERS_PARENT")"
-assert_failure 'unsafe group-writable trusted parent rejects apply without changing the release' run_install "$CANDIDATE_ONE"
+assert_failure 'unsafe group-writable trusted parent rejects apply without changing the release' run_install "$CANDIDATE_ONE" --replace-existing
 assert_equal 'unsafe-parent apply failure preserves protected release state' "$(protected_tree_state)" "$UNSAFE_PARENT_TREE"
 assert_equal 'unsafe-parent apply failure does not repair the parent' "$(metadata_for "$SUDOERS_PARENT")" "$UNSAFE_PARENT_METADATA"
 chmod 0777 "$SUDOERS_PARENT"
@@ -281,7 +303,7 @@ fi
 assert_equal 'trusted sudoers parent remains mode 0750 after rejection tests' "$(metadata_for "$SUDOERS_PARENT")" "$(id -u):$(id -g):750"
 
 chmod 0775 "$DEST_ROOT/usr/local/sbin"
-assert_failure 'writable privileged launcher parent is rejected' run_install "$CANDIDATE_ONE"
+assert_failure 'writable privileged launcher parent is rejected' run_install "$CANDIDATE_ONE" --replace-existing
 chmod 0755 "$DEST_ROOT/usr/local/sbin"
 assert_success 'tooling, expected checkout, and expected runtime identities reach the protected control in order' \
   run_launcher "$CANDIDATE_ONE" 2222222222222222222222222222222222222222 1111111111111111111111111111111111111111
@@ -294,7 +316,7 @@ assert_success 'launcher manifest validation is read-only for protected files' \
   run_launcher "$CANDIDATE_ONE" 1111111111111111111111111111111111111111
 assert_equal 'launcher validation creates or modifies zero protected files' "$(protected_tree_state)" "$LAUNCHER_TREE_BEFORE"
 CROSS_DEVICE_HASHES="$(hashes)"
-assert_failure 'cross-filesystem fixture fails before publication' run_install "$CANDIDATE_ONE" --test-force-cross-device
+assert_failure 'cross-filesystem fixture fails before publication' run_install "$CANDIDATE_ONE" --replace-existing --test-force-cross-device
 assert_equal 'cross-filesystem failure leaves release unchanged' "$(hashes)" "$CROSS_DEVICE_HASHES"
 assert_failure 'malformed runtime identity is rejected by the protected launcher' \
   run_launcher "$CANDIDATE_ONE" not-a-runtime-sha
@@ -302,7 +324,7 @@ MANIFEST="$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
 printf '\n' >> "$MANIFEST"
 assert_failure 'non-canonical manifest trailing bytes are rejected' \
   run_launcher "$CANDIDATE_ONE" "$CANDIDATE_ONE"
-assert_success 'reinstall repairs non-canonical manifest bytes' run_install "$CANDIDATE_ONE"
+assert_success 'reinstall repairs non-canonical manifest bytes' run_install "$CANDIDATE_ONE" --replace-existing
 assert_failure 'wrong runtime identity is rejected by the protected control' \
   run_launcher "$CANDIDATE_ONE" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
@@ -311,12 +333,12 @@ HELPER="$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-id
 printf '\n# modified\n' >> "$CONTROL"
 assert_failure 'modified installed control is rejected before execution' \
   run_launcher "$CANDIDATE_ONE" "$CANDIDATE_ONE"
-assert_success 'reinstall repairs modified control' run_install "$CANDIDATE_ONE"
+assert_success 'reinstall repairs modified control' run_install "$CANDIDATE_ONE" --replace-existing
 OBJECT_EXEC="$DEST_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh"
 printf '\n# modified object executable\n' >> "$OBJECT_EXEC"
 assert_failure 'modified protected Object Storage executable is rejected before execution' \
   run_launcher "$CANDIDATE_ONE" 1111111111111111111111111111111111111111
-assert_success 'reinstall repairs modified Object Storage executable' run_install "$CANDIDATE_ONE"
+assert_success 'reinstall repairs modified Object Storage executable' run_install "$CANDIDATE_ONE" --replace-existing
 mv "$OBJECT_EXEC" "$OBJECT_EXEC.saved"
 assert_failure 'missing protected Object Storage executable is rejected before execution' \
   run_launcher "$CANDIDATE_ONE" 1111111111111111111111111111111111111111
@@ -329,17 +351,17 @@ mv "$CONTROL" "$CONTROL.real"
 ln -s "$CONTROL.real" "$CONTROL"
 assert_failure 'symlinked protected control is rejected before execution' \
   run_launcher "$CANDIDATE_ONE" "$CANDIDATE_ONE"
-assert_failure 'installer rejects a symlink protected destination before publishing' run_install "$CANDIDATE_ONE"
+assert_failure 'installer rejects a symlink protected destination before publishing' run_install "$CANDIDATE_ONE" --replace-existing
 assert_failure 'read-only installer check rejects a symlink protected destination' run_check "$CANDIDATE_ONE"
 rm "$CONTROL"
 mv "$CONTROL.real" "$CONTROL"
 chmod 0777 "$CONTROL"
-assert_failure 'unsafe existing control mode blocks an upgrade' run_install "$CANDIDATE_ONE"
+assert_failure 'unsafe existing control mode blocks an upgrade' run_install "$CANDIDATE_ONE" --replace-existing
 chmod 0755 "$CONTROL"
 assert_success 'explicit rollback migrates canonical release back to exact legacy layout' \
   "$INSTALLER" --dest-root "$DEST_ROOT" --test-mode local-unprivileged --apply --rollback "$LEGACY_SNAPSHOT"
 assert_equal 'canonical-to-legacy rollback restores bytes metadata and absent artifacts exactly' "$(protected_tree_state)" "$LEGACY_STATE"
-assert_success 'legacy release can be migrated to canonical again' run_install "$CANDIDATE_ONE"
+assert_success 'legacy release can be migrated to canonical again' run_install "$CANDIDATE_ONE" --replace-existing
 PRIVCTL_LAUNCHER="$DEST_ROOT/usr/local/sbin/buildingos-privctl"
 PRIVCTL_SUDOERS="$DEST_ROOT/etc/sudoers.d/buildingos-privctl"
 mv "$PRIVCTL_LAUNCHER" "$PRIVCTL_LAUNCHER.saved"
@@ -352,14 +374,14 @@ mv "$PRIVCTL_LAUNCHER" "$PRIVCTL_LAUNCHER.saved"
 mv "$PRIVCTL_SUDOERS" "$PRIVCTL_SUDOERS.saved"
 OLD_CANONICAL_STATE="$(protected_tree_state)"
 assert_success 'old canonical layout without privctl assets remains readable' run_check "$CANDIDATE_ONE"
-assert_success 'old canonical layout upgrades to the complete privctl release' run_install "$CANDIDATE_ONE"
+assert_success 'old canonical layout upgrades to the complete privctl release' run_install "$CANDIDATE_ONE" --replace-existing
 OLD_CANONICAL_SNAPSHOT="$(awk -F= '/^ROLLBACK_SNAPSHOT=/{print $2}' "$TEST_ROOT/output")"
 assert_contains 'old canonical snapshot records its legacy canonical layout' 'layout=canonical' "$OLD_CANONICAL_SNAPSHOT/layout"
 rm "$OLD_CANONICAL_SNAPSHOT/privctl_launcher.meta" "$OLD_CANONICAL_SNAPSHOT/privctl_sudoers.meta"
 assert_success 'pre-privctl canonical snapshot rolls back with both new assets absent' \
   "$INSTALLER" --dest-root "$DEST_ROOT" --test-mode local-unprivileged --apply --rollback "$OLD_CANONICAL_SNAPSHOT"
 assert_equal 'old canonical rollback restores both new assets as absent' "$(protected_tree_state)" "$OLD_CANONICAL_STATE"
-assert_success 'old canonical layout can upgrade to complete privctl release again' run_install "$CANDIDATE_ONE"
+assert_success 'old canonical layout can upgrade to complete privctl release again' run_install "$CANDIDATE_ONE" --replace-existing
 
 OLD_STATE="$(protected_tree_state)"
 printf '\n# release two\n' >> "$SOURCE_ROOT/scripts/production-backup-preflight.sh"
@@ -367,14 +389,14 @@ git -C "$SOURCE_ROOT" add scripts/production-backup-preflight.sh
 git -c core.hooksPath=/dev/null -C "$SOURCE_ROOT" commit -qm 'release two'
 CANDIDATE_TWO="$(source_sha)"
 assert_failure 'failure after destination preparation restores the exact previous release' \
-  run_install "$CANDIDATE_TWO" --test-fail-after-prepare-destination
+  run_install "$CANDIDATE_TWO" --replace-existing --test-fail-after-prepare-destination
 assert_equal 'prepare failure restores protected files directories metadata and absence' "$(protected_tree_state)" "$OLD_STATE"
 assert_failure 'failure during stage release restores the exact previous release' \
-  run_install "$CANDIDATE_TWO" --test-fail-during-stage-release
+  run_install "$CANDIDATE_TWO" --replace-existing --test-fail-during-stage-release
 assert_equal 'stage failure restores protected files directories metadata and absence' "$(protected_tree_state)" "$OLD_STATE"
-assert_failure 'post-publish failure restores the previous coherent release' run_install "$CANDIDATE_TWO" --test-fail-after-publish
+assert_failure 'post-publish failure restores the previous coherent release' run_install "$CANDIDATE_TWO" --replace-existing --test-fail-after-publish
 assert_equal 'partial publish restores protected files directories metadata and absence' "$(protected_tree_state)" "$OLD_STATE"
-assert_success 'upgrade publishes the next coherent release' run_install "$CANDIDATE_TWO"
+assert_success 'upgrade publishes the next coherent release' run_install "$CANDIDATE_TWO" --replace-existing
 SNAPSHOT="$(awk -F= '/^ROLLBACK_SNAPSHOT=/{print $2}' "$TEST_ROOT/output")"
 [[ -n "$SNAPSHOT" && -d "$SNAPSHOT" ]] && pass 'upgrade emits a rollback snapshot path' || fail_test 'upgrade emits a rollback snapshot path'
 CORRUPT_SNAPSHOT="${SNAPSHOT}.corrupt"
