@@ -73,6 +73,8 @@ audit_unexpected_error() {
 AUDIT_QUERY_FAILURES=0
 AUDIT_EVIDENCE_FAILURES=0
 AUDIT_INTERNAL_FAILURES=0
+AUDIT_ACTIVE_FINISHED_MIGRATIONS='UNKNOWN'
+AUDIT_FAILED_MIGRATIONS='UNKNOWN'
 AUDIT_STAGE='STARTUP'
 AUDIT_FAILURE_CLASS='AUDITOR_ERROR'
 AUDIT_FAILURE_REASON='UNKNOWN'
@@ -99,19 +101,20 @@ container_health() {
 }
 
 checkout_has_only_approved_ignored_files() {
+  local app_dir="${1:-$APP_DIR}"
   local path pattern status_output ignored_paths
   local runtime_env_excluded=false
 
-  [[ -f "$APP_DIR/.dockerignore" ]] || return 1
+  [[ -f "$app_dir/.dockerignore" ]] || return 1
   while IFS= read -r pattern; do
     [[ "$pattern" =~ ^[[:space:]]*! ]] && return 1
     if [[ "$pattern" == '**/.env' || "$pattern" == 'infra/docker/.env' ]]; then
       runtime_env_excluded=true
     fi
-  done < "$APP_DIR/.dockerignore"
+  done < "$app_dir/.dockerignore"
   [[ "$runtime_env_excluded" == true ]] || return 1
 
-  if ! ignored_paths="$(git -C "$APP_DIR" ls-files --others --ignored --exclude-standard 2>/dev/null)"; then
+  if ! ignored_paths="$(git -C "$app_dir" ls-files --others --ignored --exclude-standard 2>/dev/null)"; then
     return 1
   fi
   if [[ -n "$ignored_paths" ]]; then
@@ -216,12 +219,117 @@ storage_backend_from_host() {
   esac
 }
 
+readonly_query_body_is_safe() {
+  local body="$1"
+  local length="${#body}"
+  local index=0 char next token first_token='' case_depth=0 statement_terminated=false
+
+  while (( index < length )); do
+    char="${body:index:1}"
+    next="${body:index+1:1}"
+    case "$char" in
+      "'")
+        index=$((index + 1))
+        while (( index < length )); do
+          char="${body:index:1}"
+          if [[ "$char" == "'" ]]; then
+            next="${body:index+1:1}"
+            if [[ "$next" == "'" ]]; then
+              index=$((index + 2))
+              continue
+            fi
+            break
+          fi
+          index=$((index + 1))
+        done
+        (( index < length )) || return 1
+        index=$((index + 1))
+        ;;
+      '"')
+        index=$((index + 1))
+        while (( index < length )); do
+          char="${body:index:1}"
+          if [[ "$char" == '"' ]]; then
+            next="${body:index+1:1}"
+            if [[ "$next" == '"' ]]; then
+              index=$((index + 2))
+              continue
+            fi
+            break
+          fi
+          index=$((index + 1))
+        done
+        (( index < length )) || return 1
+        index=$((index + 1))
+        ;;
+      ';')
+        statement_terminated=true
+        index=$((index + 1))
+        while (( index < length )); do
+          char="${body:index:1}"
+          case "$char" in
+            [[:space:]]) index=$((index + 1)) ;;
+            *) return 1 ;;
+          esac
+        done
+        break
+        ;;
+      '-')
+        [[ "$next" == '-' ]] && return 1
+        index=$((index + 1))
+        ;;
+      '/')
+        [[ "$next" == '*' ]] && return 1
+        index=$((index + 1))
+        ;;
+      [[:alpha:]_])
+        token=''
+        while (( index < length )); do
+          char="${body:index:1}"
+          case "$char" in
+            [[:alnum:]_]) ;;
+            *) break ;;
+          esac
+          token+="$char"
+          index=$((index + 1))
+        done
+        [[ -n "$first_token" ]] || first_token="$token"
+        case "$token" in
+          [Cc][Aa][Ss][Ee]) case_depth=$((case_depth + 1)) ;;
+          [Ee][Nn][Dd])
+            if (( case_depth > 0 )); then
+              case_depth=$((case_depth - 1))
+            else
+              return 1
+            fi
+            ;;
+          [Bb][Ee][Gg][Ii][Nn]|[Cc][Oo][Mm][Mm][Ii][Tt]|[Rr][Oo][Ll][Ll][Bb][Aa][Cc][Kk]|[Aa][Bb][Oo][Rr][Tt]|[Pp][Rr][Ee][Pp][Aa][Rr][Ee]|[Ss][Tt][Aa][Rr][Tt])
+            return 1
+            ;;
+        esac
+        ;;
+      *)
+        index=$((index + 1))
+        ;;
+    esac
+  done
+
+  [[ "$statement_terminated" == true ]] || return 1
+  case "$first_token" in
+    [Ss][Ee][Ll][Ee][Cc][Tt]|[Ww][Ii][Tt][Hh]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 readonly_query_stdin() {
-  local query
+  local query body
 
   query="$(< /dev/stdin)"
-  [[ "$query" == *'BEGIN READ ONLY;'* ]] || return 64
-  [[ "$query" == *'COMMIT;'* ]] || return 64
+  [[ "$query" == $'BEGIN READ ONLY;\n'* ]] || return 64
+  [[ "$query" == *$'\nCOMMIT;' ]] || return 64
+  body="${query#*$'\n'}"
+  body="${body%$'\n'COMMIT;}"
+  readonly_query_body_is_safe "$body" || return 64
   printf '%s\n' "$query" | docker exec -i "$POSTGRES_CONTAINER" sh -lc \
     'exec psql -v ON_ERROR_STOP=1 -qAt -U "$POSTGRES_USER" -d "$1"' \
     sh "$DATABASE_NAME"
@@ -230,7 +338,7 @@ readonly_query_stdin() {
 record_query_failure() {
   if [[ "$1" -eq 64 ]]; then
     AUDIT_INTERNAL_FAILURES=$((AUDIT_INTERNAL_FAILURES + 1))
-    AUDIT_FAILURE_REASON='SQL payload is missing BEGIN READ ONLY or COMMIT'
+    AUDIT_FAILURE_REASON='SQL payload is not a single SELECT/WITH statement in the required read-only envelope'
     printf 'ERROR: %s\n' "$AUDIT_FAILURE_REASON" >&2
   else
     AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
@@ -242,11 +350,27 @@ report_query_stdin() {
   local value
   local rc
 
-  if value="$(readonly_query_stdin 2>/dev/null)"; then
+  if value="$(readonly_query_stdin 2>/dev/null; rc=$?; printf '\034'; exit "$rc")"; then
+    value="${value%$'\034'}"
+    value="${value%$'\n'}"
+    if [[ "$value" =~ [[:cntrl:]] ]]; then
+      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+      value='UNKNOWN'
+    elif [[ "$value" == 'UNKNOWN' && ( "$key" == 'MIGRATIONS_AFTER_KNOWN_BASELINE' || "$key" == 'FILE_BUCKET_COUNTS' ) ]]; then
+      AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
+    fi
+    case "$key" in
+      ACTIVE_FINISHED_MIGRATIONS) AUDIT_ACTIVE_FINISHED_MIGRATIONS="$value" ;;
+      FAILED_MIGRATIONS) AUDIT_FAILED_MIGRATIONS="$value" ;;
+    esac
     printf '%s=%s\n' "$key" "$value"
   else
     rc=$?
     record_query_failure "$rc"
+    case "$key" in
+      ACTIVE_FINISHED_MIGRATIONS) AUDIT_ACTIVE_FINISHED_MIGRATIONS='UNKNOWN' ;;
+      FAILED_MIGRATIONS) AUDIT_FAILED_MIGRATIONS='UNKNOWN' ;;
+    esac
     printf '%s=UNKNOWN\n' "$key"
   fi
 }
@@ -294,17 +418,274 @@ public_readyz_status() {
   fi
 }
 
+# Frozen name|SHA256 inventory verified from approved base c9d9a47c30215d0ac61b5c46b9cf6c6519658545.
+expected_migration_rows() {
+  cat <<'MIGRATION_INVENTORY'
+20260211013456_init_postgres|df91d1594bac39d6d1937be7e3a61d65c887252c085d3ba53e4432baca8b7987
+20260211015129_tenant_name_unique|d8ca49053f03b16f5876183edf79b25603c51b0c5755837a4efa0f2571111e3e
+20260213015939_add_building_unit_occupant|8b1f825227db80b0f046c4ace6d56853d9916ae0c691550ed4c96748cf7560bf
+20260213232629_add_audit_billing_models|6d5e5b43884501fc751c3d1a48453090f4599d43631859a3ff9f5cfb5d4c5788
+20260215212357_add_ticket_models|c90bcdbb52f7607da792e077900c2ec0efd6a901fa59be5a238f4a185c4b2398
+20260216141712_add_communications_module|bdb0bdc8016ded59559e8b211773da290e8136e3aba39ae5eb96520467f6f50b
+20260216152955_add_documents_and_files_module|32b64d82d7d9467c55a81aeb871d1d02b2811cd64a90e43400e850ca190b1f8e
+20260216194957_add_vendors_and_operations_module|6556b75952b92e4f938fdd75ee70e642c7d3695369c5aa6910b8773d85cf9cfc
+20260216203551_add_finanzas_charges_payments_allocations|0480a82fbdfdaf1fe58255cf5dbabf173283f6696fd7a2d92406ad1e01dd244e
+20260217032610_expand_audit_log_all_modules|52fd6ea52d4626a85f34ad501ff37a1adc576f3089600f5129231671c50ec0dd
+20260217041336_add_impersonation_audit_actions|78de1e732454debee2192267689ed82a6ed76c4bb92b84d4fcb52301a82fe2fe
+20260217213321_add_tenant_branding|e38728de91144ece98a7dc082c824f3fe0afc4147a183f30a320def1fb557acf
+20260217213428_add_tenant_branding_audit_action|19d1e20934b666c37e7929a2d71c15d916429e6b8383732846660e718afc7e1c
+20260217215449_add_invitation_model|ba301aa4bb7aa78111daacf9beaaad5312f68668594abe9eec7c5533469e3157
+20260217221442_add_onboarding_state|9d0289a569f095b1d5484efd4aad611b17ff68df772b7c1d9fb7140cdc563bb3
+20260218023749_add_scoped_membership_roles|7fa207c5c63758dddf9ad5af8c8dbe32b59dd839af66aaa23eb193a88789e726
+20260218030131_add_user_context|4fc592119220f9c32ba0da8c52c7c88819bee946fe6370836a94f47f56a23e2e
+20260218160012_add_email_logging|4a343619eaf19ad5fa5e895318264743dfee63e0a548cd9a16a5f114ca0a4f0a
+20260218182315_add_notifications_model|695f336604258e919a0ff205d59c98b442bb6337c339495497726e85d21cc0d8
+20260218235500_add_support_tickets|4db77f31f596968f6f23b4e84db8c49ce0235e885071ed7e58df08ef3455e91f
+20260218_add_ai_analytics|40b8ffdae43d772951485472e3b17d0df4c1293768bed88e86913b15f38eca4c
+20260223000001_add_lead_model|0782578968cfe8417adfac683058285443ddb451ecee5759499c3cd7e5588873
+20260224002136_add_missing_billing_plan_columns|053cc26473e6ff27888e32f2ecbddfc3821b4d3a8db5d70934c4e687301c022d
+20260322133357_add_ai_consultation_limits|73d6c2aeb8243588591b2e9b0de0877eff8c6913ec86c4f8b33bfd91ef76c589
+20260322_add_ai_ticket_categorization|abdb81f2cdba526428bad49ba8bc45a7dde75c2ce7376e4012a6ef0025fdcb9b
+20260324023040_add_payment_canceled_at|e4f264faa5b10056fc7b0670a4d2bce19c91d259f3b7499d7d30c6d42c9dac3d
+20260324220712_add_welcome_to_email_type|521200d54a9653f37e110360026561121f0f164e06bfdf485a7eb44fedd30b8b
+20260324234534_add_expense_allocation_schema|f0547d97811af3f1605f310b0d00fba87917ae4d42e4a40b12ea9d98d3b24877
+20260325144923_change_expense_period_total_to_bigint|98a36a614651cf5471f330d68358ff0e0e4ed19e1c12aeadb411ab523b68086a
+20260325153749_change_total_to_allocate_snapshot_to_bigint|becf1d5f1b734cf00c34a05a3434f9cb8c4726bfa7da4c7706ab63880d64aa69
+20260325190000_add_tenant_members_invitations|1acd6ce1e9f71b8993b7ffe044be2a9db690653715036bd746ad97011172f654
+20260325193013_make_unitoccupant_userid_nullable|24562d99875ec11f49fb4f4edbfcc8dcd2718f5de3e986fcd8fe577e9d476e86
+20260326120000_add_payment_cancel_audit_action|d4171937196775f93837c36196ed2369720649a4715624ee3cd33bfdeec1b9a4
+20260328000000_add_communication_soft_delete|b63caa0d96ee464e1c5217af977bf543ed379a16484afe53562a6848452e6e29
+20260331223859_add_tenant_currency|867a0e14c494d18840012c38a60a3febd033996b38385d1187eb71ddabd20718
+20260401000000_add_expense_liquidation_flow|2249b5b98230f00a9a85927675cdbe1ab89bf89889362ffafe8eb3f50fad4fef
+20260402000000_add_expense_ledger_category_code_sort|03ce8cd73b6adfb52908856668a0a1c61b02161f481b34e5380f3514d31aca54
+20260402000001_fix_liquidation_cancel_unique|51722043f7cf140dc5c2005b9e3fd60123cc06d3a0276c463dc5ffe270c729fd
+20260402000002_fix_charge_cancel_unique|db9db61d19913f130b34356d899ff58b98abb97084ae7f8a15402a87b2a83585
+20260402000003_cleanup_canceled_liquidations|b75b9341310f52bf6e8710c817841fef9f26562121ccad2838aeb681517f49ad
+20260402_add_income_model|5b85958471e7d1e8fd7b72fe7b9c8ea03e5911b6a2d173c6b797679fc4e83cae
+20260402_add_movement_type_to_expense_ledger_category|7651d592575a63cd3e64f45e745e2cefc4e8afe5bf16bb12f4083792be07ec90
+20260402_add_universal_liquidation_schema|2fef6671e1d4d6c2e9f611adfb25fe7c6b3f7bd066407a1f306f94c55536d8ba
+20260402_backfill_movement_type|0b169abcb5d66171d74d440a81549da8ad2ebc480833efa865170d81ab0fab26
+20260404_add_notification_types|f3ed3c02080ef5d7a5da2f23086f922be6d8e904b0810ffd579138930e27fc85
+20260405_add_charge_automation_fields|f151c0ec01e9ad752279bbbff9cf12d01927dfe86cab3aa46a135207e3a112c3
+20260405_add_expense_imported_audit_action|60ee40b02b460721593ca607c298f9d4ee5f266477d741e7503a872e49cb85d0
+20260405_add_finance_summary_email|9ada018d137229665557618ac767c60160c0878fd3b49dd612031a21c912af33
+20260405_add_payment_reminder_and_expense_period_notifications|bf39a5f69a3d2d17acb0659f252571fb90bc94e4da4a934423eea9586e0018c0
+20260405_add_recurring_expense_model|2ecf6c858b76ba8d8b68835a900abcedddb26eb10e34e20daa09f5f1d8f8d4a5
+20260405_add_ticket_escalated_audit_action|47a9ba09e32ea10cecee72255882900a8b0cb1d5b8799fe69e1cc0d68f6faab3
+20260405_add_ticket_escalation_field|5414f31cae002b9984eca5971986681edad2d88fecbabcacc8caae334836604c
+20260405_add_urgent_ticket_notification_type|e06c809fbcb5efe87f9f332e8c995741fee9d22556c1436a1b4701c234e8c5f0
+20260406115109_periods_and_adjustments|f4a8c699ecfe1afcde9f0546768d0b22351dde95defefd0d9063aab1c7845de2
+20260419000100_backfill_payment_paidat|459af792badac421bafe0d473e7ec77e031710867884f0affc3790dc23ee155d
+20260419000200_add_dashboard_debt_aging_indexes|c5de92baf17995c71cc45ebd9ca9e114f71e09e2c50e3576a40d5d515465ad81
+20260423170000_add_rls_pilot_tenant_tables|d7164dbb0585abbb8e4d110ee12b70a8291625977efdcdf34a9a2f195efd2071
+20260423174500_add_rls_strict_mode_toggle|9924033ca0081400a9139f6b77c406c271db2e86ef63f2f240fa0a337ae853c4
+20260423190000_force_rls_on_pilot_tables|5baf63e785b90798c975acb39f3c296b18abbe1686d68433d69e8180a6a9e718
+20260423203000_add_payment_receipt_columns|5e96a8dbd3f9d1458859eff22d2c519fe466983d11a6770475170d4d120458c4
+20260425000000_add_p2a_monthly_snapshots|ed63828b9d8aed97b50d6f608e3a8ad9572d7439c8a2518b3902445390e788f9
+20260426000000_add_p2b_processes|c6208329e3de48bec445b7f16f086ea44b5205672d4892a31ef0b921a3d3a0ce
+20260430080000_add_assistant_handoffs_hitl|a7b1c9197a5ed2eb6632defaa8004ec61100547e8b7525ada54144278cd2fce2
+20260430080000_fix_assistant_tables|13a514bbd0ee4fe57d7cc86900b33ab9151852b49a911d5764a4e65a5678c1c0
+20260430143000_add_assistant_messages|00b8d0587fb86f4722212d22d55c78e63b89e71b2bfce6110d8cadfcdc7b9066
+20260430190000_add_ops_alerts_and_metrics|dbdff14e1dd47f19fdfcc73bd980d6524b0584b025694513ac507f71b53ae057
+20260430195000_add_assistant_handoff_audit_schema|5154a91250d3673ef49618c7ddac3d9a071ca8c04f9db9cc3a86ff7c9b8b2e7d
+20260430200000_fix_assistant_handoff_timestamps_for_ops_metrics|14fa069cf443726eeb5d8b77eb4804bc80a9347f489f56a4468fc84ebf22c8be
+20260510000000_expand_tenant_scope_non_breaking|357c95062d1675dbe4ecc61ec6b12e7a252501155dcaa867ca13c7da9b4bae65
+20260510000001_enforce_tenant_scope_non_breaking|0eccb0c129365d4b26fd4ab89cccf37c5406f6b84e5ad8e21eba1bd992e74eb0
+20260511193000_add_building_soft_delete|a39936bee573ba14bb760c5ccf59437cfe8a165498c5494fb2a18e1597ccb026
+20260616000000_add_payment_email_provider_models|1ac19e32a01c5959e25b5bb3020332e4ad54416e43f92c17222b4e7f847d9d63
+20260616000001_add_tenant_next_building_alias_index|57760db4d77c7c8ae39527b965dd5aac09825b6f8240efb2234f953edd824ee5
+20260616000002_add_tenant_is_demo|541ba38d7d5b18c5e5318b013558fe0bdc12091fa049ded6c277fac97466a942
+20260630110000_add_liquidation_charge_uniqueness|809f92ab4bbe56749d620c9710efe81db3ce3ead12fcc9b5de27655af4fcd3e8
+20260703000000_add_auth_sessions|a86391524eb8eeaffe245f906677244c419428aae8bda60739799f006867e4cb
+20260711000000_add_liquidation_publication_snapshot|1782d0567ab850fa3cf06d93e9b4ffd4ba9b94f25d48f130df0d42c45643b73e
+20260714000000_add_onboarding_imports|130337860f184bef084dba61e21e91dcf2de413e09c3199a4975053ec358fc56
+20260715000000_add_onboarding_import_confirmation|a8bb343ca7d90bdb9711cb77261234903833a4b45b48b09ffe8abbb85f715ca4
+20260719000000_add_receipt_sequence|93c6d2c0b8c4468fea26489cfb4875bfdc6763ec0056487c21094eae0dbcb257
+20260720000000_version_onboarding_import_preview_identity|dedb32ace6e3f7e0cb2dbc30565d76f7fb7d91d59b67e652b21e849f8f708972
+20260805000000_add_receipt_generated_to_payment_audit_action|2eca33fa948a8374c8e9df65b1ad03396b6e60618c2908eb76500ce24f314281
+20260807000000_add_recurring_expense_tenant_shared|73c11f3ae0bc2946b0292b6a7e19415922c215a0099725ccffad7dfd5792b7e5
+20260809000000_add_multicurrency_foundation|72387a00d29fc206601f175d09e858c8ef977b040f5b0b7828d2d6ba553580d8
+20260810000000_add_expense_multicurrency_snapshot|9fabbda282282973458afde3f7c827882423e242b8a0ae4fa7fec41cb23f61d8
+20260810010000_add_income_multicurrency_snapshot|272cb4d1a2f574b97eb119c2085969680acebe97dfb3b5b64ed7c21df5253598
+20260810020000_add_adjustment_multicurrency_snapshot|01389a6aaa6b28913dc47929b32ea93036bd113d228dff44600910dae4c6cd64
+20260810030000_add_liquidation_functional_valuation|a5ac79fe256dc8efd47b283c79d5326ed48098a6706432b26f8e593eab7785b7
+20260811000000_add_payment_multicurrency_snapshot|13db688679ee726a37a3380dc3375e2ee55f0bbc516bfc440c47c9fe72b4227e
+20260812000000_add_payment_allocation_original_share|857e76ba79b6ce52adba7e07bbda723a33ab0db76cfb55f3de177a1892f65832
+20260814000000_add_funds_ledger|beadcf1d433740e224b64e6a7bcbc0d985bb8fbe92a7e43f15b3f2ad271419c9
+20260815000000_add_income_applications|b73832c8cb8715ebc895270c26913f9a0e7c28cc55efd1e7b66810d11a608d08
+20260816000000_add_income_policies|0b291960b38677ad95a70608f998865d8819378a26cf3ba989ae9ec13a63a345
+20260816000001_income_policy_createdby_setnull|668bddb7cb548119979a72a22df26b3e1aca656a4b1fb07d419ecd5e526d2fc3
+20260816000002_income_offsets_to_liquidations|c18ed0093da20da89e3e627ca1457349f1d36da93c1e11f914f4b8ace4aa654f
+20260816000003_liquidation_income_offset_invariants|4ff212a16eda9e32db64b28b8eb56f29a2ee5ccb5fbb034af56a7b7cad8fc6d9
+20260816000004_legacy_income_application_provenance|f77a48381a9d32198b34f3ed92465190f8f6284ec80cc4916c304ec776905a2b
+20260831000000_add_payment_receipt_issuance_snapshot|36e92c7ae5a01b9193daec266183441ece906b123981154ad8d5a59f157468d0
+20260905000000_add_object_version_identity|3161d9f1ece049e80d4e8cd14f301a73f86605e4405059777b8ea1ab6b9324c5
+20260906000000_add_liquidation_distribution_snapshot|63fed2df75bb5becb0dfc68ad55e9627797624ddeb106462783ac6d9c03da1cb
+20260913000000_add_phase3d2_publication_integrity|7743eb93ee3355c3bb47903fc1bbf69273e7d0af788c4b503ec86da2879ed312
+20260914000000_allow_authorized_parent_cascades|f8140bdf0ed05a5cec11e1f255eeae93d26c968455a0ce0eb18f38a972cfbeec
+20260915000000_align_liquidation_valuation_mode_enum|e9c837990efc95d356c8755881a3b3a48c4e1b861c62852bc0aaaa8af58f4608
+20260916000000_harden_phase3d2_distribution_integrity|fcd9d2b86ad38ad40e2f6c30ccab201d612433a42f3656e5287d7b5167eb677d
+20260917000000_harden_phase3d2_nullable_publication_validation|aa926621eb544bb6d243e1c6c6d76dcf13a1c8e8b7c541b1030982984b8b4b83
+20260918000000_enforce_modern_distribution_unit_ownership|5932afb02d9a47bab3ff779bad155b293acf4a31d7a4da91ef17b7501fe1dfa1
+20260919000000_release_a_dual_liquidation_compatibility|1684ae7a56af3d957d5ff01d3ef352a6973104e40ddf9bca342b283111be2777
+MIGRATION_INVENTORY
+}
+
+validate_database_migration_set() {
+  local app_dir="$1" runtime_sha="$2" rows line name checksum started finished rolled_back applied_steps extra without_tabs tab_count query_rc found duplicate
+  local active=0
+  local -a expected_rows=() seen_names=()
+
+  AUDIT_DATABASE_MIGRATION_SET='UNKNOWN'
+  [[ "$runtime_sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  while IFS= read -r line; do
+    [[ "$line" =~ ^([A-Za-z0-9][A-Za-z0-9_-]*)\|([0-9a-f]{64})$ ]] || return 1
+    expected_rows+=("$line")
+  done < <(expected_migration_rows)
+  [[ "${#expected_rows[@]}" -eq 107 ]] || return 1
+
+  if rows="$(readonly_query_stdin 2>/dev/null <<'SQL'
+BEGIN READ ONLY;
+WITH receipt_sequence_baseline AS (
+  SELECT
+    (
+      SELECT count(*) = 6
+        AND count(*) FILTER (WHERE column_name = 'id' AND data_type = 'text' AND is_nullable = 'NO' AND column_default IS NULL) = 1
+        AND count(*) FILTER (WHERE column_name = 'tenantId' AND data_type = 'text' AND is_nullable = 'NO' AND column_default IS NULL) = 1
+        AND count(*) FILTER (WHERE column_name = 'year' AND data_type = 'integer' AND is_nullable = 'NO' AND column_default IS NULL) = 1
+        AND count(*) FILTER (WHERE column_name = 'lastNumber' AND data_type = 'integer' AND is_nullable = 'NO' AND column_default = '0') = 1
+        AND count(*) FILTER (WHERE column_name = 'createdAt' AND data_type = 'timestamp without time zone' AND datetime_precision = 3 AND is_nullable = 'NO' AND column_default = 'CURRENT_TIMESTAMP') = 1
+        AND count(*) FILTER (WHERE column_name = 'updatedAt' AND data_type = 'timestamp without time zone' AND datetime_precision = 3 AND is_nullable = 'NO' AND column_default IS NULL) = 1
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'ReceiptSequence'
+    )
+    AND (
+      SELECT count(*) = 6
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'ReceiptSequence'
+    )
+    AND (
+      SELECT count(*) = 2
+      FROM pg_constraint
+      WHERE conrelid = 'public."ReceiptSequence"'::regclass
+    )
+    AND (
+      SELECT count(*) = 1 AND bool_and(
+        conname = 'ReceiptSequence_pkey' AND convalidated
+        AND NOT condeferrable AND NOT condeferred
+        AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."ReceiptSequence"'::regclass AND attname = 'id' AND NOT attisdropped)]::smallint[]
+      )
+      FROM pg_constraint
+      WHERE conrelid = 'public."ReceiptSequence"'::regclass AND contype = 'p'
+    )
+    AND (
+      SELECT count(*) = 1 AND bool_and(
+        conname = 'ReceiptSequence_tenantId_fkey' AND convalidated
+        AND NOT condeferrable AND NOT condeferred
+        AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."ReceiptSequence"'::regclass AND attname = 'tenantId' AND NOT attisdropped)]::smallint[]
+        AND confrelid = 'public."Tenant"'::regclass
+        AND confmatchtype = 's'
+        AND confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public."Tenant"'::regclass AND attname = 'id' AND NOT attisdropped)]::smallint[]
+        AND confdeltype = 'c' AND confupdtype = 'c'
+      )
+      FROM pg_constraint
+      WHERE conrelid = 'public."ReceiptSequence"'::regclass AND contype = 'f'
+    )
+    AND (
+      SELECT count(*) = 3
+        AND bool_and(i.indisvalid AND i.indisready AND i.indislive AND i.indpred IS NULL AND i.indexprs IS NULL)
+        AND count(*) FILTER (WHERE c.relname = 'ReceiptSequence_pkey' AND i.indisunique AND i.indkey::text = '1') = 1
+        AND count(*) FILTER (WHERE c.relname = 'ReceiptSequence_tenantId_year_key' AND i.indisunique AND i.indkey::text = '2 3') = 1
+        AND count(*) FILTER (WHERE c.relname = 'ReceiptSequence_tenantId_idx' AND NOT i.indisunique AND i.indkey::text = '2') = 1
+      FROM pg_index i
+      JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE i.indrelid = 'public."ReceiptSequence"'::regclass
+    ) AS ok
+)
+SELECT CASE WHEN migration_name IS NULL THEN '<NULL>'
+            WHEN migration_name ~ '[[:cntrl:]]' THEN '<CONTROL_CHARACTER>'
+            ELSE migration_name END
+       || E'\t' || CASE WHEN checksum IS NULL THEN '<NULL>'
+                         WHEN checksum ~ '[[:cntrl:]]' THEN '<CONTROL_CHARACTER>'
+                         ELSE checksum END
+       || E'\t' || CASE WHEN started_at IS NOT NULL THEN '1' ELSE '0' END
+       || E'\t' || CASE WHEN finished_at IS NOT NULL THEN '1' ELSE '0' END
+       || E'\t' || CASE WHEN rolled_back_at IS NOT NULL THEN '1' ELSE '0' END
+       || E'\t' || CASE WHEN migration_name = '20260719000000_add_receipt_sequence'
+                              AND checksum = '93c6d2c0b8c4468fea26489cfb4875bfdc6763ec0056487c21094eae0dbcb257'
+                              AND applied_steps_count = 0 AND receipt_sequence_baseline.ok IS NOT TRUE
+                         THEN 'BASELINE_FAIL'
+                         ELSE COALESCE(applied_steps_count::text, '<NULL>') END
+FROM "_prisma_migrations"
+CROSS JOIN receipt_sequence_baseline
+ORDER BY migration_name;
+COMMIT;
+SQL
+)"; then
+    :
+  else
+    query_rc=$?
+    if [[ "$query_rc" -eq 64 ]]; then
+      record_query_failure "$query_rc"
+    else
+      AUDIT_QUERY_FAILURES=$((AUDIT_QUERY_FAILURES + 1))
+    fi
+    return 1
+  fi
+  [[ -n "$rows" ]] || return 1
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || return 1
+    without_tabs="${line//$'\t'/}"
+    tab_count=$((${#line} - ${#without_tabs}))
+    [[ "$tab_count" -eq 5 && "$line" != $'\t'* && "$line" != *$'\t' && "$line" != *$'\t\t'* ]] || return 1
+    IFS=$'\t' read -r name checksum started finished rolled_back applied_steps extra <<< "$line"
+    [[ -n "$name" && -n "$checksum" && -n "$applied_steps" && -z "${extra:-}" ]] || return 1
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ && "$checksum" =~ ^[0-9a-f]{64}$ ]] || return 1
+    [[ "$started" == 1 && "$finished" == 1 && "$rolled_back" == 0 ]] || return 1
+    [[ "$applied_steps" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+    duplicate=false
+    for line in "${seen_names[@]:-}"; do [[ "$line" != "$name" ]] || duplicate=true; done
+    [[ "$duplicate" == false ]] || return 1
+    seen_names+=("$name")
+    found=false
+    for line in "${expected_rows[@]}"; do
+      if [[ "$line" == "$name|$checksum" ]]; then found=true; break; fi
+    done
+    [[ "$found" == true ]] || return 1
+    if [[ "$name" == '20260719000000_add_receipt_sequence' && "$checksum" == '93c6d2c0b8c4468fea26489cfb4875bfdc6763ec0056487c21094eae0dbcb257' ]]; then
+      [[ "$applied_steps" == 0 || "$applied_steps" == 1 ]] || return 1
+    else
+      [[ "$applied_steps" == 1 ]] || return 1
+    fi
+    active=$((active + 1))
+  done <<< "$rows"
+  [[ "$active" -eq 107 && "${#seen_names[@]}" -eq 107 ]] || return 1
+  for line in "${expected_rows[@]}"; do
+    name="${line%%|*}"
+    found=false
+    for checksum in "${seen_names[@]}"; do [[ "$checksum" != "$name" ]] || found=true; done
+    [[ "$found" == true ]] || return 1
+  done
+  AUDIT_DATABASE_MIGRATION_SET='PASS'
+}
+
 report_runtime_identity() {
+  local app_dir="${1:-$APP_DIR}"
+  local selector="${2:-$CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR}"
+  local deployments_root="${3:-$DEPLOYMENTS_ROOT}"
   local production_sha='UNKNOWN'
   local api_revision='UNKNOWN'
   local web_revision='UNKNOWN'
   local checkout_status='UNKNOWN'
-  local status_output
+  local identity='UNKNOWN'
+  local status_output from_sha migration_count
 
-  if [[ -d "$APP_DIR/.git" ]]; then
-    production_sha="$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
+  RUNTIME_APP_SHA='UNKNOWN'
+  AUDIT_DATABASE_MIGRATION_SET='NOT_EVALUATED'
+  if [[ -d "$app_dir/.git" ]]; then
+    production_sha="$(git -C "$app_dir" rev-parse HEAD 2>/dev/null || printf 'UNKNOWN')"
     if [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]]; then
-      if status_output="$(git -C "$APP_DIR" status --porcelain --untracked-files=all 2>/dev/null)" && [[ -z "$status_output" ]] && checkout_has_only_approved_ignored_files; then
+      if status_output="$(git -C "$app_dir" status --porcelain --untracked-files=all 2>/dev/null)" && [[ -z "$status_output" ]] && checkout_has_only_approved_ignored_files "$app_dir"; then
         checkout_status='CLEAN'
       else
         checkout_status='DIRTY'
@@ -319,14 +700,35 @@ report_runtime_identity() {
   printf 'CANDIDATE_SHA=%s\n' "$CANDIDATE_SHA"
   printf 'PRODUCTION_CHECKOUT_SHA=%s\n' "$production_sha"
   printf 'PRODUCTION_CHECKOUT_STATUS=%s\n' "$checkout_status"
+  printf 'RUNTIME_API_SHA=%s\n' "$api_revision"
+  printf 'RUNTIME_WEB_SHA=%s\n' "$web_revision"
   printf 'API_REVISION=%s\n' "$api_revision"
   printf 'WEB_REVISION=%s\n' "$web_revision"
-  if [[ "$checkout_status" == 'CLEAN' && "$production_sha" =~ ^[0-9a-f]{40}$ && "$production_sha" == "$api_revision" && "$api_revision" == "$web_revision" ]]; then
-    RUNTIME_APP_SHA="$production_sha"
-    printf 'RUNTIME_IDENTITY=CONSISTENT\n'
-  else
-    RUNTIME_APP_SHA='UNKNOWN'
-    printf 'RUNTIME_IDENTITY=UNKNOWN\n'
+
+  if [[ "$checkout_status" == 'CLEAN' && "$production_sha" =~ ^[0-9a-f]{40}$ && "$api_revision" =~ ^[0-9a-f]{40}$ && "$web_revision" =~ ^[0-9a-f]{40}$ && "$api_revision" == "$web_revision" ]]; then
+    if [[ "$production_sha" == "$api_revision" ]]; then
+      RUNTIME_APP_SHA="$api_revision"
+      identity='CONSISTENT'
+    elif validate_current_successful_deployment_selector_binding "$selector" "$deployments_root" "$api_revision" "$RUNTIME_API_IMAGE_ID" "$RUNTIME_WEB_IMAGE_ID"; then
+      from_sha="$(strict_key_value "$SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD" from_sha 2>/dev/null || true)"
+      migration_count="$(strict_key_value "$SELECTED_SUCCESSFUL_DEPLOYMENT_RECORD" migration_count 2>/dev/null || true)"
+      if [[ "$from_sha" == "$production_sha" && "$migration_count" == '107' \
+        && "$AUDIT_ACTIVE_FINISHED_MIGRATIONS" =~ ^(0|[1-9][0-9]*)$ \
+        && "$AUDIT_ACTIVE_FINISHED_MIGRATIONS" == '107' \
+        && "$AUDIT_FAILED_MIGRATIONS" =~ ^(0|[1-9][0-9]*)$ \
+        && "$AUDIT_FAILED_MIGRATIONS" == '0' ]]; then
+        if validate_database_migration_set "$app_dir" "$api_revision"; then
+          RUNTIME_APP_SHA="$api_revision"
+          identity='RECOVERED_SPLIT'
+        fi
+      fi
+    fi
+  fi
+
+  printf 'RUNTIME_APP_SHA=%s\n' "$RUNTIME_APP_SHA"
+  printf 'RUNTIME_IDENTITY=%s\n' "$identity"
+  printf 'DATABASE_MIGRATION_SET=%s\n' "${AUDIT_DATABASE_MIGRATION_SET:-NOT_EVALUATED}"
+  if [[ "$identity" == 'UNKNOWN' ]]; then
     AUDIT_EVIDENCE_FAILURES=$((AUDIT_EVIDENCE_FAILURES + 1))
   fi
 }
@@ -378,7 +780,16 @@ COMMIT;
 SQL
   report_query_stdin 'MIGRATIONS_AFTER_KNOWN_BASELINE' <<SQL
 BEGIN READ ONLY;
-SELECT COALESCE(string_agg(migration_name, ',' ORDER BY finished_at, migration_name), 'NONE')
+SELECT CASE
+  WHEN EXISTS (
+    SELECT 1 FROM "_prisma_migrations"
+    WHERE migration_name > '$KNOWN_PRODUCTION_BASELINE'
+      AND finished_at IS NOT NULL
+      AND rolled_back_at IS NULL
+      AND migration_name ~ '[,[:cntrl:]]'
+  ) THEN 'UNKNOWN'
+  ELSE COALESCE(string_agg(migration_name, ',' ORDER BY finished_at, migration_name), 'NONE')
+END
 FROM "_prisma_migrations"
 WHERE migration_name > '$KNOWN_PRODUCTION_BASELINE'
   AND finished_at IS NOT NULL
@@ -728,7 +1139,13 @@ SQL
 report_storage_database_buckets() {
   report_query_stdin 'FILE_BUCKET_COUNTS' <<'SQL'
 BEGIN READ ONLY;
-SELECT COALESCE(string_agg(bucket || ':' || row_count::text, ',' ORDER BY bucket), 'NONE')
+SELECT CASE
+  WHEN EXISTS (
+    SELECT 1 FROM "File"
+    WHERE bucket ~ '[,:[:cntrl:]]'
+  ) THEN 'UNKNOWN'
+  ELSE COALESCE(string_agg(bucket || ':' || row_count::text, ',' ORDER BY bucket), 'NONE')
+END
 FROM (SELECT bucket, count(*) AS row_count FROM "File" GROUP BY bucket) bucket_counts;
 COMMIT;
 SQL
@@ -1364,10 +1781,10 @@ main() {
   AUDIT_QUERY_FAILURES=0
   AUDIT_EVIDENCE_FAILURES=0
   AUDIT_INTERNAL_FAILURES=0
-  AUDIT_STAGE='RUNTIME_IDENTITY'
-  printf 'PRODUCTION_READONLY_AUDIT\n'
-  report_runtime_identity
+  AUDIT_ACTIVE_FINISHED_MIGRATIONS='UNKNOWN'
+  AUDIT_FAILED_MIGRATIONS='UNKNOWN'
   AUDIT_STAGE='CONTAINER_HEALTH'
+  printf 'PRODUCTION_READONLY_AUDIT\n'
   report_container_health API "$API_CONTAINER"
   report_container_health WEB "$WEB_CONTAINER"
   report_container_health POSTGRES "$POSTGRES_CONTAINER"
@@ -1381,6 +1798,8 @@ main() {
   report_safe_runtime_config
   AUDIT_STAGE='MIGRATIONS'
   report_migrations_and_schema
+  AUDIT_STAGE='RUNTIME_IDENTITY'
+  report_runtime_identity
   AUDIT_STAGE='FINANCE_COUNTS'
   report_finance_counts
   AUDIT_STAGE='FINANCE_INTEGRITY'

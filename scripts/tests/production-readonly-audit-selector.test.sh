@@ -10,9 +10,29 @@ TEST_TEMP_ROOT="$(cd -P -- "${TEST_TEMP_ROOT%/}" && pwd -P)"
 TEST_ROOT="$(mktemp -d "$TEST_TEMP_ROOT/buildingos-audit-selector.XXXXXX")"
 trap 'rm -rf -- "$TEST_ROOT"' EXIT
 
+readonly TEST_APP_DIR="$TEST_ROOT/app"
+readonly TEST_AUDIT_SCRIPT="$TEST_ROOT/production-readonly-audit.sh"
+mkdir -m 700 "$TEST_APP_DIR"
+mkdir -m 700 "$TEST_APP_DIR/.git"
+sed "s|^readonly APP_DIR=.*$|readonly APP_DIR='$TEST_APP_DIR'|" "$AUDIT_SCRIPT" > "$TEST_AUDIT_SCRIPT"
+
 # The selector parser is intentionally called with test-local explicit roots. Production
 # callers use only the fixed production constants defined in the audit script.
-source "$AUDIT_SCRIPT"
+source "$TEST_AUDIT_SCRIPT"
+
+inventory_count="$(expected_migration_rows | wc -l | tr -d ' ')"
+[[ "$inventory_count" == 107 ]] || {
+  printf 'FAIL: expected 107 immutable migration name/checksum rows in the trusted audit control, found %s\n' "$inventory_count" >&2
+  exit 1
+}
+grep -Fq '# Frozen name|SHA256 inventory verified from approved base c9d9a47c30215d0ac61b5c46b9cf6c6519658545.' "$TEST_AUDIT_SCRIPT" || {
+  printf 'FAIL: immutable migration inventory source commit is not declared\n' >&2
+  exit 1
+}
+grep -Fq 'applied_steps_count' "$TEST_AUDIT_SCRIPT" || {
+  printf 'FAIL: migration audit does not inspect applied_steps_count\n' >&2
+  exit 1
+}
 
 declare -F validate_current_successful_deployment_selector >/dev/null || {
   printf 'FAIL: audit selector parser is unavailable\n' >&2
@@ -22,10 +42,12 @@ declare -F validate_current_successful_deployment_selector >/dev/null || {
 readonly TEST_DEPLOYMENTS_ROOT="$TEST_ROOT/deployments"
 readonly TEST_RECOVERY_ROOT="$TEST_ROOT/recovery-points"
 readonly SELECTOR="$TEST_DEPLOYMENTS_ROOT/current-successful-deployment.v1"
-readonly TARGET_SHA='0123456789abcdef0123456789abcdef01234567'
-readonly SOURCE_SHA='89abcdef0123456789abcdef0123456789abcdef'
+readonly TARGET_SHA='db82d3d37fc6184a6d4063709b9a15b923371695'
+readonly SOURCE_SHA='890b4f67044bbc62328493da01d485822e0beafc'
+readonly API_DIGEST='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+readonly WEB_DIGEST='sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
 readonly RECOVERY_ID='89abcdef0123-20260901t000000z-aaaaaaaaaaaaaaaaaaaaaaaa'
-readonly RECORD="$TEST_DEPLOYMENTS_ROOT/deploy-$TARGET_SHA.txt"
+readonly RECORD="$TEST_DEPLOYMENTS_ROOT/rollback-$TARGET_SHA.txt"
 readonly BUNDLE="$TEST_RECOVERY_ROOT/$RECOVERY_ID"
 readonly RECEIPT="$BUNDLE/metadata/recovery-point-receipt.json"
 readonly OBJECT_IDENTITY='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -78,12 +100,16 @@ write_record_and_selector() {
   cat >"$RECORD" <<RECORD
 status=SUCCESS
 target_sha=$TARGET_SHA
+from_sha=$SOURCE_SHA
+migration_count=107
 recovery_point_id=$RECOVERY_ID
 recovery_point_receipt_path=$RECEIPT
 recovery_point_bundle_path=$BUNDLE
 recovery_point_receipt_sha256=$receipt_hash
 recovery_point_source_sha=$SOURCE_SHA
 recovery_point_remote_root=backup:recovery/buildingos/recovery-points/test
+api_digest=$API_DIGEST
+web_digest=$WEB_DIGEST
 RECORD
   chmod 600 "$RECORD"
   cat >"$SELECTOR" <<SELECTOR
@@ -111,6 +137,75 @@ write_receipt
 write_record_and_selector
 ok 'exact selector record and receipt validate for the current runtime' \
   validate_current_successful_deployment_selector "$SELECTOR" "$TEST_DEPLOYMENTS_ROOT" "$TEST_RECOVERY_ROOT" "$TARGET_SHA"
+
+proven_runtime_evidence_case() {
+  local output_file="$TEST_ROOT/recovery-audit-output"
+  local runtime_output_file="$TEST_ROOT/runtime-identity-output"
+  local runtime_checkout="$TEST_ROOT/runtime-checkout"
+  local migration_rows='' migration_hash migration_name i
+  mkdir -m 700 "$runtime_checkout"
+  mkdir -m 700 "$runtime_checkout/.git"
+  printf '**/.env\n' > "$runtime_checkout/.dockerignore"
+  chmod 600 "$runtime_checkout/.dockerignore"
+  git() {
+    case "$*" in
+      *'rev-parse HEAD') printf '%s' "$SOURCE_SHA" ;;
+      *'status --porcelain --untracked-files=all'*) ;;
+      *'ls-files --others --ignored'*) ;;
+      *'ls-tree -r --name-only'*)
+        for i in $(seq 1 97); do printf 'apps/api/prisma/migrations/migration_%03d/migration.sql\n' "$i"; done
+        ;;
+      *'show '*':apps/api/prisma/migrations/'*) printf 'runtime migration\n' ;;
+      *) return 1 ;;
+    esac
+  }
+  while IFS='|' read -r migration_name migration_hash; do
+    if [[ "$migration_name" == '20260719000000_add_receipt_sequence' ]]; then
+      migration_rows+="$migration_name"$'\t'"$migration_hash"$'\t1\t1\t0\t0\n'
+    else
+      migration_rows+="$migration_name"$'\t'"$migration_hash"$'\t1\t1\t0\t1\n'
+    fi
+  done < <(expected_migration_rows)
+  # shellcheck disable=SC2329 # The sourced runtime verifier invokes this query callback indirectly.
+  readonly_query_stdin() {
+    local query
+    query="$(< /dev/stdin)"
+    [[ "$query" == *'BEGIN READ ONLY;'* && "$query" == *'COMMIT;'* && "$query" == *'"_prisma_migrations"'* && "$query" == *'applied_steps_count'* ]] || return 1
+    printf '%s' "$migration_rows"
+  }
+  container_revision() {
+    case "$1" in
+      buildingos-api|buildingos-web) printf '%s' "$TARGET_SHA" ;;
+    esac
+  }
+  [[ "$(git -C "$runtime_checkout" ls-tree -r --name-only "$TARGET_SHA" -- apps/api/prisma/migrations | wc -l | tr -d ' ')" == 97 ]]
+  [[ "$(printf '%s' "$migration_rows" | awk 'END { print NR }')" == 107 ]]
+  container_image_id() {
+    case "$1" in
+      buildingos-api) printf '%s' "$API_DIGEST" ;;
+      buildingos-web) printf '%s' "$WEB_DIGEST" ;;
+    esac
+  }
+  [[ "$(git -C "$runtime_checkout" rev-parse HEAD)" == "$SOURCE_SHA" ]]
+  [[ "$(container_revision buildingos-api)" == "$TARGET_SHA" ]]
+  [[ "$(container_image_id buildingos-api)" == "$API_DIGEST" ]]
+  AUDIT_EVIDENCE_FAILURES=0
+  AUDIT_ACTIVE_FINISHED_MIGRATIONS=107
+  AUDIT_FAILED_MIGRATIONS=0
+  CANDIDATE_SHA="$TARGET_SHA"
+  report_runtime_identity "$runtime_checkout" "$SELECTOR" "$TEST_DEPLOYMENTS_ROOT" > "$runtime_output_file"
+  [[ "$(<"$runtime_output_file")" == *"RUNTIME_IDENTITY=RECOVERED_SPLIT"* ]]
+  [[ "$AUDIT_ACTIVE_FINISHED_MIGRATIONS" == 107 ]]
+  [[ "$AUDIT_FAILED_MIGRATIONS" == 0 ]]
+  [[ "$(<"$runtime_output_file")" == *"RUNTIME_APP_SHA=$TARGET_SHA"* ]]
+  [[ "$(<"$runtime_output_file")" == *"CANDIDATE_SHA=$CANDIDATE_SHA"* ]]
+  report_recovery_point_selector "$SELECTOR" "$TEST_DEPLOYMENTS_ROOT" "$TEST_RECOVERY_ROOT" "" "$API_DIGEST" "$WEB_DIGEST" > "$output_file"
+  [[ "$(<"$output_file")" == *"CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR=PASS"* ]]
+  [[ "$RECOVERY_POINT_AUDIT_STATUS" == PASS ]]
+  [[ "$RECOVERY_POINT_AUDIT_STATUS" != NOT_EVALUATED ]]
+  [[ "$AUDIT_EVIDENCE_FAILURES" -eq 0 ]]
+}
+ok 'selector and recovery-point evidence are evaluated for a proven runtime' proven_runtime_evidence_case
 
 write_reference_content
 write_receipt
@@ -163,12 +258,16 @@ receipt_hash="$(sha256 "$RECEIPT")"
 cat >"$rollback_record" <<RECORD
 status=SUCCESS
 target_sha=$TARGET_SHA
+from_sha=$SOURCE_SHA
+migration_count=107
 recovery_point_id=$RECOVERY_ID
 recovery_point_receipt_path=$RECEIPT
 recovery_point_bundle_path=$BUNDLE
 recovery_point_receipt_sha256=$receipt_hash
 recovery_point_source_sha=$SOURCE_SHA
 recovery_point_remote_root=backup:recovery/buildingos/recovery-points/test
+api_digest=$API_DIGEST
+web_digest=$WEB_DIGEST
 RECORD
 chmod 600 "$rollback_record"
 printf 'format=buildingos-current-successful-deployment/v1\nrecord_path=%s\ntarget_sha=%s\n' "$rollback_record" "$TARGET_SHA" >"$SELECTOR"
@@ -181,7 +280,8 @@ rollback_publisher_failure_case() {
   env BUILDINGOS_ROLLBACK_SELECTOR_LIBRARY_ONLY=true ROLLBACK_SCRIPT="$ROLLBACK_SCRIPT" CASE_ROOT="$TEST_ROOT/rollback-publisher" TARGET_SHA="$TARGET_SHA" bash -c '
     set -Eeuo pipefail
     source "$ROLLBACK_SCRIPT"
-    mkdir -m 700 -p "$CASE_ROOT/deployments" "$CASE_ROOT/bin"
+    mkdir -m 700 "$CASE_ROOT"
+    mkdir -m 700 "$CASE_ROOT/deployments" "$CASE_ROOT/bin"
     record="$CASE_ROOT/deployments/rollback-$TARGET_SHA.txt"
     selector="$CASE_ROOT/deployments/current-successful-deployment.v1"
     printf "old-selector\n" > "$selector"; chmod 600 "$selector"
