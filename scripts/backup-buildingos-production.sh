@@ -7,6 +7,8 @@ require() { [[ -n "${!1:-}" ]] || fail "$1 is required"; }
 safe_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,95}$ ]]; }
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
+# shellcheck source=scripts/lib/production-operation-lock.sh
+source "$script_dir/lib/production-operation-lock.sh"
 
 for variable in BACKUP_ENDPOINT BACKUP_BUCKET BACKUP_VERIFY_ACCESS_KEY BACKUP_VERIFY_SECRET_KEY BACKUP_SSE_CAPABILITY_FILE BACKUP_STATE_DIR; do require "$variable"; done
 "$script_dir/validate-sse-capability.sh" >/dev/null || fail "SSE-S3 capability gate failed; no BuildingOS backup was started"
@@ -40,7 +42,8 @@ safe_id "$backup_set_id" || fail "unsafe BACKUP_SET_ID"
 
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/buildingos-paired-backup.XXXXXX")"
 readonly temp_dir
-trap 'rm -rf "$temp_dir"' EXIT
+production_operation_lock_acquire || fail "Unable to acquire the shared production operation lock"
+trap 'production_operation_lock_release; rm -rf "$temp_dir"' EXIT
 umask 077
 postgres_receipt="$temp_dir/postgres-backup-receipt.json"
 

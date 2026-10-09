@@ -6,6 +6,7 @@ CONTROL_LIB_DIR='/usr/local/libexec/buildingos-backup-preflight/lib'
 PREFLIGHT_SCRIPT='/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh'
 ENDPOINT_HELPER='/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh'
 OBJECT_BACKUP_EXEC='/usr/local/libexec/buildingos-backup/backup-object-storage.sh'
+OBJECT_OPERATION_LOCK='/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh'
 MANIFEST='/usr/local/libexec/buildingos-backup-preflight/manifest'
 INSTALLED_LAUNCHER='/usr/local/sbin/buildingos-production-backup-preflight'
 SUDOERS_POLICY='/etc/sudoers.d/buildingos-production-backup-preflight'
@@ -57,11 +58,12 @@ release_payload() {
   control_hash="$3"
   helper_hash="$4"
   object_exec_hash="$5"
-  sudoers_hash="$6"
-  service_hash="$7"
-  timer_hash="$8"
-  privctl_launcher_hash="$9"
-  privctl_sudoers_hash="${10}"
+  object_lock_hash="$6"
+  sudoers_hash="$7"
+  service_hash="$8"
+  timer_hash="$9"
+  privctl_launcher_hash="${10}"
+  privctl_sudoers_hash="${11}"
   printf 'manifest_version=1\n'
   printf 'tooling_source_sha=%s\n' "$tooling_source_sha"
   printf 'launcher_path=/usr/local/sbin/buildingos-production-backup-preflight\n'
@@ -72,6 +74,8 @@ release_payload() {
   printf 'helper_sha256=%s\n' "$helper_hash"
   printf 'object_exec_path=/usr/local/libexec/buildingos-backup/backup-object-storage.sh\n'
   printf 'object_exec_sha256=%s\n' "$object_exec_hash"
+  printf 'object_lock_path=/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh\n'
+  printf 'object_lock_sha256=%s\n' "$object_lock_hash"
   printf 'sudoers_path=/etc/sudoers.d/buildingos-production-backup-preflight\n'
   printf 'sudoers_sha256=%s\n' "$sudoers_hash"
   printf 'object_service_path=/etc/systemd/system/pawtech-buildingos-object-backup.service\n'
@@ -95,14 +99,15 @@ assert_manifest_matches() {
   control_hash="$(hash_file "$PREFLIGHT_SCRIPT")"
   helper_hash="$(hash_file "$ENDPOINT_HELPER")"
   object_exec_hash="$(hash_file "$OBJECT_BACKUP_EXEC")"
+  object_lock_hash="$(hash_file "$OBJECT_OPERATION_LOCK")"
   sudoers_hash="$(hash_file "$SUDOERS_POLICY")"
   service_hash="$(hash_file "$OBJECT_SERVICE_UNIT")"
   timer_hash="$(hash_file "$OBJECT_TIMER_UNIT")"
   privctl_launcher_hash="$(hash_file "$PRIVCTL_LAUNCHER")"
   privctl_sudoers_hash="$(hash_file "$PRIVCTL_SUDOERS")"
-  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash" | hash_text)"
+  release_hash="$(release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$object_lock_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash" | hash_text)"
   if ! {
-    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash"
+    release_payload "$tooling_source_sha" "$launcher_hash" "$control_hash" "$helper_hash" "$object_exec_hash" "$object_lock_hash" "$sudoers_hash" "$service_hash" "$timer_hash" "$privctl_launcher_hash" "$privctl_sudoers_hash"
     printf 'release_sha256=%s\n' "$release_hash"
   } | cmp -s - "$MANIFEST"; then
     fail 'installed manifest is stale, malformed, or does not match protected artifacts'
@@ -122,6 +127,7 @@ if [ "${BUILDINGOS_BACKUP_PREFLIGHT_TEST_MODE:-}" = LOCAL_ISOLATED_ONLY ]; then
   PREFLIGHT_SCRIPT="$CONTROL_DIR/production-backup-preflight.sh"
   ENDPOINT_HELPER="$CONTROL_LIB_DIR/endpoint-identity.sh"
   OBJECT_BACKUP_EXEC="$test_root/usr/local/libexec/buildingos-backup/backup-object-storage.sh"
+  OBJECT_OPERATION_LOCK="$test_root/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh"
   MANIFEST="$CONTROL_DIR/manifest"
   INSTALLED_LAUNCHER="$test_root/usr/local/sbin/buildingos-production-backup-preflight"
   SUDOERS_POLICY="$test_root/etc/sudoers.d/buildingos-production-backup-preflight"
@@ -150,6 +156,7 @@ done
 [ -f "$PREFLIGHT_SCRIPT" ] && [ ! -L "$PREFLIGHT_SCRIPT" ] || fail 'trusted preflight control is unavailable'
 [ -f "$ENDPOINT_HELPER" ] && [ ! -L "$ENDPOINT_HELPER" ] || fail 'trusted endpoint helper is unavailable'
 [ -f "$OBJECT_BACKUP_EXEC" ] && [ ! -L "$OBJECT_BACKUP_EXEC" ] || fail 'trusted Object Storage executable is unavailable'
+[ -f "$OBJECT_OPERATION_LOCK" ] && [ ! -L "$OBJECT_OPERATION_LOCK" ] || fail 'trusted operation lock helper is unavailable'
 [ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ] || fail 'trusted manifest is unavailable'
 [ -f "$INSTALLED_LAUNCHER" ] && [ ! -L "$INSTALLED_LAUNCHER" ] || fail 'trusted launcher is unavailable'
 [ -f "$SUDOERS_POLICY" ] && [ ! -L "$SUDOERS_POLICY" ] || fail 'trusted sudoers policy is unavailable'
@@ -162,6 +169,7 @@ assert_metadata "$CONTROL_LIB_DIR" 755
 assert_metadata "$PREFLIGHT_SCRIPT" 755
 assert_metadata "$ENDPOINT_HELPER" 644
 assert_metadata "$OBJECT_BACKUP_EXEC" 755
+assert_metadata "$OBJECT_OPERATION_LOCK" 644
 assert_metadata "$MANIFEST" 644
 assert_metadata "$INSTALLED_LAUNCHER" 755
 assert_metadata "$SUDOERS_POLICY" 440

@@ -158,6 +158,7 @@ make_fixture() {
     "$FAKE_ROOT/usr/local/sbin" \
     "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/lib" \
     "$FAKE_ROOT/usr/local/libexec/buildingos-backup" \
+    "$FAKE_ROOT/usr/local/libexec/buildingos-backup/lib" \
     "$FAKE_ROOT/etc/buildingos" \
     "$FAKE_ROOT/etc/sudoers.d" \
     "$FAKE_ROOT/etc/systemd/system" \
@@ -186,12 +187,14 @@ make_fixture() {
   printf 'protected\n' > "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh"
   printf 'protected\n' > "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh"
   printf 'protected\n' > "$FAKE_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh"
+  printf 'protected\n' > "$FAKE_ROOT/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh"
   printf 'protected\n' > "$FAKE_ROOT/etc/sudoers.d/buildingos-production-backup-preflight"
   printf 'protected\n' > "$FAKE_ROOT/etc/sudoers.d/buildingos-privctl"
   printf 'protected\n' > "$OBJECT_SERVICE_UNIT"
   printf 'protected\n' > "$OBJECT_TIMER_UNIT"
   printf 'OBJECT_BACKUP_SOURCE=prod:buildingos-production\nOBJECT_BACKUP_DESTINATION=backup:buildingos-production-backup\n' > "$FAKE_ROOT/etc/buildingos/object-backup.env"
   chmod 0755 "$FAKE_ROOT/usr/local/sbin/buildingos-production-backup-preflight" "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh" "$FAKE_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh"
+  chmod 0644 "$FAKE_ROOT/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh"
   chmod 0644 "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh" "$OBJECT_SERVICE_UNIT" "$OBJECT_TIMER_UNIT" "$FAKE_ROOT/etc/buildingos/object-backup.env"
   chmod 0440 "$FAKE_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" "$FAKE_ROOT/etc/sudoers.d/buildingos-privctl"
 
@@ -199,6 +202,7 @@ make_fixture() {
   control_hash="$(hash_file "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh")"
   helper_hash="$(hash_file "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh")"
   object_exec_hash="$(hash_file "$FAKE_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh")"
+  object_lock_hash="$(hash_file "$FAKE_ROOT/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh")"
   sudoers_hash="$(hash_file "$FAKE_ROOT/etc/sudoers.d/buildingos-production-backup-preflight")"
   service_hash="$(hash_file "$OBJECT_SERVICE_UNIT")"
   timer_hash="$(hash_file "$OBJECT_TIMER_UNIT")"
@@ -211,6 +215,7 @@ make_fixture() {
     printf 'control_path=%s\ncontrol_sha256=%s\n' "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/production-backup-preflight.sh" "$control_hash"
     printf 'helper_path=%s\nhelper_sha256=%s\n' "$FAKE_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh" "$helper_hash"
     printf 'object_exec_path=%s\nobject_exec_sha256=%s\n' "$FAKE_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh" "$object_exec_hash"
+    printf 'object_lock_path=%s\nobject_lock_sha256=%s\n' "$FAKE_ROOT/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh" "$object_lock_hash"
     printf 'sudoers_path=%s\nsudoers_sha256=%s\n' "$FAKE_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" "$sudoers_hash"
     printf 'object_service_path=%s\nobject_service_sha256=%s\n' "$OBJECT_SERVICE_UNIT" "$service_hash"
     printf 'object_timer_path=%s\nobject_timer_sha256=%s\n' "$OBJECT_TIMER_UNIT" "$timer_hash"

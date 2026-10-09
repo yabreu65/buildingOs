@@ -11,9 +11,14 @@ readonly STORAGE_CUTOVER_GUARD="$SCRIPT_DIR/production-storage-cutover-guard.sh"
 readonly RECOVERY_POINT_PORTABLE_STAT_LIBRARY="$SCRIPT_DIR/lib/recovery-point-portable-stat.sh"
 readonly RECOVERY_POINT_CAPTURE_LIBRARY="$SCRIPT_DIR/lib/recovery-point-capture.sh"
 readonly S3_WRITE_FENCE_LIBRARY="$SCRIPT_DIR/lib/production-s3-write-fence.sh"
+readonly PRODUCTION_OPERATION_LOCK_LIBRARY="$SCRIPT_DIR/lib/production-operation-lock.sh"
 readonly BACKUP_IDENTITY_MANIFEST="$CONTROL_ROOT/infra/production/backup-postgres.identity.v1"
 [[ -f "$SECURITY_VALIDATOR" && ! -L "$SECURITY_VALIDATOR" ]] || {
   printf 'ERROR: Trusted production security validator is missing or invalid\n' >&2
+  exit 1
+}
+[[ -f "$PRODUCTION_OPERATION_LOCK_LIBRARY" && ! -L "$PRODUCTION_OPERATION_LOCK_LIBRARY" ]] || {
+  printf 'ERROR: Trusted production operation lock helper is missing or invalid\n' >&2
   exit 1
 }
 [[ -f "$STORAGE_CUTOVER_GUARD" && ! -L "$STORAGE_CUTOVER_GUARD" ]] || {
@@ -31,6 +36,8 @@ source "$RECOVERY_POINT_PORTABLE_STAT_LIBRARY"
 # shellcheck source=scripts/lib/recovery-point-capture.sh
 # recovery-point-capture loads the fence through its trusted sibling control path.
 source "$RECOVERY_POINT_CAPTURE_LIBRARY"
+# shellcheck source=scripts/lib/production-operation-lock.sh
+source "$PRODUCTION_OPERATION_LOCK_LIBRARY"
 
 usage() {
   printf 'Usage: %s <target_sha> <approved_sha> <expected_current_sha> <api_health_url> <api_readyz_url> <web_login_url>\n' "${0##*/}" >&2
@@ -387,6 +394,7 @@ on_exit() {
   trap - EXIT
   recovery_point_restore_and_resume || true
   cleanup_target_tree
+  production_operation_lock_release
   return "$rc"
 }
 
@@ -394,6 +402,7 @@ trap on_error ERR
 trap 'on_signal INT' INT
 trap 'on_signal TERM' TERM
 trap on_exit EXIT
+production_operation_lock_acquire || fail 'Unable to acquire the shared production operation lock'
 
 check_http() {
   local label="$1"
