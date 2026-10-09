@@ -30,6 +30,13 @@ production changes.
 
 ## Activation prerequisites
 
+The versioned installation is prepared with
+`scripts/install-weekly-recovery-point.sh`. It copies only files from a clean
+Git commit into `/opt/buildingos/weekly-recovery-points/releases/<SHA>`, renders
+absolute systemd paths for that release, writes the environment with capture
+disabled, and rolls back the transaction on failure. It never enables the
+weekly timer.
+
 Activation requires a separate operational approval after local tests pass:
 
 1. Install the service, timer, and a root-owned environment file with
