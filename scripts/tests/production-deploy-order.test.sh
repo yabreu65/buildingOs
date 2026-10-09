@@ -16,6 +16,7 @@ recovery_helper_paths=(
   scripts/lib/recovery-point-file-manifest.sh
   scripts/lib/recovery-point-file-object-bundle.sh
   scripts/lib/recovery-point-object-source.sh
+  scripts/lib/production-operation-lock.sh
   scripts/lib/production-rclone-recovery-check.sh
   scripts/lib/production-s3-write-fence.sh
   scripts/lib/recovery-point-s3-helper.cjs
