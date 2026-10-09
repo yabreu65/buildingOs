@@ -71,6 +71,7 @@ jobs:
           test -f scripts/lib/recovery-point-file-manifest.sh && test ! -L scripts/lib/recovery-point-file-manifest.sh
           test -f scripts/lib/recovery-point-file-object-bundle.sh && test ! -L scripts/lib/recovery-point-file-object-bundle.sh
           test -f scripts/lib/recovery-point-object-source.sh && test ! -L scripts/lib/recovery-point-object-source.sh
+          test -f scripts/lib/production-operation-lock.sh && test ! -L scripts/lib/production-operation-lock.sh
           test -f scripts/lib/production-rclone-recovery-check.sh && test ! -L scripts/lib/production-rclone-recovery-check.sh
           test -f scripts/lib/production-s3-write-fence.sh && test ! -L scripts/lib/production-s3-write-fence.sh
           test -f scripts/lib/recovery-point-s3-helper.cjs && test ! -L scripts/lib/recovery-point-s3-helper.cjs
@@ -140,6 +141,7 @@ jobs:
             scripts/lib/recovery-point-file-manifest.sh \
             scripts/lib/recovery-point-file-object-bundle.sh \
             scripts/lib/recovery-point-object-source.sh \
+            scripts/lib/production-operation-lock.sh \
             scripts/lib/production-rclone-recovery-check.sh \
             scripts/lib/production-s3-write-fence.sh \
             scripts/lib/recovery-point-s3-helper.cjs \

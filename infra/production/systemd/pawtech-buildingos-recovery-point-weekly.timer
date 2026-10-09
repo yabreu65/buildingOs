@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the BuildingOS weekly Recovery Point capture
+
+[Timer]
+OnCalendar=Sun *-*-* 03:30:00
+RandomizedDelaySec=0
+Persistent=false
+Unit=pawtech-buildingos-recovery-point-weekly.service
+
+[Install]
+WantedBy=timers.target

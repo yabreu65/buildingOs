@@ -144,6 +144,10 @@ s3_fence_run_recovery_point() {
   local image="$1" env="$2" network="$3" e="$4" quiesce="$5" capture="$6" resume="$7" s key post_key pre_meta="$4/pre-owned.json" post_meta="$4/post-owned.json" pre_version
   s3_fence_callback "$quiesce" && s3_fence_callback "$capture" && s3_fence_callback "$resume" || return 1
   s3_fence_private_directory "$e" || return 1; s3_fence_preflight "$image" "$env" "$network" "$e" || return 1; s="$e/policy-snapshot"; s3_fence_snapshot_policy "$image" "$env" "$network" "$s" || return 1
+  if [[ -n "${S3_FENCE_AFTER_SNAPSHOT_CALLBACK:-}" ]]; then
+    s3_fence_callback "$S3_FENCE_AFTER_SNAPSHOT_CALLBACK" || return 1
+    "$S3_FENCE_AFTER_SNAPSHOT_CALLBACK" "$s" || return 1
+  fi
   key="$(s3_fence_new_probe_key)" && s3_fence_presigned_put "$image" "$env" "$network" "$key" "$e" && [[ "$S3_FENCE_HTTP" == 200 ]] && s3_fence_probe "$image" "$env" "$network" head "$key" "$pre_meta" '' true && s3_fence_ok "$pre_meta" || return 1
   pre_version="$(jq -er '.versionId | select(type == "string" and length > 0)' "$pre_meta")" || return 1
   "$quiesce" || return 1

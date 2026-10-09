@@ -6,12 +6,19 @@ readonly SCRIPT_DIR
 # shellcheck source=scripts/production-security-validate.sh
 source "$SCRIPT_DIR/production-security-validate.sh"
 readonly RELEASE_A_PORTABLE_STAT_LIBRARY="$SCRIPT_DIR/lib/recovery-point-portable-stat.sh"
+readonly PRODUCTION_OPERATION_LOCK_LIBRARY="$SCRIPT_DIR/lib/production-operation-lock.sh"
 [[ -f "$RELEASE_A_PORTABLE_STAT_LIBRARY" && ! -L "$RELEASE_A_PORTABLE_STAT_LIBRARY" ]] || {
   printf 'ERROR: trusted portable stat helper is missing or invalid\n' >&2
   exit 1
 }
+[[ -f "$PRODUCTION_OPERATION_LOCK_LIBRARY" && ! -L "$PRODUCTION_OPERATION_LOCK_LIBRARY" ]] || {
+  printf 'ERROR: trusted production operation lock helper is missing or invalid\n' >&2
+  exit 1
+}
 # shellcheck source=scripts/lib/recovery-point-portable-stat.sh
 source "$RELEASE_A_PORTABLE_STAT_LIBRARY"
+# shellcheck source=scripts/lib/production-operation-lock.sh
+source "$PRODUCTION_OPERATION_LOCK_LIBRARY"
 
 usage() {
   printf 'Usage: %s <expected_current_sha> <previous_sha> <previous_api_digest> <previous_web_digest> <compatibility_receipt> <api_health_url> <api_readyz_url> <web_login_url>\n' "${0##*/}" >&2
@@ -111,6 +118,7 @@ rollback_exit() {
       write_rollback_record FAILED || true
     fi
   fi
+  production_operation_lock_release
   exit "$rc"
 }
 trap rollback_exit EXIT
@@ -319,6 +327,7 @@ cd "$APP_DIR"
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_CURRENT_SHA" ]] || fail "Production checkout changed since compatibility review"
 compose=(docker compose --project-name buildingos --env-file "$ENV_FILE" --file "$COMPOSE_FILE")
 rollback_compose_config_preflight "$EXPECTED_CURRENT_SHA" "${compose[@]}"
+production_operation_lock_acquire || fail 'Unable to acquire the shared production operation lock'
 
 PHASE='quiesce'
 ROLLBACK_API_WAS_RUNNING="$(docker inspect --format '{{.State.Running}}' buildingos-api)" \

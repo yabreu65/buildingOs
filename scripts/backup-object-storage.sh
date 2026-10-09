@@ -4,6 +4,20 @@ set +x
 
 fail() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_dir
+readonly operation_lock_library="$script_dir/lib/production-operation-lock.sh"
+readonly operation_lock_sha256='116f03904418abb7f84bc4624a9f0151a8b4f0713d9b8e6b9f05b4212f44b2d4'
+[[ -f "$operation_lock_library" && ! -L "$operation_lock_library" ]] || fail 'shared operation lock helper is unavailable'
+if command -v sha256sum >/dev/null 2>&1; then
+  operation_lock_actual_sha256="$(sha256sum "$operation_lock_library" | awk '{print $1}')"
+else
+  operation_lock_actual_sha256="$(shasum -a 256 "$operation_lock_library" | awk '{print $1}')"
+fi
+[[ "$operation_lock_actual_sha256" == "$operation_lock_sha256" ]] || fail 'shared operation lock helper integrity check failed'
+# shellcheck source=scripts/lib/production-operation-lock.sh
+source "$operation_lock_library"
+
 validate_location() {
   local label="$1"
   local value="$2"
@@ -27,6 +41,8 @@ receipt_file="${OBJECT_BACKUP_RECEIPT:-${TMPDIR:-/tmp}/buildingos-object-backup-
 receipt_dir="${receipt_file%/*}"
 [[ -d "$receipt_dir" ]] || fail 'OBJECT_BACKUP_RECEIPT parent directory is unavailable'
 [[ ! -L "$receipt_file" ]] || fail 'OBJECT_BACKUP_RECEIPT must not be a symlink'
+production_operation_lock_acquire || fail 'Unable to acquire the shared production operation lock'
+trap 'production_operation_lock_release; [[ -z "${temporary_receipt:-}" ]] || rm -f -- "$temporary_receipt"' EXIT
 rm -f "$receipt_file" || fail 'unable to clear the previous object backup receipt'
 
 source_location="${OBJECT_BACKUP_SOURCE:-}"
@@ -38,10 +54,6 @@ command -v rclone >/dev/null 2>&1 || fail 'rclone is required'
 
 started_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 temporary_receipt=''
-cleanup() {
-  [[ -z "$temporary_receipt" ]] || rm -f "$temporary_receipt"
-}
-trap cleanup EXIT
 
 if ! rclone copy "$source_location" "$destination_location" >/dev/null; then
   fail 'object storage copy failed'

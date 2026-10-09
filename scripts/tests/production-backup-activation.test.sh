@@ -17,6 +17,8 @@ assert_absent() { local name="$1" value="$2" file="$3"; if grep -Fq -- "$value" 
 
 mkdir -p "$TEST_ROOT/coordinator" "$TEST_ROOT/state" "$TEST_ROOT/bin" "$TEST_ROOT/pg-root" "$TEST_ROOT/remote"
 cp "$ROOT_DIR/scripts/backup-buildingos-production.sh" "$TEST_ROOT/coordinator/"
+mkdir -p "$TEST_ROOT/coordinator/lib"
+cp "$ROOT_DIR/scripts/lib/production-operation-lock.sh" "$TEST_ROOT/coordinator/lib/"
 
 cat > "$TEST_ROOT/coordinator/validate-sse-capability.sh" <<'MOCK'
 #!/usr/bin/env bash
@@ -292,7 +294,13 @@ else
 fi
 
 systemd_controls_valid=true
-for timer_file in "$ROOT_DIR"/infra/production/systemd/*.timer; do grep -Fxq 'Persistent=true' "$timer_file" || systemd_controls_valid=false; done
+for timer_file in "$ROOT_DIR"/infra/production/systemd/*.timer; do
+  if [[ "$(basename "$timer_file")" == pawtech-buildingos-recovery-point-weekly.timer ]]; then
+    grep -Fxq 'Persistent=false' "$timer_file" || systemd_controls_valid=false
+  else
+    grep -Fxq 'Persistent=true' "$timer_file" || systemd_controls_valid=false
+  fi
+done
 for service_file in "$ROOT_DIR"/infra/production/systemd/*.service; do grep -Fxq 'NoNewPrivileges=true' "$service_file" || systemd_controls_valid=false; done
 if grep -REq '(ACCESS_KEY|SECRET_KEY|PASSWORD)=' "$ROOT_DIR/infra/production/systemd"; then systemd_controls_valid=false; fi
 if [[ "$systemd_controls_valid" == true ]]; then pass "systemd units are persistent, hardened, and contain no embedded credentials"; else fail_test "systemd units are persistent, hardened, and contain no embedded credentials"; fi

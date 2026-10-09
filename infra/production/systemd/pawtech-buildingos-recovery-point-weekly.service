@@ -1,0 +1,22 @@
+[Unit]
+Description=BuildingOS weekly Recovery Point capture
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=pawtech-buildingos-backup-alert@%n.service
+
+[Service]
+Type=oneshot
+User=yoryi
+Group=yoryi
+EnvironmentFile=-/etc/buildingos/recovery-point-weekly.env
+WorkingDirectory=/opt/pawtech/apps/buildingos/buildingos-app
+ExecStart=/opt/pawtech/apps/buildingos/buildingos-app/scripts/backup-recovery-point-weekly.sh --mode capture
+UMask=0077
+TimeoutStartSec=6h
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/pawtech/backups /var/lib/buildingos-backup /var/lib/buildingos-weekly
+StateDirectory=buildingos-weekly

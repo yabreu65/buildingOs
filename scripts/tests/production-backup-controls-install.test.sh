@@ -63,6 +63,7 @@ make_source() {
   cp "$ROOT_DIR/infra/production/systemd/pawtech-buildingos-object-backup.service" "$SOURCE_ROOT/infra/production/systemd/"
   cp "$ROOT_DIR/infra/production/systemd/pawtech-buildingos-object-backup.timer" "$SOURCE_ROOT/infra/production/systemd/"
   cp "$ROOT_DIR/scripts/lib/endpoint-identity.sh" "$SOURCE_ROOT/scripts/lib/"
+  cp "$ROOT_DIR/scripts/lib/production-operation-lock.sh" "$SOURCE_ROOT/scripts/lib/"
   cp "$ROOT_DIR/scripts/backup-object-storage.sh" "$SOURCE_ROOT/scripts/"
   cat > "$SOURCE_ROOT/scripts/production-backup-preflight.sh" <<'CONTROL'
 #!/usr/bin/env bash
@@ -104,6 +105,7 @@ hashes() {
     "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/lib/endpoint-identity.sh" \
     "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest" \
     "$DEST_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh" \
+    "$DEST_ROOT/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh" \
     "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" \
     "$DEST_ROOT/usr/local/sbin/buildingos-privctl" \
     "$DEST_ROOT/etc/sudoers.d/buildingos-privctl" \
@@ -124,6 +126,7 @@ protected_tree_state() {
     "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest" \
     "$DEST_ROOT/usr/local/libexec/buildingos-backup" \
     "$DEST_ROOT/usr/local/libexec/buildingos-backup/backup-object-storage.sh" \
+    "$DEST_ROOT/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh" \
     "$DEST_ROOT/etc/sudoers.d/buildingos-production-backup-preflight" \
     "$DEST_ROOT/usr/local/sbin/buildingos-privctl" \
     "$DEST_ROOT/etc/sudoers.d/buildingos-privctl" \
@@ -269,11 +272,14 @@ assert_contains 'legacy snapshot binds legacy control hash' 'sha256=' "$LEGACY_S
 assert_contains 'installed manifest records tooling identity' "tooling_source_sha=$CANDIDATE_ONE" "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
 assert_contains 'installed manifest records privctl launcher identity' 'privctl_launcher_path=/usr/local/sbin/buildingos-privctl' "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
 assert_contains 'installed manifest records privctl sudoers identity' 'privctl_sudoers_path=/etc/sudoers.d/buildingos-privctl' "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
+assert_contains 'installed manifest records operation lock identity' 'object_lock_path=/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh' "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
+assert_contains 'installed manifest records operation lock hash' 'object_lock_sha256=' "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/manifest"
 assert_equal 'installed privctl launcher has mode 0755' "$(stat -c '%a' "$DEST_ROOT/usr/local/sbin/buildingos-privctl" 2>/dev/null || stat -f '%Lp' "$DEST_ROOT/usr/local/sbin/buildingos-privctl")" '755'
 assert_equal 'installed privctl sudoers has mode 0440' "$(stat -c '%a' "$DEST_ROOT/etc/sudoers.d/buildingos-privctl" 2>/dev/null || stat -f '%Lp' "$DEST_ROOT/etc/sudoers.d/buildingos-privctl")" '440'
 assert_equal 'release control directory remains root-owned mode 0755' "$(metadata_for "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight")" "$(id -u):$(id -g):755"
 assert_equal 'release control library directory remains root-owned mode 0755' "$(metadata_for "$DEST_ROOT/usr/local/libexec/buildingos-backup-preflight/lib")" "$(id -u):$(id -g):755"
 assert_equal 'release Object Storage directory remains root-owned mode 0755' "$(metadata_for "$DEST_ROOT/usr/local/libexec/buildingos-backup")" "$(id -u):$(id -g):755"
+assert_equal 'installed operation lock helper has mode 0644' "$(stat -c '%a' "$DEST_ROOT/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh" 2>/dev/null || stat -f '%Lp' "$DEST_ROOT/usr/local/libexec/buildingos-backup/lib/production-operation-lock.sh")" '644'
 
 SUDOERS_PARENT="$DEST_ROOT/etc/sudoers.d"
 chmod 0750 "$SUDOERS_PARENT"
