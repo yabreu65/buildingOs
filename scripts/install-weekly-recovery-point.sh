@@ -141,7 +141,7 @@ validate_installed_layout() {
   [[ -f "$(path "$WEEKLY_SERVICE")" && -f "$(path "$WEEKLY_TIMER")" && -f "$(path "$RECOVERY_SERVICE")" ]] || fail 'systemd units are incomplete'
   [[ -f "$(path "$WEEKLY_ENV")" && ! -L "$(path "$WEEKLY_ENV")" ]] || fail 'weekly environment file is missing'
   grep -Fxq 'BUILDINGOS_WEEKLY_RECOVERY_POINT_ENABLE=NO' "$(path "$WEEKLY_ENV")" || fail 'weekly environment is not disabled'
-  grep -Fq "${path "$RELEASE_ROOT/releases/$release_sha"}/scripts/backup-recovery-point-weekly.sh" "$(path "$WEEKLY_SERVICE")" || fail 'weekly service path is invalid'
+  grep -Fq "$release_path/scripts/backup-recovery-point-weekly.sh" "$(path "$WEEKLY_SERVICE")" || fail 'weekly service path is invalid'
   grep -Fxq 'Persistent=false' "$(path "$WEEKLY_TIMER")" || fail 'weekly timer is not non-persistent'
   [[ -d "$(path "$LOCK_PARENT")" && ! -L "$(path "$LOCK_PARENT")" ]] || fail 'shared lock parent is missing'
 }
@@ -163,15 +163,19 @@ cleanup() {
   trap - EXIT
   if [[ "$status" -ne 0 && "$transaction_active" == true && -n "$backup_dir" && -d "$backup_dir" ]]; then
     rm -rf -- "$(path "$RELEASE_ROOT/releases/$release_sha")"
-    for item in release-manifest service timer recovery-service env; do
-      [[ -e "$backup_dir/$item" || -L "$backup_dir/$item" ]] || continue
+    local target
+    for item in service timer recovery-service env; do
       case "$item" in
-        release-manifest) mv -- "$backup_dir/$item" "$(path "$RELEASE_ROOT/releases/$release_sha/release-manifest.sha256")" ;;
-        service) mv -- "$backup_dir/$item" "$(path "$WEEKLY_SERVICE")" ;;
-        timer) mv -- "$backup_dir/$item" "$(path "$WEEKLY_TIMER")" ;;
-        recovery-service) mv -- "$backup_dir/$item" "$(path "$RECOVERY_SERVICE")" ;;
-        env) mv -- "$backup_dir/$item" "$(path "$WEEKLY_ENV")" ;;
+        service) target="$(path "$WEEKLY_SERVICE")" ;;
+        timer) target="$(path "$WEEKLY_TIMER")" ;;
+        recovery-service) target="$(path "$RECOVERY_SERVICE")" ;;
+        env) target="$(path "$WEEKLY_ENV")" ;;
       esac
+      if [[ -e "$backup_dir/$item" || -L "$backup_dir/$item" ]]; then
+        mv -- "$backup_dir/$item" "$target"
+      else
+        rm -f -- "$target"
+      fi
     done
   fi
   [[ -z "$stage_dir" ]] || rm -rf -- "$stage_dir"
@@ -237,6 +241,7 @@ install_release() {
   mv -- "$stage_dir/timer" "$(path "$WEEKLY_TIMER")"
   mv -- "$stage_dir/recovery-service" "$(path "$RECOVERY_SERVICE")"
   mv -- "$stage_dir/env" "$(path "$WEEKLY_ENV")"
+  [[ "${WEEKLY_INSTALLER_TEST_FAIL_AFTER_MOVE:-NO}" == YES ]] && fail injected_post_move_failure
   validate_installed_layout
   transaction_active=false
   printf 'WEEKLY_INSTALLATION=PASS\nRELEASE_SHA=%s\nTIMER=DISABLED\n' "$release_sha"

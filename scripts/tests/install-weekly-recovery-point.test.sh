@@ -48,4 +48,16 @@ assert_failure 'staging failure leaves no partial release' \
 [[ ! -e "$TEST_ROOT/failure-dest/opt/buildingos/weekly-recovery-points/releases/$RELEASE_SHA" ]] || fail 'failed install left release state'
 pass 'failed installation leaves no partial state'
 
+assert_failure 'post-move failure is rejected' \
+  env WEEKLY_INSTALLER_TEST_FAIL_AFTER_MOVE=YES "$INSTALLER" --source-root "$SOURCE_ROOT" --release-sha "$RELEASE_SHA" --dest-root "$TEST_ROOT/post-move-failure-dest" --test-mode local --apply
+for path in \
+  "$TEST_ROOT/post-move-failure-dest/opt/buildingos/weekly-recovery-points/releases/$RELEASE_SHA" \
+  "$TEST_ROOT/post-move-failure-dest/etc/buildingos/recovery-point-weekly.env" \
+  "$TEST_ROOT/post-move-failure-dest/etc/systemd/system/pawtech-buildingos-recovery-point-weekly.service" \
+  "$TEST_ROOT/post-move-failure-dest/etc/systemd/system/pawtech-buildingos-recovery-point-weekly.timer" \
+  "$TEST_ROOT/post-move-failure-dest/etc/systemd/system/pawtech-buildingos-recovery-fence-recovery.service"; do
+  [[ ! -e "$path" && ! -L "$path" ]] || fail "post-move rollback left state: $path"
+done
+pass 'post-move failure rolls back newly created files'
+
 printf 'WEEKLY_INSTALLER_TESTS=PASS\n'
