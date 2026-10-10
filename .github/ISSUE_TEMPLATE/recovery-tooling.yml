@@ -1,0 +1,38 @@
+name: Recovery tooling change
+description: Track a narrowly scoped recovery, backup, or restore tooling change.
+title: "[RECOVERY] "
+labels:
+  - "type:chore"
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Change summary
+      description: Describe the recovery tooling change and the operational problem it addresses.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and exclusions
+      description: State the exact files or components affected and what must not change.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation evidence
+      description: List the local tests and checks that must pass before review.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safeguards
+    attributes:
+      label: Safety safeguards
+      options:
+        - label: No production data, credentials, policies, or services are modified by this issue.
+          required: true
+        - label: The change will not activate timers, execute captures, or delete Recovery Points without separate authorization.
+          required: true
+        - label: The change has been checked for secrets and unintended production references.
+          required: true
