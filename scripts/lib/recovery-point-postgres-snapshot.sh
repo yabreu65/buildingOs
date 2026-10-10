@@ -10,6 +10,12 @@ recovery_point_postgres_snapshot_error() {
   return 1
 }
 
+recovery_point_postgres_snapshot_failure() {
+  local substep="$1" tool="$2" status="$3" reason="$4" publication="$5"
+  printf 'ERROR: recovery-point PostgreSQL snapshot failed substep=%s tool=%s exit=%s reason=%s publication=%s\n' \
+    "$substep" "$tool" "$status" "$reason" "$publication" >&2
+}
+
 recovery_point_postgres_snapshot_mode() { recovery_point_portable_stat_mode "$1"; }
 recovery_point_postgres_snapshot_inode() { recovery_point_portable_stat_identity "$1"; }
 
@@ -36,7 +42,7 @@ recovery_point_postgres_snapshot_close_fd() {
 recovery_point_postgres_snapshot_stop_exporter() {
   local input_fd="${1:-}" pid="${2:-}" attempts=0
   if [[ "$input_fd" =~ ^[0-9]+$ ]]; then
-    printf 'ROLLBACK;\n\\q\n' >&"$input_fd" 2>/dev/null || true
+    printf 'ROLLBACK;\n\\q\n' 2>/dev/null 1>&"$input_fd" || true
     recovery_point_postgres_snapshot_close_fd "$input_fd"
   fi
   [[ "$pid" =~ ^[0-9]+$ ]] || return 0
@@ -90,28 +96,29 @@ recovery_point_postgres_snapshot_trap() {
 }
 
 recovery_point_postgres_snapshot_capture_body() {
-  local container="$1" database="$2" user="$3" directory="$4" snapshot='' query=''
-  [[ "$container" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ && "$database" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ && "$user" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]] || return 1
-  recovery_point_postgres_snapshot_private_directory "$directory" && recovery_point_postgres_snapshot_require_runtime "$container" || return 1
-  [[ "${RECOVERY_POINT_POSTGRES_SNAPSHOT_RESPONSE_TIMEOUT_SECONDS:-30}" =~ ^[1-9][0-9]*$ ]] || return 1
+  local container="$1" database="$2" user="$3" directory="$4" snapshot='' query='' status
+  [[ "$container" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ && "$database" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ && "$user" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]] || { recovery_point_postgres_snapshot_failure input validation 2 invalid_arguments false; return 1; }
+  recovery_point_postgres_snapshot_private_directory "$directory" || { recovery_point_postgres_snapshot_failure preflight filesystem 1 invalid_private_directory false; return 1; }
+  recovery_point_postgres_snapshot_require_runtime "$container" || { recovery_point_postgres_snapshot_failure preflight docker 1 runtime_unavailable false; return 1; }
+  [[ "${RECOVERY_POINT_POSTGRES_SNAPSHOT_RESPONSE_TIMEOUT_SECONDS:-30}" =~ ^[1-9][0-9]*$ ]] || { recovery_point_postgres_snapshot_failure preflight shell 1 invalid_timeout false; return 1; }
   recovery_point_postgres_snapshot_dump_out="$directory/postgres.dump"
   recovery_point_postgres_snapshot_rows_out="$directory/file-rows.json"
-  [[ ! -e "$recovery_point_postgres_snapshot_dump_out" && ! -L "$recovery_point_postgres_snapshot_dump_out" && ! -e "$recovery_point_postgres_snapshot_rows_out" && ! -L "$recovery_point_postgres_snapshot_rows_out" ]] || return 1
-  recovery_point_postgres_snapshot_dump_tmp="$(umask 077; mktemp "$directory/.recovery-point-postgres-dump.XXXXXX")" || return 1
-  recovery_point_postgres_snapshot_rows_tmp="$(umask 077; mktemp "$directory/.recovery-point-postgres-rows.XXXXXX")" || return 1
-  chmod 0600 "$recovery_point_postgres_snapshot_dump_tmp" "$recovery_point_postgres_snapshot_rows_tmp" || return 1
-  [[ ! -e /dev/fd/8 && ! -e /dev/fd/9 ]] || return 1
-  recovery_point_postgres_snapshot_pipe_root="$(umask 077; mktemp -d "$directory/.recovery-point-postgres-exporter.XXXXXX")" || return 1
-  mkfifo -m 0600 "$recovery_point_postgres_snapshot_pipe_root/input" "$recovery_point_postgres_snapshot_pipe_root/output" || return 1
+  [[ ! -e "$recovery_point_postgres_snapshot_dump_out" && ! -L "$recovery_point_postgres_snapshot_dump_out" && ! -e "$recovery_point_postgres_snapshot_rows_out" && ! -L "$recovery_point_postgres_snapshot_rows_out" ]] || { recovery_point_postgres_snapshot_failure preflight filesystem 1 output_exists false; return 1; }
+  recovery_point_postgres_snapshot_dump_tmp="$(umask 077; mktemp "$directory/.recovery-point-postgres-dump.XXXXXX")" || { recovery_point_postgres_snapshot_failure preflight mktemp 1 temporary_file_failed false; return 1; }
+  recovery_point_postgres_snapshot_rows_tmp="$(umask 077; mktemp "$directory/.recovery-point-postgres-rows.XXXXXX")" || { recovery_point_postgres_snapshot_failure preflight mktemp 1 temporary_file_failed false; return 1; }
+  chmod 0600 "$recovery_point_postgres_snapshot_dump_tmp" "$recovery_point_postgres_snapshot_rows_tmp" || { recovery_point_postgres_snapshot_failure preflight chmod 1 temporary_file_failed false; return 1; }
+  [[ ! -e /dev/fd/8 && ! -e /dev/fd/9 ]] || { recovery_point_postgres_snapshot_failure preflight shell 1 file_descriptor_collision false; return 1; }
+  recovery_point_postgres_snapshot_pipe_root="$(umask 077; mktemp -d "$directory/.recovery-point-postgres-exporter.XXXXXX")" || { recovery_point_postgres_snapshot_failure preflight mktemp 1 temporary_directory_failed false; return 1; }
+  mkfifo -m 0600 "$recovery_point_postgres_snapshot_pipe_root/input" "$recovery_point_postgres_snapshot_pipe_root/output" || { recovery_point_postgres_snapshot_failure preflight mkfifo 1 pipe_creation_failed false; return 1; }
   exec 9<>"$recovery_point_postgres_snapshot_pipe_root/input"
   exec 8<>"$recovery_point_postgres_snapshot_pipe_root/output"
   recovery_point_postgres_snapshot_input_fd=9; recovery_point_postgres_snapshot_output_fd=8
   timeout 6h docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U "$user" -d "$database" <&9 >&8 2>/dev/null &
   recovery_point_postgres_snapshot_exporter_pid="$!"
-  printf '%s\n%s\n' 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;' 'SELECT pg_export_snapshot();' >&9 || return 1
-  IFS= read -r -t "${RECOVERY_POINT_POSTGRES_SNAPSHOT_RESPONSE_TIMEOUT_SECONDS:-30}" snapshot <&8 || return 1
-  [[ "$snapshot" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{8}-[0-9A-Fa-f]+$ ]] || return 1
-  timeout 6h docker exec -i "$container" pg_dump --format=custom --no-owner --no-privileges "--snapshot=$snapshot" -U "$user" -d "$database" >"$recovery_point_postgres_snapshot_dump_tmp" 2>/dev/null || return 1
+  printf '%s\n%s\n' 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;' 'SELECT pg_export_snapshot();' >&9 || { recovery_point_postgres_snapshot_failure snapshot_export psql 1 request_failed false; return 1; }
+  IFS= read -r -t "${RECOVERY_POINT_POSTGRES_SNAPSHOT_RESPONSE_TIMEOUT_SECONDS:-30}" snapshot <&8 || { status=$?; recovery_point_postgres_snapshot_failure snapshot_export psql "$status" response_timeout false; return 1; }
+  [[ "$snapshot" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{8}-[0-9A-Fa-f]+$ ]] || { recovery_point_postgres_snapshot_failure snapshot_export psql 1 invalid_snapshot false; return 1; }
+  timeout 6h docker exec -i "$container" pg_dump --format=custom --no-owner --no-privileges "--snapshot=$snapshot" -U "$user" -d "$database" >"$recovery_point_postgres_snapshot_dump_tmp" 2>/dev/null || { status=$?; recovery_point_postgres_snapshot_failure pg_dump pg_dump "$status" command_failed snapshot_exported; return 1; }
   query="BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET TRANSACTION SNAPSHOT '$snapshot';
 SELECT COALESCE(json_agg(json_build_object(
@@ -129,11 +136,12 @@ SELECT COALESCE(json_agg(json_build_object(
   'checksum', file_row.\"checksum\"
 )), '[]'::json) FROM \"File\" AS file_row;
 COMMIT;"
-  timeout 6h docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U "$user" -d "$database" -c "$query" >"$recovery_point_postgres_snapshot_rows_tmp" 2>/dev/null || return 1
-  timeout 6h docker exec -i "$container" pg_restore --list <"$recovery_point_postgres_snapshot_dump_tmp" >/dev/null 2>&1 || return 1
-  jq -e . "$recovery_point_postgres_snapshot_rows_tmp" >/dev/null 2>&1 || return 1
-  [[ ! -e "$recovery_point_postgres_snapshot_dump_out" && ! -L "$recovery_point_postgres_snapshot_dump_out" && ! -e "$recovery_point_postgres_snapshot_rows_out" && ! -L "$recovery_point_postgres_snapshot_rows_out" ]] || return 1
-  ln "$recovery_point_postgres_snapshot_dump_tmp" "$recovery_point_postgres_snapshot_dump_out" && ln "$recovery_point_postgres_snapshot_rows_tmp" "$recovery_point_postgres_snapshot_rows_out" || return 1
+  timeout 6h docker exec -i "$container" psql -X -qAt -v ON_ERROR_STOP=1 -U "$user" -d "$database" -c "$query" >"$recovery_point_postgres_snapshot_rows_tmp" 2>/dev/null || { status=$?; recovery_point_postgres_snapshot_failure file_rows_query psql "$status" command_failed snapshot_exported; return 1; }
+  timeout 6h docker exec -i "$container" pg_restore --list <"$recovery_point_postgres_snapshot_dump_tmp" >/dev/null 2>&1 || { status=$?; recovery_point_postgres_snapshot_failure dump_validation pg_restore "$status" archive_invalid snapshot_exported; return 1; }
+  jq -e . "$recovery_point_postgres_snapshot_rows_tmp" >/dev/null 2>&1 || { status=$?; recovery_point_postgres_snapshot_failure rows_validation jq "$status" json_invalid snapshot_exported; return 1; }
+  [[ ! -e "$recovery_point_postgres_snapshot_dump_out" && ! -L "$recovery_point_postgres_snapshot_dump_out" && ! -e "$recovery_point_postgres_snapshot_rows_out" && ! -L "$recovery_point_postgres_snapshot_rows_out" ]] || { recovery_point_postgres_snapshot_failure publication filesystem 1 output_exists snapshot_exported; return 1; }
+  ln "$recovery_point_postgres_snapshot_dump_tmp" "$recovery_point_postgres_snapshot_dump_out" || { status=$?; recovery_point_postgres_snapshot_failure publication ln "$status" dump_publish_failed snapshot_exported; return 1; }
+  ln "$recovery_point_postgres_snapshot_rows_tmp" "$recovery_point_postgres_snapshot_rows_out" || { status=$?; recovery_point_postgres_snapshot_failure publication ln "$status" rows_publish_failed dump_published; return 1; }
   recovery_point_postgres_snapshot_remove_outputs=false
 }
 
