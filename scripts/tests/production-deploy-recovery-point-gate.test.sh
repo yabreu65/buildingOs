@@ -9,6 +9,7 @@ BIN="$TEST_ROOT/bin"
 AUDIT="$TEST_ROOT/audit"
 STATE="$TEST_ROOT/api-state"
 EVIDENCE="$TEST_ROOT/evidence"
+LOCK_PATH="$TEST_ROOT/operation.lock"
 DIGEST='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 PASS=0
 FAIL=0
@@ -66,6 +67,16 @@ if (( s3_fence_preflight_line < quiesce_line && preflight_line < quiesce_line &&
 else
   fail 'S3 fence preflight precedes quiescence and recovery precedes checkpoint backup and migrations'
 fi
+guarded_restore_calls="$(grep -c 'recovery_point_restore_if_available' "$DEPLOY_SCRIPT")"
+direct_restore_calls="$(grep -c 'recovery_point_restore_and_resume || true' "$DEPLOY_SCRIPT")"
+if grep -Fq 'recovery_point_restore_if_available()' "$DEPLOY_SCRIPT" \
+  && grep -Fq 'declare -F recovery_point_restore_and_resume' "$DEPLOY_SCRIPT" \
+  && (( guarded_restore_calls >= 4 )) \
+  && (( direct_restore_calls == 1 )); then
+  pass 'early failure handlers guard recovery until the callback is defined'
+else
+  fail 'early failure handlers guard recovery until the callback is defined'
+fi
 if grep -Fq '/etc/buildingos/object-backup.env' "$DEPLOY_SCRIPT" || grep -Fq 'RECOVERY_POINT_OBJECT_BACKUP_ENV' "$DEPLOY_SCRIPT"; then
   fail 'root:root 0600 object-backup.env is not a deploy-time dependency'
 else
@@ -97,11 +108,11 @@ grep -F 'recovery_point_read_container_env buildingos-api S3_BUCKET' "$DEPLOY_SC
 
 CONTAINER_ENV="$TEST_ROOT/container-env"
 : >"$CONTAINER_ENV"
-export PATH="$BIN:/usr/bin:/bin" FAKE_AUDIT="$AUDIT" FAKE_API_STATE="$STATE" FAKE_DIGEST="$DIGEST" FAKE_EVIDENCE="$EVIDENCE" FAKE_CONTAINER_ENV="$CONTAINER_ENV" DEPLOY_SCRIPT
+export PATH="$BIN:/usr/bin:/bin" BUILDINGOS_OPERATION_LOCK_PATH="$LOCK_PATH" FAKE_AUDIT="$AUDIT" FAKE_API_STATE="$STATE" FAKE_DIGEST="$DIGEST" FAKE_EVIDENCE="$EVIDENCE" FAKE_CONTAINER_ENV="$CONTAINER_ENV" DEPLOY_SCRIPT
 run_callback_case() {
   local scenario="$1"
-  env SCENARIO="$scenario" BUILDINGOS_DEPLOY_RECOVERY_POINT_LIBRARY_ONLY=true \
-    PATH="$PATH" FAKE_AUDIT="$AUDIT" FAKE_API_STATE="$STATE" FAKE_DIGEST="$DIGEST" FAKE_EVIDENCE="$EVIDENCE" DEPLOY_SCRIPT="$DEPLOY_SCRIPT" \
+    env SCENARIO="$scenario" BUILDINGOS_DEPLOY_RECOVERY_POINT_LIBRARY_ONLY=true \
+    BUILDINGOS_OPERATION_LOCK_PATH="$LOCK_PATH" PATH="$PATH" FAKE_AUDIT="$AUDIT" FAKE_API_STATE="$STATE" FAKE_DIGEST="$DIGEST" FAKE_EVIDENCE="$EVIDENCE" DEPLOY_SCRIPT="$DEPLOY_SCRIPT" \
     bash -c '
       set -- 0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567 https://api.example/health https://api.example/readyz https://web.example/login
       source "$DEPLOY_SCRIPT"
@@ -189,7 +200,7 @@ ok 'active fence is restored when API was already stopped' run_callback_case sto
 : >"$AUDIT"; printf false >"$STATE"
 API_ENV="$TEST_ROOT/api.env"
     run_s3_environment_case() {
-      env BUILDINGOS_DEPLOY_RECOVERY_POINT_LIBRARY_ONLY=true PATH="$PATH" FAKE_AUDIT="$AUDIT" FAKE_API_STATE="$STATE" FAKE_DIGEST="$DIGEST" FAKE_EVIDENCE="$EVIDENCE" FAKE_CONTAINER_ENV="$CONTAINER_ENV" DEPLOY_SCRIPT="$DEPLOY_SCRIPT" API_ENV="$1" \
+      env BUILDINGOS_DEPLOY_RECOVERY_POINT_LIBRARY_ONLY=true BUILDINGOS_OPERATION_LOCK_PATH="$LOCK_PATH" PATH="$PATH" FAKE_AUDIT="$AUDIT" FAKE_API_STATE="$STATE" FAKE_DIGEST="$DIGEST" FAKE_EVIDENCE="$EVIDENCE" FAKE_CONTAINER_ENV="$CONTAINER_ENV" DEPLOY_SCRIPT="$DEPLOY_SCRIPT" API_ENV="$1" \
         bash -c '
           set -- 0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567 https://api.example/health https://api.example/readyz https://web.example/login
           source "$DEPLOY_SCRIPT"
@@ -214,7 +225,7 @@ API_ENV="$TEST_ROOT/api.env"
     bad 'missing required protected API S3 setting is rejected' run_s3_environment_case "$API_ENV"
 
     generate_recovery_id_case() {
-      env BUILDINGOS_DEPLOY_RECOVERY_POINT_LIBRARY_ONLY=true PATH="$PATH" FAKE_AUDIT="$AUDIT" FAKE_API_STATE="$STATE" FAKE_DIGEST="$DIGEST" FAKE_EVIDENCE="$EVIDENCE" FAKE_CONTAINER_ENV="$CONTAINER_ENV" DEPLOY_SCRIPT="$DEPLOY_SCRIPT" \
+      env BUILDINGOS_DEPLOY_RECOVERY_POINT_LIBRARY_ONLY=true BUILDINGOS_OPERATION_LOCK_PATH="$LOCK_PATH" PATH="$PATH" FAKE_AUDIT="$AUDIT" FAKE_API_STATE="$STATE" FAKE_DIGEST="$DIGEST" FAKE_EVIDENCE="$EVIDENCE" FAKE_CONTAINER_ENV="$CONTAINER_ENV" DEPLOY_SCRIPT="$DEPLOY_SCRIPT" \
         bash -c '
           set -- 0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567 0123456789abcdef0123456789abcdef01234567 https://api.example/health https://api.example/readyz https://web.example/login
           source "$DEPLOY_SCRIPT"
