@@ -12,6 +12,7 @@ pass_test() { pass=$((pass + 1)); printf 'ok %s - %s\n' "$pass" "$1"; }
 fail_test() { fail=$((fail + 1)); printf 'not ok %s - %s\n' "$fail" "$1" >&2; }
 ok() { local name="$1"; shift; if "$@" >>"$A" 2>&1; then pass_test "$name"; else fail_test "$name"; fi; }
 bad() { local name="$1"; shift; if "$@" >>"$A" 2>&1; then fail_test "$name (unexpected success)"; else pass_test "$name"; fi; }
+diagnostic_has() { local pattern="$1"; grep -F -- "$pattern" "$A" >/dev/null; }
 mode() { recovery_point_portable_stat_mode "$1"; }
 no_capture_artifacts() { [[ ! -e "$1/postgres.dump" && ! -L "$1/postgres.dump" && ! -e "$1/file-rows.json" && ! -L "$1/file-rows.json" ]] && [[ -z "$(find "$1" -maxdepth 1 -name '.recovery-point-postgres-*' -print -quit)" ]] && [[ ! -e "$S/exporter-open" ]]; }
 
@@ -138,9 +139,17 @@ for failure in snapshot-invalid dump-fail query-fail restore-fail; do
   P="$T/private-$failure"; mkdir "$P"; chmod 0700 "$P"; rm -f "$S"/*
   bad "$failure fails under set -e" env MODE="$failure" bash -Eeuo pipefail -c 'source "$1"; recovery_point_postgres_snapshot_capture postgres-test appdb appuser "$2"' _ "$LIB" "$P"
   ok "$failure removes outputs, temporary artifacts, and exporter" no_capture_artifacts "$P"
+  case "$failure" in
+    snapshot-invalid) expected_diagnostic='substep=snapshot_export tool=psql';;
+    dump-fail) expected_diagnostic='substep=pg_dump tool=pg_dump';;
+    query-fail) expected_diagnostic='substep=file_rows_query tool=psql';;
+    restore-fail) expected_diagnostic='substep=dump_validation tool=pg_restore';;
+  esac
+  ok "$failure emits its structured diagnostic" diagnostic_has "$expected_diagnostic"
 done
 P="$T/private-malformed"; mkdir "$P"; chmod 0700 "$P"; rm -f "$S"/*
 bad 'malformed JSON is rejected by capture syntax validation' env MODE=malformed-json bash -Eeuo pipefail -c 'source "$1"; recovery_point_postgres_snapshot_capture postgres-test appdb appuser "$2"' _ "$LIB" "$P"
+ok 'malformed JSON diagnostic identifies jq validation' diagnostic_has 'substep=rows_validation tool=jq'
 for accepted_shape in empty non-array invalid-row; do
   P="$T/private-$accepted_shape"; mkdir "$P"; chmod 0700 "$P"; rm -f "$S"/*
   ok "$accepted_shape JSON is retained for manifest-layer validation" env MODE="$accepted_shape" bash -Eeuo pipefail -c 'source "$1"; recovery_point_postgres_snapshot_capture postgres-test appdb appuser "$2"' _ "$LIB" "$P"
