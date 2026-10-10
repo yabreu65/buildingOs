@@ -1,0 +1,105 @@
+name: Capture Recovery Point in Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact deployed Staging application SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Validate requested SHA
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Checkout control code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Validate requested SHA is on main
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git cat-file -e "$REQUESTED_SHA^{commit}"
+          git merge-base --is-ancestor "$REQUESTED_SHA" HEAD
+
+      - name: Capture one Staging Recovery Point
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+          API_ENV_FILE: ${{ vars.STAGING_RECOVERY_API_ENV_FILE }}
+          S3_ENV_FILE: ${{ vars.STAGING_RECOVERY_S3_ENV_FILE }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_PORT" && -n "$KNOWN_HOSTS" ]] || { echo 'Staging SSH settings are incomplete' >&2; exit 1; }
+          [[ -n "$API_ENV_FILE" && -n "$S3_ENV_FILE" ]] || { echo 'Staging environment settings are incomplete' >&2; exit 1; }
+          key_file="$(mktemp)"; known_hosts_file="$(mktemp)"
+          trap 'rm -f "$key_file" "$known_hosts_file"; unset SSH_PRIVATE_KEY KNOWN_HOSTS' EXIT
+          chmod 600 "$key_file" "$known_hosts_file"
+          printf '%s\n' "$SSH_PRIVATE_KEY" >"$key_file"
+          printf '%s\n' "$KNOWN_HOSTS" >"$known_hosts_file"
+          ssh_opts=(-i "$key_file" -o UserKnownHostsFile="$known_hosts_file" -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
+          remote_args=()
+          for arg in "$REQUESTED_SHA" "$API_ENV_FILE" "$S3_ENV_FILE"; do
+            printf -v quoted '%q' "$arg"; remote_args+=("$quoted")
+          done
+          printf -v remote_command 'bash -s -- %s' "${remote_args[*]}"
+          ssh "${ssh_opts[@]}" "$SSH_USER@$SSH_HOST" "$remote_command" <<'REMOTE'
+          set -Eeuo pipefail
+          source_sha="$1"; api_env_file="$2"; s3_env_file="$3"
+          APP=/opt/pawtech/apps/buildingos-staging/buildingos-app
+          test -d "$APP" && test "$(git -C "$APP" rev-parse HEAD)" = "$source_sha"
+          test -x "$APP/scripts/capture-recovery-point-staging.sh"
+          command -v docker >/dev/null
+          command -v rclone >/dev/null
+          state_parent=/opt/pawtech/backups/buildingos-staging-recovery-points
+          lock_path="$state_parent/staging-operations.lock"
+          install -d -m 700 "$state_parent"
+          chmod 700 "$state_parent"
+          get_env() {
+            docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' buildingos-staging-api | awk -F= -v key="$1" '$1 == key { print substr($0, index($0, "=") + 1); exit }'
+          }
+          endpoint="$(get_env S3_ENDPOINT)"; bucket="$(get_env S3_BUCKET)"; region="$(get_env S3_REGION)"
+          access_key="$(get_env S3_ACCESS_KEY)"; secret_key="$(get_env S3_SECRET_KEY)"; force_path_style="$(get_env S3_FORCE_PATH_STYLE)"
+          test "$bucket" = buildingos-staging
+          rclone_root="$(mktemp -d /tmp/buildingos-staging-rclone.XXXXXX)"
+          rclone_config="$rclone_root/rclone.conf"
+          cleanup_rclone() { rm -rf -- "$rclone_root"; }
+          trap cleanup_rclone EXIT
+          umask 077
+          printf '[stagingtest]\ntype = s3\nprovider = Ceph\nenv_auth = false\naccess_key_id = %s\nsecret_access_key = %s\nendpoint = %s\nregion = %s\nforce_path_style = %s\n' "$access_key" "$secret_key" "$endpoint" "$region" "$force_path_style" >"$rclone_config"
+          chmod 600 "$rclone_config"
+          "$APP/scripts/capture-recovery-point-staging.sh" \
+            --source-app-sha "$source_sha" \
+            --api-container buildingos-staging-api \
+            --postgres-container buildingos-staging-postgres \
+            --database buildingos_staging_db \
+            --api-env-file "$api_env_file" \
+            --s3-env-file "$s3_env_file" \
+            --network buildingos-staging_buildingos_staging_net \
+            --destination stagingtest:buildingos-staging/staging-recovery-points \
+            --rclone-config "$rclone_config" \
+            --state-parent "$state_parent" \
+            --lock-path "$lock_path"
+REMOTE
