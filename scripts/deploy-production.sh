@@ -364,13 +364,19 @@ publish_current_successful_selector() {
   mv -f -- "$temporary_selector" "$CURRENT_SUCCESSFUL_DEPLOYMENT_SELECTOR"
 }
 
+recovery_point_restore_if_available() {
+  if declare -F recovery_point_restore_and_resume >/dev/null 2>&1; then
+    recovery_point_restore_and_resume || true
+  fi
+}
+
 on_error() {
   local rc=$?
   trap - ERR
   if [[ "$RELEASE_A_BARRIER_ACTIVE" == true ]]; then
     fail_closed_release_a || true
   fi
-  recovery_point_restore_and_resume || true
+  recovery_point_restore_if_available
   [[ "$RECORD_SUCCESS" == true ]] || write_record FAILED || true
   printf 'Production deployment stopped in phase %s (exit %s). No automatic rollback or database restore was attempted.\n' "$PHASE" "$rc" >&2
   exit "$rc"
@@ -383,7 +389,7 @@ on_signal() {
   if [[ "$RELEASE_A_BARRIER_ACTIVE" == true ]]; then
     fail_closed_release_a || true
   fi
-  recovery_point_restore_and_resume || true
+  recovery_point_restore_if_available
   [[ "$RECORD_SUCCESS" == true ]] || write_record FAILED || true
   printf 'Production deployment interrupted in phase %s; recovery-point policy restoration was attempted before exit.\n' "$PHASE" >&2
   exit "$rc"
@@ -392,7 +398,7 @@ on_signal() {
 on_exit() {
   local rc=$?
   trap - EXIT
-  recovery_point_restore_and_resume || true
+  recovery_point_restore_if_available
   cleanup_target_tree
   production_operation_lock_release
   return "$rc"
